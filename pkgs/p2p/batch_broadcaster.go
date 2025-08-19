@@ -1,0 +1,243 @@
+package p2p
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/libp2p/go-libp2p/core/host"
+	"github.com/libp2p/go-libp2p/core/peer"
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
+)
+
+const (
+	// Two-level topics for finalized batch broadcasting (no dynamic epoch topics)
+	FinalizedBatchDiscoveryTopic = "/powerloom/finalized-batches/0"   // Discovery/rendezvous
+	FinalizedBatchAllTopic       = "/powerloom/finalized-batches/all" // Actual voting messages
+)
+
+// BatchBroadcaster handles P2P communication for finalized batches
+type BatchBroadcaster struct {
+	host       host.Host
+	pubsub     *pubsub.PubSub
+	ctx        context.Context
+	sequencerID string
+	
+	// Topics and subscriptions (two-level only, no dynamic epoch topics)
+	discoveryTopic *pubsub.Topic
+	allTopic       *pubsub.Topic
+	discoverySub   *pubsub.Subscription
+	allSub         *pubsub.Subscription
+	
+	// Channels for received batches
+	IncomingBatches chan *FinalizedBatchMessage
+}
+
+// FinalizedBatchMessage represents a batch received from P2P network
+type FinalizedBatchMessage struct {
+	Batch    interface{} // Will be *FinalizedBatch after protobuf generation
+	PeerID   string
+	Received time.Time
+}
+
+// NewBatchBroadcaster creates a new P2P broadcaster for finalized batches
+func NewBatchBroadcaster(ctx context.Context, h host.Host, ps *pubsub.PubSub, sequencerID string) (*BatchBroadcaster, error) {
+	bb := &BatchBroadcaster{
+		host:            h,
+		pubsub:          ps,
+		ctx:             ctx,
+		sequencerID:     sequencerID,
+		IncomingBatches: make(chan *FinalizedBatchMessage, 100),
+	}
+	
+	// Join discovery topic for peer discovery
+	discoveryTopic, err := ps.Join(FinalizedBatchDiscoveryTopic)
+	if err != nil {
+		return nil, fmt.Errorf("failed to join discovery topic: %w", err)
+	}
+	bb.discoveryTopic = discoveryTopic
+	
+	// Join the "all" topic for actual voting messages
+	allTopic, err := ps.Join(FinalizedBatchAllTopic)
+	if err != nil {
+		return nil, fmt.Errorf("failed to join all topic: %w", err)
+	}
+	bb.allTopic = allTopic
+	
+	// Subscribe to both topics
+	discoverySub, err := discoveryTopic.Subscribe()
+	if err != nil {
+		return nil, fmt.Errorf("failed to subscribe to discovery topic: %w", err)
+	}
+	bb.discoverySub = discoverySub
+	
+	allSub, err := allTopic.Subscribe()
+	if err != nil {
+		return nil, fmt.Errorf("failed to subscribe to all topic: %w", err)
+	}
+	bb.allSub = allSub
+	
+	// Start listening for batches
+	go bb.handleIncomingBatches()
+	
+	log.Printf("BatchBroadcaster initialized for sequencer %s", sequencerID)
+	return bb, nil
+}
+
+// SendPresenceMessage sends a presence message to the discovery topic for peer discovery
+func (bb *BatchBroadcaster) SendPresenceMessage() error {
+	presence := map[string]interface{}{
+		"type":        "validator_presence",
+		"sequencer_id": bb.sequencerID,
+		"peer_id":     bb.host.ID().String(),
+		"timestamp":   time.Now().Unix(),
+	}
+	
+	data, err := json.Marshal(presence)
+	if err != nil {
+		return fmt.Errorf("failed to marshal presence: %w", err)
+	}
+	
+	// Send to discovery topic only
+	if err := bb.discoveryTopic.Publish(bb.ctx, data); err != nil {
+		return fmt.Errorf("failed to publish presence: %w", err)
+	}
+	
+	log.Printf("Sent presence message to discovery topic")
+	return nil
+}
+
+// BroadcastBatch broadcasts a finalized batch to the network
+func (bb *BatchBroadcaster) BroadcastBatch(batch interface{}, epochID uint64) error {
+	// Marshal batch to JSON (in production, use protobuf)
+	data, err := json.Marshal(map[string]interface{}{
+		"type":                "finalized_batch",
+		"batch":               batch,
+		"peer_id":            bb.host.ID().String(),
+		"broadcast_timestamp": time.Now().Unix(),
+		"epoch_id":           epochID,  // Include epoch ID in message
+	})
+	if err != nil {
+		return fmt.Errorf("failed to marshal batch: %w", err)
+	}
+	
+	// Broadcast ONLY to "all" topic (no dynamic epoch topics)
+	if err := bb.allTopic.Publish(bb.ctx, data); err != nil {
+		return fmt.Errorf("failed to publish to all topic: %w", err)
+	}
+	
+	log.Printf("Broadcasted finalized batch for epoch %d", epochID)
+	return nil
+}
+
+// handleIncomingBatches processes incoming batches from subscriptions
+func (bb *BatchBroadcaster) handleIncomingBatches() {
+	// Handle discovery topic in separate goroutine
+	go func() {
+		for {
+			select {
+			case <-bb.ctx.Done():
+				return
+			default:
+				msg, err := bb.discoverySub.Next(bb.ctx)
+				if err == nil && msg.ReceivedFrom != bb.host.ID() {
+					// Just log presence messages, don't process as batches
+					log.Printf("Discovery message from %s", msg.ReceivedFrom)
+				}
+			}
+		}
+	}()
+	
+	// Handle voting messages from all topic
+	for {
+		select {
+		case <-bb.ctx.Done():
+			return
+		default:
+			msg, err := bb.allSub.Next(bb.ctx)
+			if err == nil {
+				bb.processMessage(msg)
+			}
+		}
+	}
+}
+
+// processMessage processes a received pubsub message
+func (bb *BatchBroadcaster) processMessage(msg *pubsub.Message) {
+	// Skip own messages
+	if msg.ReceivedFrom == bb.host.ID() {
+		return
+	}
+	
+	// Parse message
+	var data map[string]interface{}
+	if err := json.Unmarshal(msg.Data, &data); err != nil {
+		log.Printf("Failed to unmarshal message: %v", err)
+		return
+	}
+	
+	// Check message type
+	msgType, _ := data["type"].(string)
+	if msgType != "finalized_batch" {
+		return // Ignore non-batch messages
+	}
+	
+	// Extract batch and metadata
+	batch := data["batch"]
+	peerID, _ := data["peer_id"].(string)
+	epochID, _ := data["epoch_id"].(float64) // JSON numbers are float64
+	
+	// Send to channel for processing
+	bb.IncomingBatches <- &FinalizedBatchMessage{
+		Batch:    batch,
+		PeerID:   peerID,
+		Received: time.Now(),
+	}
+	
+	log.Printf("Received finalized batch from peer %s for epoch %.0f", peerID, epochID)
+}
+
+// GetConnectedPeers returns the list of connected peers on the finalized batch topics
+func (bb *BatchBroadcaster) GetConnectedPeers() []peer.ID {
+	peers := make(map[peer.ID]bool)
+	
+	// Get peers from discovery topic
+	for _, p := range bb.discoveryTopic.ListPeers() {
+		peers[p] = true
+	}
+	
+	// Get peers from all topic
+	for _, p := range bb.allTopic.ListPeers() {
+		peers[p] = true
+	}
+	
+	// Convert to list
+	peerList := make([]peer.ID, 0, len(peers))
+	for p := range peers {
+		if p != bb.host.ID() { // Exclude self
+			peerList = append(peerList, p)
+		}
+	}
+	
+	return peerList
+}
+
+// Close cleanly shuts down the broadcaster
+func (bb *BatchBroadcaster) Close() error {
+	if bb.discoveryTopic != nil {
+		bb.discoveryTopic.Close()
+	}
+	if bb.allTopic != nil {
+		bb.allTopic.Close()
+	}
+	if bb.discoverySub != nil {
+		bb.discoverySub.Cancel()
+	}
+	if bb.allSub != nil {
+		bb.allSub.Cancel()
+	}
+	close(bb.IncomingBatches)
+	return nil
+}

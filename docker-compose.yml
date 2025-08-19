@@ -1,0 +1,47 @@
+version: '3.8'
+
+# Phase 3 Validator - Deployable on separate VPS instances
+# Each VPS runs this with different environment variables
+
+services:
+  powerloom-sequencer-validator:
+    build:
+      context: ./decentralized-sequencer
+      dockerfile: Dockerfile
+    container_name: powerloom-sequencer-validator-${SEQUENCER_ID:-default}
+    ports:
+      - "${P2P_PORT:-9000}:9000"
+      - "${METRICS_PORT:-8001}:8001"
+    environment:
+      # Identity
+      - SEQUENCER_ID=${SEQUENCER_ID}  # REQUIRED: validator1, validator2, validator3, etc.
+      - PRIVATE_KEY=${PRIVATE_KEY}     # Optional: will generate if not provided
+      
+      # Bootstrap connection (your existing bootstrap node)
+      - BOOTSTRAP_MULTIADDR=${BOOTSTRAP_MULTIADDR:-/ip4/159.203.190.22/tcp/9100/p2p/12D3KooWN4ovysY4dp45NhLPQ9ywEhK3Z1GmaCVhQKrKHrtk1R2x}
+      - RENDEZVOUS_POINT=powerloom-snapshot-sequencer-network
+      
+      # Consensus parameters
+      - EPOCH_DURATION=60        # 60 second epochs
+      - CONSENSUS_THRESHOLD=0.66 # 2/3 majority required
+      
+      # Debug options
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - DEBUG_MODE=${DEBUG_MODE:-false}
+    networks:
+      - powerloom
+    volumes:
+      - validator-data:/data
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  powerloom:
+    driver: bridge
+
+volumes:
+  validator-data:

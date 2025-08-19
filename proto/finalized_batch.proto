@@ -1,0 +1,48 @@
+syntax = "proto3";
+
+package powerloom;
+
+option go_package = "github.com/powerloom/decentralized-sequencer/pkgs/proto";
+
+// FinalizedBatch represents a validator's finalized batch for an epoch
+message FinalizedBatch {
+    uint64 epoch_id = 1;
+    
+    // Parallel arrays matching on-chain format
+    repeated string project_ids = 2;      // [project_1, project_2, project_4]
+    repeated string snapshot_cids = 3;    // [CID_1A, CID_2A, CID_4A]
+    
+    // Batch metadata (replacing the old IPFS batch CID role)
+    bytes merkle_root = 4;  // Merkle root of the above arrays
+    bytes bls_signature = 5;
+    string sequencer_id = 6;
+    uint64 timestamp = 7;
+    
+    // For consensus building
+    map<string, uint32> project_votes = 8;  // project_id -> vote count from snapshotters
+}
+
+// ConsensusResult represents the aggregated consensus from multiple validators
+message ConsensusResult {
+    uint64 epoch_id = 1;
+    
+    // Final agreed-upon arrays
+    repeated string project_ids = 2;
+    repeated string snapshot_cids = 3;
+    
+    // Consensus proof
+    bytes aggregate_signature = 4;  // BLS aggregate
+    bytes participant_bitmap = 5;   // Which validators participated
+    uint32 total_validators = 6;
+    uint32 participating_validators = 7;
+    
+    // Merkle root of the final batch
+    bytes merkle_root = 8;
+}
+
+// P2P broadcast message wrapper
+message VoteMessage {
+    FinalizedBatch batch = 1;
+    string peer_id = 2;
+    uint64 broadcast_timestamp = 3;
+}
