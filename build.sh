@@ -1,22 +1,19 @@
 #!/bin/bash
 
-echo "Building decentralized sequencer..."
+echo "Building both binary and Docker image..."
 
-# Build Go binary first (for local testing if needed)
-if [ -f "cmd/validator/main.go" ]; then
-    echo "Building Go binary..."
-    go build -o validator ./cmd/validator/main.go
-elif [ -f "cmd/main.go" ]; then
-    echo "Building Go binary from cmd/main.go..."
-    go build -o sequencer ./cmd/main.go
+# Build binary
+./build-binary.sh
+if [ $? -ne 0 ]; then
+    echo "Binary build failed, stopping..."
+    exit 1
 fi
 
-# Build Docker image
-echo "Building Docker image..."
-if command -v docker-compose &> /dev/null; then
-    docker-compose build --no-cache
-else
-    docker compose build --no-cache
+# Build Docker
+./build-docker.sh
+if [ $? -ne 0 ]; then
+    echo "Docker build failed"
+    exit 1
 fi
 
-echo "Build complete!"
+echo "✅ All builds complete!"

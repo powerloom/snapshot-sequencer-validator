@@ -36,13 +36,29 @@ LOG_LEVEL=info
 DEBUG_MODE=false
 ```
 
-### 4. Build and Run with Helper Scripts
+### 4. Build Options
+
+#### Option A: Binary Only (for testing/debugging)
+```bash
+./build-binary.sh
+# Run directly: ./validator
+```
+
+#### Option B: Docker Only (for production)
+```bash
+./build-docker.sh
+./start.sh
+```
+
+#### Option C: Both Binary and Docker
+```bash
+./build.sh  # Builds both
+```
+
+### 5. Run the Validator
 
 ```bash
-# Build the Docker image
-./build.sh
-
-# Start the validator
+# Start the validator (Docker)
 ./start.sh
 
 # Check logs
@@ -50,20 +66,6 @@ docker-compose logs -f
 
 # Stop when needed
 ./stop.sh
-```
-
-### 5. Alternative: Manual Docker Commands
-
-```bash
-# Build manually
-docker-compose build
-
-# Run manually
-docker-compose up -d
-
-# Check status
-docker ps
-docker-compose logs -f powerloom-sequencer-validator
 ```
 
 ### 6. Using Screen Sessions (Non-Docker)
