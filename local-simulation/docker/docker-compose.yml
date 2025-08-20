@@ -1,0 +1,232 @@
+version: '3.8'
+
+networks:
+  p2p-simulation:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+services:
+  # Bootstrap node - acts as the network discovery point
+  bootstrap-node:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE_TYPE: bootstrap
+    container_name: p2p-bootstrap
+    hostname: bootstrap
+    networks:
+      p2p-simulation:
+        ipv4_address: 172.20.0.10
+    ports:
+      - "9100:9100"  # P2P port
+    environment:
+      - SERVICE_TYPE=bootstrap
+      - P2P_PORT=9100
+      - BOOTSTRAP_MODE=true
+      - LOG_LEVEL=INFO
+      - PRIVATE_KEY=08011240b85a974d04cc7c821b47b3d0c4b2e9b3c7d8e5f9a1b2c3d4e5f6a7b8
+    volumes:
+      - ../results:/app/results
+      - ../configs:/app/configs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "9100"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    cap_add:
+      - NET_ADMIN
+    privileged: true
+
+  # Sequencer Node 1
+  sequencer-1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE_TYPE: sequencer
+    container_name: p2p-sequencer-1
+    hostname: sequencer-1
+    networks:
+      p2p-simulation:
+        ipv4_address: 172.20.0.11
+    ports:
+      - "8001:8001"  # P2P port
+      - "8081:8081"  # API port
+    environment:
+      - SERVICE_TYPE=sequencer
+      - NODE_ID=sequencer-1
+      - P2P_PORT=8001
+      - API_PORT=8081
+      - BOOTSTRAP_PEERS=/ip4/172.20.0.10/tcp/9100/p2p/12D3KooWN4ovysY4dp45NhLPQ9ywEhK3Z1GmaCVhQKrKHrtk1R2x
+      - RENDEZVOUS_STRING=powerloom-snapshot-sequencer-network
+      - DISCOVERY_TOPIC=/powerloom/snapshot-submissions/0
+      - SUBMISSION_TOPIC=/powerloom/snapshot-submissions/all
+      - LOG_LEVEL=INFO
+      - PRIVATE_KEY=08011240c95b074e15dd8d931c48b4d1d5c3f0c4d9e6f0a2b3c4d5e6f7a8b9c1
+    depends_on:
+      bootstrap-node:
+        condition: service_healthy
+    volumes:
+      - ../results:/app/results
+      - ../configs:/app/configs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "8001"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    cap_add:
+      - NET_ADMIN
+    privileged: true
+
+  # Sequencer Node 2
+  sequencer-2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE_TYPE=sequencer
+    container_name: p2p-sequencer-2
+    hostname: sequencer-2
+    networks:
+      p2p-simulation:
+        ipv4_address: 172.20.0.12
+    ports:
+      - "8002:8001"  # P2P port mapped to 8002
+      - "8082:8081"  # API port mapped to 8082
+    environment:
+      - SERVICE_TYPE=sequencer
+      - NODE_ID=sequencer-2
+      - P2P_PORT=8001
+      - API_PORT=8081
+      - BOOTSTRAP_PEERS=/ip4/172.20.0.10/tcp/9100/p2p/12D3KooWN4ovysY4dp45NhLPQ9ywEhK3Z1GmaCVhQKrKHrtk1R2x
+      - RENDEZVOUS_STRING=powerloom-snapshot-sequencer-network
+      - DISCOVERY_TOPIC=/powerloom/snapshot-submissions/0
+      - SUBMISSION_TOPIC=/powerloom/snapshot-submissions/all
+      - LOG_LEVEL=INFO
+      - PRIVATE_KEY=08011240d06c185f26ee9e042d59c5e2e6d4f1d5eaf7f1b3c4d5e6f7a8b9c2d2
+    depends_on:
+      bootstrap-node:
+        condition: service_healthy
+    volumes:
+      - ../results:/app/results
+      - ../configs:/app/configs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "8001"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    cap_add:
+      - NET_ADMIN
+    privileged: true
+
+  # Sequencer Node 3
+  sequencer-3:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE_TYPE=sequencer
+    container_name: p2p-sequencer-3
+    hostname: sequencer-3
+    networks:
+      p2p-simulation:
+        ipv4_address: 172.20.0.13
+    ports:
+      - "8003:8001"  # P2P port mapped to 8003
+      - "8083:8081"  # API port mapped to 8083
+    environment:
+      - SERVICE_TYPE=sequencer
+      - NODE_ID=sequencer-3
+      - P2P_PORT=8001
+      - API_PORT=8081
+      - BOOTSTRAP_PEERS=/ip4/172.20.0.10/tcp/9100/p2p/12D3KooWN4ovysY4dp45NhLPQ9ywEhK3Z1GmaCVhQKrKHrtk1R2x
+      - RENDEZVOUS_STRING=powerloom-snapshot-sequencer-network
+      - DISCOVERY_TOPIC=/powerloom/snapshot-submissions/0
+      - SUBMISSION_TOPIC=/powerloom/snapshot-submissions/all
+      - LOG_LEVEL=INFO
+      - PRIVATE_KEY=08011240e17d296037ffaf153e6ad6f3f7e5f2e6fbe8f2c4d5e6f7a8b9c3d3e3
+    depends_on:
+      bootstrap-node:
+        condition: service_healthy
+    volumes:
+      - ../results:/app/results
+      - ../configs:/app/configs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "8001"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    cap_add:
+      - NET_ADMIN
+    privileged: true
+
+  # P2P Debugger - for monitoring and testing
+  p2p-debugger:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE_TYPE=debugger
+    container_name: p2p-debugger
+    hostname: debugger
+    networks:
+      p2p-simulation:
+        ipv4_address: 172.20.0.20
+    ports:
+      - "8020:8001"  # P2P port mapped to 8020
+    environment:
+      - SERVICE_TYPE=debugger
+      - NODE_ID=p2p-debugger
+      - P2P_PORT=8001
+      - BOOTSTRAP_PEERS=/ip4/172.20.0.10/tcp/9100/p2p/12D3KooWN4ovysY4dp45NhLPQ9ywEhK3Z1GmaCVhQKrKHrtk1R2x
+      - RENDEZVOUS_STRING=powerloom-snapshot-sequencer-network
+      - DISCOVERY_TOPIC=/powerloom/snapshot-submissions/0
+      - SUBMISSION_TOPIC=/powerloom/snapshot-submissions/all
+      - DEBUGGER_MODE=LISTENER  # Can be: LISTENER, PUBLISHER, DISCOVERY
+      - LOG_LEVEL=DEBUG
+      - PRIVATE_KEY=08011240f28e3a7148009b264f7be7e4e8f6f3e7fdf9f3d5e6f7a8b9c4d4e4f4
+    depends_on:
+      bootstrap-node:
+        condition: service_healthy
+    volumes:
+      - ../results:/app/results
+      - ../configs:/app/configs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "8001"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    cap_add:
+      - NET_ADMIN
+    privileged: true
+
+  # Network chaos engineering tools
+  network-simulator:
+    image: alpine:latest
+    container_name: network-simulator
+    hostname: network-simulator
+    networks:
+      p2p-simulation:
+        ipv4_address: 172.20.0.100
+    volumes:
+      - ../scripts:/scripts
+      - ../results:/results
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: tail -f /dev/null  # Keep container running
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+    depends_on:
+      - bootstrap-node
+      - sequencer-1
+      - sequencer-2
+      - sequencer-3
+    restart: unless-stopped

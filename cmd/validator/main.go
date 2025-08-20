@@ -35,16 +35,14 @@ const (
 )
 
 type Validator struct {
-	host          host.Host
-	ctx           context.Context
-	ps            *pubsub.PubSub
-	topics        map[string]*pubsub.Topic
-	subs          map[string]*pubsub.Subscription
-	batchGen      *consensus.DummyBatchGenerator
-	currentEpoch  uint64
-	epochMutex    sync.Mutex
-	votes         map[uint64]map[string]*consensus.FinalizedBatch // epoch -> sequencerID -> batch
-	votesMutex    sync.Mutex
+	host       host.Host
+	ctx        context.Context
+	ps         *pubsub.PubSub
+	topics     map[string]*pubsub.Topic
+	subs       map[string]*pubsub.Subscription
+	batchGen   *consensus.DummyBatchGenerator
+	votes      map[uint64]map[string]*consensus.FinalizedBatch // epoch -> sequencerID -> batch
+	votesMutex sync.Mutex
 }
 
 func main() {
@@ -155,14 +153,13 @@ func main() {
 	}
 
 	validator := &Validator{
-		host:         host,
-		ctx:          ctx,
-		ps:           ps,
-		topics:       make(map[string]*pubsub.Topic),
-		subs:         make(map[string]*pubsub.Subscription),
-		batchGen:     consensus.NewDummyBatchGenerator(sequencerID),
-		currentEpoch: 1,
-		votes:        make(map[uint64]map[string]*consensus.FinalizedBatch),
+		host:     host,
+		ctx:      ctx,
+		ps:       ps,
+		topics:   make(map[string]*pubsub.Topic),
+		subs:     make(map[string]*pubsub.Subscription),
+		batchGen: consensus.NewDummyBatchGenerator(sequencerID),
+		votes:    make(map[uint64]map[string]*consensus.FinalizedBatch),
 	}
 
 	// Join topics
@@ -292,10 +289,11 @@ func (v *Validator) startBatchGeneration() {
 	for {
 		select {
 		case <-ticker.C:
-			v.epochMutex.Lock()
-			epoch := v.currentEpoch
-			v.currentEpoch++
-			v.epochMutex.Unlock()
+			// Calculate epoch based on Unix time (30-second epochs)
+			// This ensures all validators use the same epoch ID
+			epoch := uint64(time.Now().Unix() / 30)
+			
+			log.Infof("⏰ Starting epoch %d at %s", epoch, time.Now().Format("15:04:05"))
 			
 			// Generate batch for this epoch
 			batch := v.batchGen.GenerateDummyBatch(epoch)

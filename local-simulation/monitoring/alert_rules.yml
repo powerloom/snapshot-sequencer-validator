@@ -1,0 +1,200 @@
+# Prometheus alerting rules for P2P sequencer network
+
+groups:
+  - name: p2p_network_alerts
+    rules:
+      # Node availability alerts
+      - alert: NodeDown
+        expr: up == 0
+        for: 30s
+        labels:
+          severity: critical
+          component: infrastructure
+        annotations:
+          summary: "Node {{ $labels.instance }} is down"
+          description: "Node {{ $labels.instance }} has been down for more than 30 seconds."
+
+      - alert: SequencerDown
+        expr: up{service_type="sequencer"} == 0
+        for: 15s
+        labels:
+          severity: critical
+          component: sequencer
+        annotations:
+          summary: "Sequencer {{ $labels.sequencer_id }} is down"
+          description: "Sequencer {{ $labels.sequencer_id }} has been unreachable for more than 15 seconds."
+
+      - alert: BootstrapNodeDown
+        expr: up{service_type="bootstrap"} == 0
+        for: 10s
+        labels:
+          severity: critical
+          component: bootstrap
+        annotations:
+          summary: "Bootstrap node is down"
+          description: "The bootstrap node has been unreachable for more than 10 seconds. This may affect peer discovery."
+
+  - name: p2p_connectivity_alerts
+    rules:
+      # Peer connectivity alerts
+      - alert: LowPeerCount
+        expr: p2p_peer_count < 2
+        for: 1m
+        labels:
+          severity: warning
+          component: networking
+        annotations:
+          summary: "Low peer count on {{ $labels.instance }}"
+          description: "Node {{ $labels.instance }} has only {{ $value }} peers connected."
+
+      - alert: NoPeers
+        expr: p2p_peer_count == 0
+        for: 30s
+        labels:
+          severity: critical
+          component: networking
+        annotations:
+          summary: "No peers connected to {{ $labels.instance }}"
+          description: "Node {{ $labels.instance }} has no peer connections."
+
+      - alert: NetworkPartition
+        expr: count(p2p_peer_count > 0) < 3
+        for: 1m
+        labels:
+          severity: critical
+          component: networking
+        annotations:
+          summary: "Possible network partition detected"
+          description: "Less than 3 nodes have peer connections, indicating a possible network partition."
+
+  - name: p2p_performance_alerts
+    rules:
+      # Performance alerts
+      - alert: HighMessageLatency
+        expr: p2p_message_latency_seconds > 5
+        for: 2m
+        labels:
+          severity: warning
+          component: performance
+        annotations:
+          summary: "High message latency on {{ $labels.instance }}"
+          description: "Message latency on {{ $labels.instance }} is {{ $value }}s, above 5s threshold."
+
+      - alert: MessageDeliveryFailure
+        expr: rate(p2p_messages_failed_total[5m]) > 0.1
+        for: 1m
+        labels:
+          severity: warning
+          component: messaging
+        annotations:
+          summary: "High message delivery failure rate on {{ $labels.instance }}"
+          description: "Message delivery failure rate on {{ $labels.instance }} is {{ $value }}/sec."
+
+      - alert: BatchFinalizationStalled
+        expr: rate(p2p_batches_finalized_total[10m]) == 0 and rate(p2p_submissions_received_total[10m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+          component: consensus
+        annotations:
+          summary: "Batch finalization stalled on {{ $labels.instance }}"
+          description: "No batches finalized in 10 minutes despite receiving submissions."
+
+  - name: resource_alerts
+    rules:
+      # Resource usage alerts
+      - alert: HighCPUUsage
+        expr: container_cpu_usage_seconds_total > 0.8
+        for: 5m
+        labels:
+          severity: warning
+          component: resources
+        annotations:
+          summary: "High CPU usage on {{ $labels.name }}"
+          description: "Container {{ $labels.name }} CPU usage is above 80% for more than 5 minutes."
+
+      - alert: HighMemoryUsage
+        expr: container_memory_usage_bytes / container_spec_memory_limit_bytes > 0.9
+        for: 5m
+        labels:
+          severity: warning
+          component: resources
+        annotations:
+          summary: "High memory usage on {{ $labels.name }}"
+          description: "Container {{ $labels.name }} memory usage is above 90% for more than 5 minutes."
+
+      - alert: DiskSpaceRunningOut
+        expr: (1 - node_filesystem_avail_bytes / node_filesystem_size_bytes) > 0.85
+        for: 5m
+        labels:
+          severity: warning
+          component: storage
+        annotations:
+          summary: "Disk space running out"
+          description: "Disk usage is above 85% on filesystem {{ $labels.device }}."
+
+  - name: consensus_alerts  
+    rules:
+      # Consensus and batch processing alerts
+      - alert: ConsensusTimeout
+        expr: time() - p2p_last_consensus_timestamp > 300
+        for: 1m
+        labels:
+          severity: critical
+          component: consensus
+        annotations:
+          summary: "Consensus timeout on {{ $labels.instance }}"
+          description: "No consensus reached for more than 5 minutes on {{ $labels.instance }}."
+
+      - alert: BatchSizeAnomaly
+        expr: p2p_batch_size > 100 or p2p_batch_size < 1
+        for: 30s
+        labels:
+          severity: warning
+          component: batching
+        annotations:
+          summary: "Batch size anomaly on {{ $labels.instance }}"
+          description: "Batch size {{ $value }} is outside normal range (1-100)."
+
+      - alert: SubmissionBacklog
+        expr: p2p_submission_queue_size > 1000
+        for: 2m
+        labels:
+          severity: warning
+          component: processing
+        annotations:
+          summary: "Large submission backlog on {{ $labels.instance }}"
+          description: "Submission queue size is {{ $value }}, indicating processing delays."
+
+  - name: simulation_test_alerts
+    rules:
+      # Test-specific alerts
+      - alert: TestDurationExceeded
+        expr: time() - test_start_timestamp > test_expected_duration + 600
+        for: 1m
+        labels:
+          severity: warning
+          component: testing
+        annotations:
+          summary: "Test duration exceeded expected time"
+          description: "Test has been running {{ $value }}s longer than expected."
+
+      - alert: UnexpectedNodeRestart
+        expr: changes(container_start_time_seconds[5m]) > 0
+        for: 30s
+        labels:
+          severity: warning
+          component: stability
+        annotations:
+          summary: "Unexpected container restart: {{ $labels.name }}"
+          description: "Container {{ $labels.name }} has restarted unexpectedly."
+
+      - alert: NetworkConditionApplied
+        expr: network_simulation_active == 1
+        for: 0s
+        labels:
+          severity: info
+          component: simulation
+        annotations:
+          summary: "Network simulation condition applied"
+          description: "Network simulation condition {{ $labels.condition_type }} is active."
