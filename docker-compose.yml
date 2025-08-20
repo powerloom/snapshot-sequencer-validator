@@ -6,12 +6,14 @@ version: '3.8'
 services:
   powerloom-sequencer-validator:
     build:
-      context: ./decentralized-sequencer
+      context: .
       dockerfile: Dockerfile
     container_name: powerloom-sequencer-validator-${SEQUENCER_ID:-default}
+    env_file:
+      - .env
     ports:
-      - "${P2P_PORT:-9000}:9000"
-      - "${METRICS_PORT:-8001}:8001"
+      - "${P2P_PORT:-9001}:${P2P_PORT:-9001}"
+      - "${METRICS_PORT:-8001}:${METRICS_PORT:-8001}"
     environment:
       # Identity
       - SEQUENCER_ID=${SEQUENCER_ID}  # REQUIRED: validator1, validator2, validator3, etc.
@@ -31,7 +33,9 @@ services:
     networks:
       - powerloom
     volumes:
-      - validator-data:/data
+      - ./logs:/app/logs
+      - ./logs/archive:/app/logs/archive
+      - ./data:/data
     restart: unless-stopped
     logging:
       driver: "json-file"

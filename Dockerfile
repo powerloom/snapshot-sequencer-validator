@@ -28,8 +28,5 @@ COPY --from=builder /app/validator /app/validator
 # Create data directory
 RUN mkdir -p /data
 
-# Expose P2P and metrics ports
-EXPOSE 9000 8001
-
 # Run the validator
 ENTRYPOINT ["/app/validator"]
