@@ -4,12 +4,15 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
+	"github.com/powerloom/decentralized-sequencer/pkgs/consensus"
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
@@ -27,14 +30,21 @@ const (
 	RendezvousString = "powerloom-snapshot-sequencer-network"
 	DiscoveryTopic   = "/powerloom/snapshot-submissions/0"
 	SubmissionsTopic = "/powerloom/snapshot-submissions/all"
+	ConsensusTopic   = "/powerloom/consensus/votes"
+	BatchTopic       = "/powerloom/consensus/batches"
 )
 
 type Validator struct {
-	host   host.Host
-	ctx    context.Context
-	ps     *pubsub.PubSub
-	topics map[string]*pubsub.Topic
-	subs   map[string]*pubsub.Subscription
+	host          host.Host
+	ctx           context.Context
+	ps            *pubsub.PubSub
+	topics        map[string]*pubsub.Topic
+	subs          map[string]*pubsub.Subscription
+	batchGen      *consensus.DummyBatchGenerator
+	currentEpoch  uint64
+	epochMutex    sync.Mutex
+	votes         map[uint64]map[string]*consensus.FinalizedBatch // epoch -> sequencerID -> batch
+	votesMutex    sync.Mutex
 }
 
 func main() {
@@ -145,11 +155,14 @@ func main() {
 	}
 
 	validator := &Validator{
-		host:   host,
-		ctx:    ctx,
-		ps:     ps,
-		topics: make(map[string]*pubsub.Topic),
-		subs:   make(map[string]*pubsub.Subscription),
+		host:         host,
+		ctx:          ctx,
+		ps:           ps,
+		topics:       make(map[string]*pubsub.Topic),
+		subs:         make(map[string]*pubsub.Subscription),
+		batchGen:     consensus.NewDummyBatchGenerator(sequencerID),
+		currentEpoch: 1,
+		votes:        make(map[uint64]map[string]*consensus.FinalizedBatch),
 	}
 
 	// Join topics
@@ -159,10 +172,20 @@ func main() {
 	if err := validator.joinTopic(SubmissionsTopic); err != nil {
 		log.Fatalf("Failed to join submissions topic: %v", err)
 	}
+	if err := validator.joinTopic(ConsensusTopic); err != nil {
+		log.Fatalf("Failed to join consensus topic: %v", err)
+	}
+	if err := validator.joinTopic(BatchTopic); err != nil {
+		log.Fatalf("Failed to join batch topic: %v", err)
+	}
 
 	// Start message handlers
 	go validator.handleMessages(DiscoveryTopic)
 	go validator.handleMessages(SubmissionsTopic)
+	go validator.handleConsensusMessages()
+	
+	// Start batch generation every 30 seconds
+	go validator.startBatchGeneration()
 
 	// Periodically discover peers
 	go func() {
@@ -256,5 +279,139 @@ func (n *discoveryNotifee) HandlePeerFound(pi peer.AddrInfo) {
 		log.Debugf("Failed to connect to mDNS peer %s: %v", pi.ID, err)
 	} else {
 		log.Infof("Connected to mDNS discovered peer: %s", pi.ID)
+	}
+}
+
+func (v *Validator) startBatchGeneration() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	
+	// Wait 10 seconds before first batch to allow network formation
+	time.Sleep(10 * time.Second)
+	
+	for {
+		select {
+		case <-ticker.C:
+			v.epochMutex.Lock()
+			epoch := v.currentEpoch
+			v.currentEpoch++
+			v.epochMutex.Unlock()
+			
+			// Generate batch for this epoch
+			batch := v.batchGen.GenerateDummyBatch(epoch)
+			
+			// Store our own vote
+			v.votesMutex.Lock()
+			if v.votes[epoch] == nil {
+				v.votes[epoch] = make(map[string]*consensus.FinalizedBatch)
+			}
+			v.votes[epoch][batch.SequencerId] = batch
+			v.votesMutex.Unlock()
+			
+			// Broadcast batch as vote
+			v.broadcastBatch(batch)
+			
+			// After 20 seconds, check consensus
+			go func(epochToCheck uint64) {
+				time.Sleep(20 * time.Second)
+				v.checkConsensus(epochToCheck)
+			}(epoch)
+			
+		case <-v.ctx.Done():
+			return
+		}
+	}
+}
+
+func (v *Validator) broadcastBatch(batch *consensus.FinalizedBatch) {
+	data, err := json.Marshal(batch)
+	if err != nil {
+		log.Errorf("Failed to marshal batch: %v", err)
+		return
+	}
+	
+	topic := v.topics[BatchTopic]
+	if topic == nil {
+		log.Error("Batch topic not initialized")
+		return
+	}
+	
+	if err := topic.Publish(v.ctx, data); err != nil {
+		log.Errorf("Failed to publish batch: %v", err)
+	} else {
+		log.Infof("📤 Broadcast batch for epoch %d with %d projects", 
+			batch.EpochId, len(batch.ProjectIds))
+	}
+}
+
+func (v *Validator) handleConsensusMessages() {
+	sub := v.subs[BatchTopic]
+	for {
+		msg, err := sub.Next(v.ctx)
+		if err != nil {
+			if v.ctx.Err() != nil {
+				return
+			}
+			log.Errorf("Error reading consensus message: %v", err)
+			continue
+		}
+		
+		// Skip own messages
+		if msg.ReceivedFrom == v.host.ID() {
+			continue
+		}
+		
+		// Parse batch
+		var batch consensus.FinalizedBatch
+		if err := json.Unmarshal(msg.Data, &batch); err != nil {
+			log.Errorf("Failed to unmarshal batch: %v", err)
+			continue
+		}
+		
+		// Store vote
+		v.votesMutex.Lock()
+		if v.votes[batch.EpochId] == nil {
+			v.votes[batch.EpochId] = make(map[string]*consensus.FinalizedBatch)
+		}
+		v.votes[batch.EpochId][batch.SequencerId] = &batch
+		v.votesMutex.Unlock()
+		
+		log.Infof("📥 Received batch from %s for epoch %d", 
+			batch.SequencerId, batch.EpochId)
+	}
+}
+
+func (v *Validator) checkConsensus(epoch uint64) {
+	v.votesMutex.Lock()
+	defer v.votesMutex.Unlock()
+	
+	epochVotes := v.votes[epoch]
+	if epochVotes == nil {
+		log.Warnf("No votes for epoch %d", epoch)
+		return
+	}
+	
+	totalVotes := len(epochVotes)
+	log.Infof("🗳️  Epoch %d: Received %d votes", epoch, totalVotes)
+	
+	// Simple majority check (in production, use stake-weighted voting)
+	if totalVotes >= 2 {
+		log.Infof("✅ CONSENSUS ACHIEVED for epoch %d with %d validators", 
+			epoch, totalVotes)
+		
+		// Log all participating validators
+		for sequencerID := range epochVotes {
+			log.Infof("  - Validator: %s", sequencerID)
+		}
+	} else {
+		log.Warnf("❌ CONSENSUS FAILED for epoch %d (only %d votes, need at least 2)", 
+			epoch, totalVotes)
+	}
+	
+	// Clean up old epochs (keep last 10)
+	for oldEpoch := range v.votes {
+		if oldEpoch < epoch-10 {
+			delete(v.votes, oldEpoch)
+		}
 	}
 }

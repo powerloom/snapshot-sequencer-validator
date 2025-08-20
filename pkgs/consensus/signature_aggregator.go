@@ -78,7 +78,7 @@ func (va *VoteAggregator) checkConsensus() *ConsensusResult {
 	totalVotes := len(va.votes)
 	requiredVotes := int(float64(totalVotes) * va.voteThreshold)
 	
-	for rootHex, batches := range rootGroups {
+	for _, batches := range rootGroups {
 		if len(batches) >= requiredVotes {
 			// We have consensus!
 			return va.buildConsensusResult(batches)
