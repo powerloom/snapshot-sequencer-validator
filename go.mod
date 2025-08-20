@@ -1,4 +1,4 @@
-module github.com/powerloom/decentralized-sequencer
+module github.com/powerloom/powerloom-sequencer-validator
 
 go 1.24.5
 

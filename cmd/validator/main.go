@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/powerloom/decentralized-sequencer/pkgs/consensus"
+	"github.com/powerloom/powerloom-sequencer-validator/pkgs/consensus"
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
