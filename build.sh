@@ -3,12 +3,12 @@
 echo "Building decentralized sequencer..."
 
 # Build Go binary first (for local testing if needed)
-if [ -f "cmd/sequencer/main.go" ]; then
+if [ -f "cmd/validator/main.go" ]; then
     echo "Building Go binary..."
-    cd cmd/sequencer && go build -o ../../sequencer . && cd ../..
-elif [ -f "main.go" ]; then
-    echo "Building Go binary from main.go..."
-    go build -o sequencer .
+    go build -o validator ./cmd/validator/main.go
+elif [ -f "cmd/main.go" ]; then
+    echo "Building Go binary from cmd/main.go..."
+    go build -o sequencer ./cmd/main.go
 fi
 
 # Build Docker image
