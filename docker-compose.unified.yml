@@ -1,0 +1,261 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes --maxmemory 2gb
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - sequencer-network
+
+  # All-in-one unified sequencer (all components enabled)
+  unified-all:
+    build:
+      context: .
+      dockerfile: Dockerfile.unified
+    environment:
+      - SEQUENCER_ID=unified-all
+      - P2P_PORT=9001
+      - REDIS_ADDR=redis:6379
+      - BOOTSTRAP_MULTIADDR=${BOOTSTRAP_MULTIADDR:-/ip4/159.203.190.22/tcp/9100/p2p/12D3KooWN4ovysY4dp45NhLPQ9ywEhK3Z1GmaCVhQKrKHrtk1R2x}
+      - DEBUG_MODE=${DEBUG_MODE:-false}
+      # Component toggles - all enabled
+      - ENABLE_LISTENER=true
+      - ENABLE_DEQUEUER=true
+      - ENABLE_FINALIZER=true
+      - ENABLE_CONSENSUS=true
+      # Configuration
+      - DEQUEUER_WORKERS=10
+      - PRIVATE_KEY=${PRIVATE_KEY_ALL}
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "9001:9001"
+    networks:
+      - sequencer-network
+    profiles:
+      - all
+      - unified
+
+  # Listener-only instance (P2P listener component)
+  listener-only:
+    build:
+      context: .
+      dockerfile: Dockerfile.unified
+    environment:
+      - SEQUENCER_ID=listener-1
+      - P2P_PORT=9100
+      - REDIS_ADDR=redis:6379
+      - BOOTSTRAP_MULTIADDR=${BOOTSTRAP_MULTIADDR}
+      - DEBUG_MODE=${DEBUG_MODE:-false}
+      # Component toggles - only listener
+      - ENABLE_LISTENER=true
+      - ENABLE_DEQUEUER=false
+      - ENABLE_FINALIZER=false
+      - ENABLE_CONSENSUS=false
+      - PRIVATE_KEY=${PRIVATE_KEY_LISTENER}
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "9100:9100"
+    networks:
+      - sequencer-network
+    profiles:
+      - distributed
+      - listener
+
+  # Dequeuer-only instances (worker pool)
+  dequeuer-1:
+    build:
+      context: .
+      dockerfile: Dockerfile.unified
+    environment:
+      - SEQUENCER_ID=dequeuer-1
+      - REDIS_ADDR=redis:6379
+      - DEBUG_MODE=${DEBUG_MODE:-false}
+      # Component toggles - only dequeuer
+      - ENABLE_LISTENER=false
+      - ENABLE_DEQUEUER=true
+      - ENABLE_FINALIZER=false
+      - ENABLE_CONSENSUS=false
+      - DEQUEUER_WORKERS=10
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - sequencer-network
+    profiles:
+      - distributed
+      - dequeuer
+    deploy:
+      replicas: ${DEQUEUER_REPLICAS:-3}
+
+  # Finalizer-only instances
+  finalizer-1:
+    build:
+      context: .
+      dockerfile: Dockerfile.unified
+    environment:
+      - SEQUENCER_ID=finalizer-1
+      - REDIS_ADDR=redis:6379
+      - DEBUG_MODE=${DEBUG_MODE:-false}
+      # Component toggles - only finalizer
+      - ENABLE_LISTENER=false
+      - ENABLE_DEQUEUER=false
+      - ENABLE_FINALIZER=true
+      - ENABLE_CONSENSUS=false
+      - IPFS_HOST=${IPFS_HOST:-ipfs:5001}
+      - STORAGE_PROVIDER=${STORAGE_PROVIDER:-ipfs}
+      - DA_PROVIDER=${DA_PROVIDER:-none}
+      - RPC_URL=${RPC_URL}
+      - PRIVATE_KEY=${PRIVATE_KEY_FINALIZER}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - sequencer-network
+    profiles:
+      - distributed
+      - finalizer
+    deploy:
+      replicas: ${FINALIZER_REPLICAS:-2}
+
+  # Consensus validator instances (P2P + consensus only)
+  validator-1:
+    build:
+      context: .
+      dockerfile: Dockerfile.unified
+    environment:
+      - SEQUENCER_ID=validator-1
+      - P2P_PORT=9011
+      - REDIS_ADDR=redis:6379
+      - BOOTSTRAP_MULTIADDR=${BOOTSTRAP_MULTIADDR}
+      - DEBUG_MODE=${DEBUG_MODE:-false}
+      # Component toggles - listener + consensus
+      - ENABLE_LISTENER=true
+      - ENABLE_DEQUEUER=false
+      - ENABLE_FINALIZER=false
+      - ENABLE_CONSENSUS=true
+      - PRIVATE_KEY=${PRIVATE_KEY_VAL1}
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "9011:9011"
+    networks:
+      - sequencer-network
+    profiles:
+      - validators
+      - consensus
+
+  validator-2:
+    build:
+      context: .
+      dockerfile: Dockerfile.unified
+    environment:
+      - SEQUENCER_ID=validator-2
+      - P2P_PORT=9012
+      - REDIS_ADDR=redis:6379
+      - BOOTSTRAP_MULTIADDR=${BOOTSTRAP_MULTIADDR}
+      - DEBUG_MODE=${DEBUG_MODE:-false}
+      # Component toggles - listener + consensus
+      - ENABLE_LISTENER=true
+      - ENABLE_DEQUEUER=false
+      - ENABLE_FINALIZER=false
+      - ENABLE_CONSENSUS=true
+      - PRIVATE_KEY=${PRIVATE_KEY_VAL2}
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "9012:9012"
+    networks:
+      - sequencer-network
+    profiles:
+      - validators
+      - consensus
+
+  validator-3:
+    build:
+      context: .
+      dockerfile: Dockerfile.unified
+    environment:
+      - SEQUENCER_ID=validator-3
+      - P2P_PORT=9013
+      - REDIS_ADDR=redis:6379
+      - BOOTSTRAP_MULTIADDR=${BOOTSTRAP_MULTIADDR}
+      - DEBUG_MODE=${DEBUG_MODE:-false}
+      # Component toggles - listener + consensus
+      - ENABLE_LISTENER=true
+      - ENABLE_DEQUEUER=false
+      - ENABLE_FINALIZER=false
+      - ENABLE_CONSENSUS=true
+      - PRIVATE_KEY=${PRIVATE_KEY_VAL3}
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "9013:9013"
+    networks:
+      - sequencer-network
+    profiles:
+      - validators
+      - consensus
+
+  # IPFS node (optional, for finalizer)
+  ipfs:
+    image: ipfs/go-ipfs:latest
+    ports:
+      - "5001:5001"
+      - "8080:8080"
+    volumes:
+      - ipfs-data:/data/ipfs
+    networks:
+      - sequencer-network
+    profiles:
+      - storage
+      - distributed
+
+  # Monitoring stack (optional)
+  prometheus:
+    image: prom/prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    networks:
+      - sequencer-network
+    profiles:
+      - monitoring
+
+  grafana:
+    image: grafana/grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    networks:
+      - sequencer-network
+    profiles:
+      - monitoring
+
+volumes:
+  redis-data:
+  ipfs-data:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  sequencer-network:
+    driver: bridge

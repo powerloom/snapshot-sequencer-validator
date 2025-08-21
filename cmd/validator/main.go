@@ -13,6 +13,9 @@ import (
 	"time"
 
 	"github.com/powerloom/powerloom-sequencer-validator/pkgs/consensus"
+	"github.com/powerloom/powerloom-sequencer-validator/pkgs/submissions"
+	"github.com/go-redis/redis/v8"
+	"github.com/google/uuid"
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
@@ -35,14 +38,19 @@ const (
 )
 
 type Validator struct {
-	host       host.Host
-	ctx        context.Context
-	ps         *pubsub.PubSub
-	topics     map[string]*pubsub.Topic
-	subs       map[string]*pubsub.Subscription
-	batchGen   *consensus.DummyBatchGenerator
-	votes      map[uint64]map[string]*consensus.FinalizedBatch // epoch -> sequencerID -> batch
-	votesMutex sync.Mutex
+	host         host.Host
+	ctx          context.Context
+	ps           *pubsub.PubSub
+	topics       map[string]*pubsub.Topic
+	subs         map[string]*pubsub.Subscription
+	batchGen     *consensus.DummyBatchGenerator
+	votes        map[uint64]map[string]*consensus.FinalizedBatch // epoch -> sequencerID -> batch
+	votesMutex   sync.Mutex
+	redisClient  *redis.Client
+	dequeuer     *submissions.Dequeuer
+	sequencerID  string
+	isProcessing bool
+	processMutex sync.Mutex
 }
 
 func main() {
@@ -87,6 +95,23 @@ func main() {
 		}
 		log.Info("Generated new private key")
 	}
+
+	// Initialize Redis client
+	redisAddr := os.Getenv("REDIS_ADDR")
+	if redisAddr == "" {
+		redisAddr = "localhost:6379"
+	}
+	
+	redisClient := redis.NewClient(&redis.Options{
+		Addr: redisAddr,
+		DB:   0,
+	})
+	
+	// Test Redis connection
+	if err := redisClient.Ping(ctx).Err(); err != nil {
+		log.Fatalf("Failed to connect to Redis: %v", err)
+	}
+	log.Infof("Connected to Redis at %s", redisAddr)
 
 	// Create libp2p host
 	host, err := libp2p.New(
@@ -152,14 +177,20 @@ func main() {
 		log.Fatalf("Failed to create pubsub: %v", err)
 	}
 
+	// Initialize dequeuer
+	dequeuer := submissions.NewDequeuer(redisClient, sequencerID)
+
 	validator := &Validator{
-		host:     host,
-		ctx:      ctx,
-		ps:       ps,
-		topics:   make(map[string]*pubsub.Topic),
-		subs:     make(map[string]*pubsub.Subscription),
-		batchGen: consensus.NewDummyBatchGenerator(sequencerID),
-		votes:    make(map[uint64]map[string]*consensus.FinalizedBatch),
+		host:        host,
+		ctx:         ctx,
+		ps:          ps,
+		topics:      make(map[string]*pubsub.Topic),
+		subs:        make(map[string]*pubsub.Subscription),
+		batchGen:    consensus.NewDummyBatchGenerator(sequencerID),
+		votes:       make(map[uint64]map[string]*consensus.FinalizedBatch),
+		redisClient: redisClient,
+		dequeuer:    dequeuer,
+		sequencerID: sequencerID,
 	}
 
 	// Join topics
@@ -177,9 +208,12 @@ func main() {
 	}
 
 	// Start message handlers
-	go validator.handleMessages(DiscoveryTopic)
-	go validator.handleMessages(SubmissionsTopic)
+	go validator.handleDiscoveryMessages()
+	go validator.handleSubmissionMessages() // Enhanced to queue actual submissions
 	go validator.handleConsensusMessages()
+	
+	// Start the dequeuer to process submissions
+	go validator.startDequeuer()
 	
 	// Start batch generation every 30 seconds
 	go validator.startBatchGeneration()
@@ -224,15 +258,18 @@ func (v *Validator) joinTopic(topicName string) error {
 	return nil
 }
 
-func (v *Validator) handleMessages(topicName string) {
-	sub := v.subs[topicName]
+func (v *Validator) handleDiscoveryMessages() {
+	sub := v.subs[DiscoveryTopic]
+	log.Infof("🎧 Validator listening on discovery topic: %s", DiscoveryTopic)
+	
+	messageCount := 0
 	for {
 		msg, err := sub.Next(v.ctx)
 		if err != nil {
 			if v.ctx.Err() != nil {
 				return
 			}
-			log.Errorf("Error reading message from %s: %v", topicName, err)
+			log.Errorf("Error reading discovery message: %v", err)
 			continue
 		}
 
@@ -241,9 +278,138 @@ func (v *Validator) handleMessages(topicName string) {
 			continue
 		}
 
-		log.Infof("Received message on %s from %s: %s", 
-			topicName, msg.ReceivedFrom.ShortString(), string(msg.Data))
+		messageCount++
+		log.Infof("📨 [DISCOVERY MSG #%d] Received from %s (size: %d bytes)",
+			messageCount, msg.ReceivedFrom.ShortString(), len(msg.Data))
+		
+		// Process as submission - epoch 0 can contain actual submissions for testing
+		v.processSubmission(msg)
 	}
+}
+
+func (v *Validator) handleSubmissionMessages() {
+	sub := v.subs[SubmissionsTopic]
+	log.Infof("🎧 Validator listening for submissions on: %s", SubmissionsTopic)
+	
+	messageCount := 0
+	for {
+		msg, err := sub.Next(v.ctx)
+		if err != nil {
+			if v.ctx.Err() != nil {
+				return
+			}
+			log.Errorf("Error reading submission message: %v", err)
+			continue
+		}
+
+		// Skip own messages
+		if msg.ReceivedFrom == v.host.ID() {
+			continue
+		}
+
+		messageCount++
+		log.Infof("📨 [MSG #%d] RECEIVED SUBMISSION from %s (size: %d bytes)",
+			messageCount, msg.ReceivedFrom.ShortString(), len(msg.Data))
+
+		// Process the submission
+		v.processSubmission(msg)
+	}
+}
+
+func (v *Validator) processSubmission(msg *pubsub.Message) {
+	log.Infof("🔍 Processing submission from %s", msg.ReceivedFrom.ShortString())
+	
+	// Log first 100 chars of raw data for debugging
+	if len(msg.Data) > 0 {
+		preview := string(msg.Data)
+		if len(preview) > 100 {
+			preview = preview[:100] + "..."
+		}
+		log.Debugf("   Raw data preview: %s", preview)
+	}
+	
+	// Try to parse as P2PSnapshotSubmission first
+	var p2pSubmission submissions.P2PSnapshotSubmission
+	err := json.Unmarshal(msg.Data, &p2pSubmission)
+	if err != nil {
+		// Try direct SnapshotSubmission for backward compatibility
+		var submission submissions.SnapshotSubmission
+		err = json.Unmarshal(msg.Data, &submission)
+		if err != nil {
+			log.Errorf("❌ Failed to unmarshal submission: %v", err)
+			log.Debugf("   Invalid JSON data: %s", string(msg.Data)[:min(200, len(msg.Data))])
+			return
+		}
+		log.Infof("📦 Single submission for Epoch=%d, Slot=%d, Project=%s",
+			submission.Request.EpochId, submission.Request.SlotId, submission.Request.ProjectId)
+		// Queue single submission
+		v.queueSubmission(&submission, msg.ID)
+		return
+	}
+	
+	// Process each submission in the P2P message
+	log.Infof("📦 BATCH: %d submissions from snapshotter %s, Epoch=%d",
+		len(p2pSubmission.Submissions), p2pSubmission.SnapshotterID, p2pSubmission.EpochID)
+	
+	for i, submission := range p2pSubmission.Submissions {
+		log.Debugf("   [%d/%d] Project=%s, Slot=%d, CID=%s",
+			i+1, len(p2pSubmission.Submissions),
+			submission.Request.ProjectId,
+			submission.Request.SlotId,
+			submission.Request.SnapshotCid[:min(16, len(submission.Request.SnapshotCid))])
+		v.queueSubmission(submission, msg.ID)
+	}
+	
+	log.Infof("✅ Successfully processed batch from %s", msg.ReceivedFrom.ShortString())
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func (v *Validator) queueSubmission(submission *submissions.SnapshotSubmission, msgID string) {
+	submissionID := uuid.New().String()
+	
+	// Marshal submission data
+	submissionData, err := json.Marshal(submission)
+	if err != nil {
+		log.Errorf("Error marshalling submission data: %v", err)
+		return
+	}
+	
+	// Create queue entry
+	queueData := map[string]interface{}{
+		"submission_id":       submissionID,
+		"data_market_address": submission.DataMarket,
+		"data":                string(submissionData),
+		"timestamp":           time.Now().Unix(),
+		"validator_id":        v.sequencerID,
+	}
+	
+	queueDataJSON, err := json.Marshal(queueData)
+	if err != nil {
+		log.Errorf("Error marshalling queue data: %v", err)
+		return
+	}
+	
+	// Add to Redis queue
+	err = v.redisClient.LPush(v.ctx, "submissionQueue", queueDataJSON).Err()
+	if err != nil {
+		log.Errorf("Error adding to Redis queue: %v", err)
+		return
+	}
+	
+	log.Infof("✅ Queued submission %s | Epoch=%d, Slot=%d, Project=%s",
+		submissionID[:8], submission.Request.EpochId, submission.Request.SlotId, submission.Request.ProjectId)
+	
+	// Track submission count
+	key := fmt.Sprintf("validator:%s:epoch:%d:slot:%d:count",
+		v.sequencerID, submission.Request.EpochId, submission.Request.SlotId)
+	v.redisClient.Incr(v.ctx, key)
+	v.redisClient.Expire(v.ctx, key, 5*time.Minute)
 }
 
 func (v *Validator) discoverPeers(routingDiscovery *routing.RoutingDiscovery) {
@@ -410,6 +576,107 @@ func (v *Validator) checkConsensus(epoch uint64) {
 	for oldEpoch := range v.votes {
 		if oldEpoch < epoch-10 {
 			delete(v.votes, oldEpoch)
+		}
+	}
+}
+
+func (v *Validator) startDequeuer() {
+	log.Info("Starting dequeuer for processing submissions...")
+	
+	// Configure dequeuer with worker pool
+	workers := 5
+	if w := os.Getenv("DEQUEUER_WORKERS"); w != "" {
+		if wInt, err := fmt.Sscanf(w, "%d", &workers); err == nil && wInt > 0 {
+			workers = wInt
+		}
+	}
+	
+	// Start worker pool
+	for i := 0; i < workers; i++ {
+		go v.dequeueWorker(i)
+	}
+	
+	// Monitor queue depth periodically
+	go v.monitorQueueDepth()
+}
+
+func (v *Validator) dequeueWorker(workerID int) {
+	log.Infof("Dequeue worker %d started", workerID)
+	
+	for {
+		select {
+		case <-v.ctx.Done():
+			log.Infof("Dequeue worker %d shutting down", workerID)
+			return
+		default:
+			// Pop from queue with timeout
+			result, err := v.redisClient.BRPop(v.ctx, 2*time.Second, "submissionQueue").Result()
+			if err != nil {
+				if err == redis.Nil {
+					// Queue is empty, continue
+					continue
+				}
+				log.Errorf("Worker %d: Error popping from queue: %v", workerID, err)
+				continue
+			}
+			
+			if len(result) < 2 {
+				continue
+			}
+			
+			// Process the submission
+			v.processQueuedSubmission(workerID, result[1])
+		}
+	}
+}
+
+func (v *Validator) processQueuedSubmission(workerID int, data string) {
+	var queueData map[string]interface{}
+	if err := json.Unmarshal([]byte(data), &queueData); err != nil {
+		log.Errorf("Worker %d: Failed to unmarshal queue data: %v", workerID, err)
+		return
+	}
+	
+	submissionID := queueData["submission_id"].(string)
+	submissionDataStr := queueData["data"].(string)
+	
+	var submission submissions.SnapshotSubmission
+	if err := json.Unmarshal([]byte(submissionDataStr), &submission); err != nil {
+		log.Errorf("Worker %d: Failed to unmarshal submission: %v", workerID, err)
+		return
+	}
+	
+	// Process the submission (validation, storage, etc.)
+	if err := v.dequeuer.ProcessSubmission(&submission, submissionID); err != nil {
+		log.Errorf("Worker %d: Failed to process submission %s: %v", 
+			workerID, submissionID, err)
+		return
+	}
+	
+	log.Infof("Worker %d: Successfully processed submission %s for epoch %d",
+		workerID, submissionID, submission.Request.EpochId)
+}
+
+func (v *Validator) monitorQueueDepth() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	
+	for {
+		select {
+		case <-ticker.C:
+			length, err := v.redisClient.LLen(v.ctx, "submissionQueue").Result()
+			if err != nil {
+				log.Errorf("Failed to get queue length: %v", err)
+				continue
+			}
+			
+			if length > 100 {
+				log.Warnf("⚠️ Queue depth high: %d submissions pending", length)
+			} else if length > 0 {
+				log.Infof("📊 Queue depth: %d submissions pending", length)
+			}
+		case <-v.ctx.Done():
+			return
 		}
 	}
 }
