@@ -13,7 +13,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Default values
-COMPOSE_FILE="docker-compose.unified.yml"
+COMPOSE_FILE="docker-compose.snapshot-sequencer.yml"
 ENV_FILE=".env"
 
 # Function to print colored output
@@ -28,8 +28,8 @@ show_usage() {
     echo "Usage: $0 [COMMAND] [OPTIONS]"
     echo ""
     echo "Commands:"
-    echo "  unified       - Launch all-in-one unified sequencer (all components hardcoded ON)"
-    echo "  unified-custom - Launch unified with YOUR .env settings"
+    echo "  sequencer     - Launch all-in-one snapshot sequencer (all components hardcoded ON)"
+    echo "  sequencer-custom - Launch snapshot sequencer with YOUR .env settings"
     echo "  distributed   - Launch distributed components (listener, dequeuer, finalizer)"
     echo "  minimal       - Launch minimal setup (redis + unified)"
     echo "  full          - Launch full stack with monitoring"
@@ -46,7 +46,7 @@ show_usage() {
     echo "  --bootstrap   - Set bootstrap multiaddr"
     echo ""
     echo "Examples:"
-    echo "  $0 unified                    # Run all-in-one sequencer"
+    echo "  $0 sequencer                  # Run all-in-one sequencer"
     echo "  $0 distributed --debug        # Run distributed with debug"
     echo "  $0 custom listener,dequeuer   # Run specific components"
 }
@@ -78,11 +78,11 @@ check_env_config() {
     fi
 }
 
-# Function to launch unified mode
-launch_unified() {
-    print_color "$BLUE" "Launching unified sequencer (all-in-one)..."
-    docker-compose -f "$COMPOSE_FILE" --profile unified up -d
-    print_color "$GREEN" "✓ Unified sequencer launched"
+# Function to launch sequencer mode
+launch_sequencer() {
+    print_color "$BLUE" "Launching snapshot sequencer (all-in-one)..."
+    docker-compose -f "$COMPOSE_FILE" --profile sequencer up -d
+    print_color "$GREEN" "✓ Snapshot sequencer launched"
 }
 
 # Function to launch distributed mode
@@ -101,7 +101,7 @@ launch_distributed() {
 # Function to launch minimal setup
 launch_minimal() {
     print_color "$BLUE" "Launching minimal setup..."
-    docker-compose -f "$COMPOSE_FILE" up -d redis unified-all
+    docker-compose -f "$COMPOSE_FILE" up -d redis sequencer-all
     print_color "$GREEN" "✓ Minimal setup launched"
 }
 
@@ -212,13 +212,13 @@ if [ -f "$ENV_FILE" ]; then
 fi
 
 case $COMMAND in
-    unified)
-        launch_unified
+    sequencer)
+        launch_sequencer
         ;;
-    unified-custom)
-        print_color "$BLUE" "Launching unified sequencer with custom .env settings..."
-        docker-compose -f "$COMPOSE_FILE" up -d unified-custom
-        print_color "$GREEN" "✓ Unified sequencer launched with your custom settings"
+    sequencer-custom)
+        print_color "$BLUE" "Launching snapshot sequencer with custom .env settings..."
+        docker-compose -f "$COMPOSE_FILE" up -d sequencer-custom
+        print_color "$GREEN" "✓ Snapshot sequencer launched with your custom settings"
         ;;
     distributed)
         launch_distributed

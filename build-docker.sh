@@ -1,6 +1,11 @@
 #!/bin/bash
 
-echo "Building Docker image..."
+echo "⚠️  DEPRECATED: Use specific build scripts instead:"
+echo ""
+echo "  ./build-consensus-test.sh      - Build for consensus testing (start.sh)"
+echo "  ./build-snapshot-sequencer.sh  - Build for snapshot sequencer (launch.sh)"
+echo ""
+echo "Building default (consensus test) for backwards compatibility..."
 
 # Build Docker image
 if command -v docker-compose &> /dev/null; then

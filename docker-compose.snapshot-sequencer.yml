@@ -16,13 +16,13 @@ services:
     networks:
       - snapshot-sequencer
 
-  # Flexible unified sequencer (reads from .env)
-  unified-custom:
+  # Flexible snapshot sequencer (reads from .env)
+  sequencer-custom:
     build:
       context: .
-      dockerfile: Dockerfile.unified
+      dockerfile: Dockerfile.snapshot-sequencer
     environment:
-      - SEQUENCER_ID=${SEQUENCER_ID:-unified-custom}
+      - SEQUENCER_ID=${SEQUENCER_ID:-sequencer-custom}
       - P2P_PORT=${P2P_PORT:-9001}
       - REDIS_HOST=${REDIS_HOST:-redis}
       - REDIS_PORT=${REDIS_PORT:-6379}
@@ -47,13 +47,13 @@ services:
       - snapshot-sequencer
     # No profile - run directly
 
-  # All-in-one unified sequencer (all components enabled)
-  unified-all:
+  # All-in-one snapshot sequencer (all components enabled)
+  sequencer-all:
     build:
       context: .
-      dockerfile: Dockerfile.unified
+      dockerfile: Dockerfile.snapshot-sequencer
     environment:
-      - SEQUENCER_ID=unified-all
+      - SEQUENCER_ID=sequencer-all
       - P2P_PORT=9001
       - REDIS_HOST=redis
       - REDIS_PORT=6379
@@ -78,13 +78,13 @@ services:
       - snapshot-sequencer
     profiles:
       - all
-      - unified
+      - sequencer
 
   # Listener-only instance (P2P listener component)
   listener-only:
     build:
       context: .
-      dockerfile: Dockerfile.unified
+      dockerfile: Dockerfile.snapshot-sequencer
     environment:
       - SEQUENCER_ID=listener-1
       - P2P_PORT=9100
@@ -115,7 +115,7 @@ services:
   dequeuer-1:
     build:
       context: .
-      dockerfile: Dockerfile.unified
+      dockerfile: Dockerfile.snapshot-sequencer
     environment:
       - SEQUENCER_ID=dequeuer-1
       - REDIS_HOST=redis
@@ -144,7 +144,7 @@ services:
   finalizer-1:
     build:
       context: .
-      dockerfile: Dockerfile.unified
+      dockerfile: Dockerfile.snapshot-sequencer
     environment:
       - SEQUENCER_ID=finalizer-1
       - REDIS_HOST=redis

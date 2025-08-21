@@ -9,11 +9,11 @@
 - **Purpose**: Tests consensus with real P2P listener, dequeuer, but dummy batch generation
 - **Status**: Tested and stable for consensus testing
 
-### System 2: Unified Sequencer (EXPERIMENTAL)  
+### System 2: Snapshot Sequencer (EXPERIMENTAL)  
 - **Binary**: `cmd/unified/main.go`
-- **Docker**: `docker-compose.unified.yml`
+- **Docker**: `docker-compose.snapshot-sequencer.yml`
 - **Launcher**: `launch.sh`
-- **Purpose**: Flexible components with toggles
+- **Purpose**: Flexible snapshot sequencer with component toggles
 - **Status**: New, experimental
 
 ## Quick Start (Per VPS)
@@ -64,7 +64,7 @@ LOG_LEVEL=info
 DEBUG_MODE=false
 ```
 
-#### For Unified Sequencer (launch.sh) - Additional Variables
+#### For Snapshot Sequencer (launch.sh) - Additional Variables
 ```bash
 # Component toggles (in addition to above)
 # These control what runs INSIDE each container
@@ -89,12 +89,14 @@ DEQUEUER_WORKERS=5       # Worker pool size for dequeuer
 
 **Build Scripts:**
 - `./build-binary.sh` - Builds Go binaries
-- `./build-docker.sh` - Builds Docker images  
+- `./build-consensus-test.sh` - Builds Docker image for consensus testing
+- `./build-snapshot-sequencer.sh` - Builds Docker image for snapshot sequencer
+- `./build-docker.sh` - DEPRECATED (use specific build scripts above)
 - `./build.sh` - Builds both binary and Docker
 
 **Launch Scripts:**
 - `./start.sh` - Starts validator using docker-compose.yml (current default)
-- `./launch.sh` - Advanced launcher for docker-compose.unified.yml with profiles
+- `./launch.sh` - Advanced launcher for docker-compose.snapshot-sequencer.yml with profiles
 
 ### 5. Running the Systems
 
@@ -111,18 +113,18 @@ docker-compose logs -f
 docker-compose down
 ```
 
-#### Option B: Unified Sequencer (EXPERIMENTAL)
+#### Option B: Snapshot Sequencer (EXPERIMENTAL)
 
 **How launch.sh profiles work:**
 
 ```bash
 # Each profile launches different container configurations:
 
-./launch.sh unified       # ONE container with ALL components HARDCODED enabled
+./launch.sh sequencer     # ONE container with ALL components HARDCODED enabled
                          # ENABLE_LISTENER=true, ENABLE_DEQUEUER=true,
                          # ENABLE_FINALIZER=true, ENABLE_CONSENSUS=true
 
-./launch.sh unified-custom # ONE container that READS YOUR .env settings
+./launch.sh sequencer-custom # ONE container that READS YOUR .env settings
                          # Uses whatever ENABLE_* values you set in .env
 
 ./launch.sh distributed   # SEPARATE containers, each doing one thing:
@@ -145,7 +147,7 @@ echo "REDIS_HOST=redis" >> .env
 echo "BOOTSTRAP_MULTIADDR=/ip4/YOUR_IP/tcp/9100/p2p/YOUR_PEER_ID" >> .env
 
 # Launch with your custom settings
-./launch.sh unified-custom
+./launch.sh sequencer-custom
 
 ## What You'll See in Logs
 
