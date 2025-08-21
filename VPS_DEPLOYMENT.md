@@ -118,28 +118,34 @@ docker-compose down
 ```bash
 # Each profile launches different container configurations:
 
-./launch.sh unified      # ONE container with ALL components enabled
-                        # ENABLE_LISTENER=true, ENABLE_DEQUEUER=true,
-                        # ENABLE_FINALIZER=true, ENABLE_CONSENSUS=true
+./launch.sh unified       # ONE container with ALL components HARDCODED enabled
+                         # ENABLE_LISTENER=true, ENABLE_DEQUEUER=true,
+                         # ENABLE_FINALIZER=true, ENABLE_CONSENSUS=true
 
-./launch.sh distributed  # SEPARATE containers, each doing one thing:
-                        # - listener-only (ENABLE_LISTENER=true only)
-                        # - dequeuer-1 (ENABLE_DEQUEUER=true only)
-                        # - finalizer-1 (ENABLE_FINALIZER=true only)
+./launch.sh unified-custom # ONE container that READS YOUR .env settings
+                         # Uses whatever ENABLE_* values you set in .env
 
-./launch.sh validators   # THREE consensus nodes (validator-1,2,3):
-                        # ENABLE_LISTENER=true, ENABLE_CONSENSUS=true
-                        # (no dequeuer or finalizer)
+./launch.sh distributed   # SEPARATE containers, each doing one thing:
+                         # - listener-only (ENABLE_LISTENER=true only)
+                         # - dequeuer-1 (ENABLE_DEQUEUER=true only)
+                         # - finalizer-1 (ENABLE_FINALIZER=true only)
 
-./launch.sh status       # Check status of running containers
-./launch.sh logs         # View logs from containers
+./launch.sh status        # Check status of running containers
+./launch.sh logs          # View logs from containers
 ```
 
-**NOTE**: These profiles use hardcoded configurations that are NOT overridden by .env files.
-If you need custom component combinations, either:
-- Run the unified binary directly with your env vars
-- Create a custom profile in docker-compose.unified.yml
-- Use `docker-compose` directly without profiles
+**Custom Configuration Example:**
+```bash
+# Create .env with your settings
+echo "ENABLE_LISTENER=true" >> .env
+echo "ENABLE_DEQUEUER=true" >> .env
+echo "ENABLE_FINALIZER=false" >> .env
+echo "ENABLE_CONSENSUS=false" >> .env
+echo "REDIS_HOST=redis" >> .env
+echo "BOOTSTRAP_MULTIADDR=/ip4/YOUR_IP/tcp/9100/p2p/YOUR_PEER_ID" >> .env
+
+# Launch with your custom settings
+./launch.sh unified-custom
 
 ## What You'll See in Logs
 

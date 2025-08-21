@@ -28,7 +28,8 @@ show_usage() {
     echo "Usage: $0 [COMMAND] [OPTIONS]"
     echo ""
     echo "Commands:"
-    echo "  unified       - Launch all-in-one unified sequencer"
+    echo "  unified       - Launch all-in-one unified sequencer (all components hardcoded ON)"
+    echo "  unified-custom - Launch unified with YOUR .env settings"
     echo "  distributed   - Launch distributed components (listener, dequeuer, finalizer)"
     echo "  minimal       - Launch minimal setup (redis + unified)"
     echo "  full          - Launch full stack with monitoring"
@@ -213,6 +214,11 @@ fi
 case $COMMAND in
     unified)
         launch_unified
+        ;;
+    unified-custom)
+        print_color "$BLUE" "Launching unified sequencer with custom .env settings..."
+        docker-compose -f "$COMPOSE_FILE" up -d unified-custom
+        print_color "$GREEN" "✓ Unified sequencer launched with your custom settings"
         ;;
     distributed)
         launch_distributed
