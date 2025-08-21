@@ -171,6 +171,7 @@ Connected to bootstrap node: <YOUR_BOOTSTRAP_PEER_ID>
 ### Periodic Health Check (every 30s)
 
 ```
+
 ====== P2P LISTENER STATUS ======
 Host ID: QmYourPeerID...
 Connected Peers: 5
