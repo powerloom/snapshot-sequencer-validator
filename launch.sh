@@ -214,7 +214,9 @@ check_env_config
 
 # Load environment file
 if [ -f "$ENV_FILE" ]; then
-    export $(grep -v '^#' "$ENV_FILE" | xargs)
+    set -a  # automatically export all variables
+    source "$ENV_FILE"
+    set +a  # turn off automatic export
 fi
 
 case $COMMAND in
