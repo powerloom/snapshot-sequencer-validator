@@ -20,7 +20,7 @@ services:
       - PRIVATE_KEY=${PRIVATE_KEY}     # Optional: will generate if not provided
       
       # Bootstrap connection (your existing bootstrap node)
-      - BOOTSTRAP_MULTIADDR=${BOOTSTRAP_MULTIADDR:-/ip4/159.203.190.22/tcp/9100/p2p/12D3KooWN4ovysY4dp45NhLPQ9ywEhK3Z1GmaCVhQKrKHrtk1R2x}
+      - BOOTSTRAP_MULTIADDR=${BOOTSTRAP_MULTIADDR}
       - RENDEZVOUS_POINT=powerloom-snapshot-sequencer-network
       
       # Consensus parameters

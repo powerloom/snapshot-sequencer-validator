@@ -67,11 +67,20 @@ DEBUG_MODE=false
 #### For Unified Sequencer (launch.sh) - Additional Variables
 ```bash
 # Component toggles (in addition to above)
-ENABLE_LISTENER=true      # P2P gossipsub listener
-ENABLE_DEQUEUER=true      # Redis queue processor
-ENABLE_FINALIZER=false    # Batch finalizer (needs IPFS)
-ENABLE_CONSENSUS=false    # Consensus voting
-DEQUEUER_WORKERS=5       # Worker pool size
+# These control what runs INSIDE each container
+ENABLE_LISTENER=true      # P2P gossipsub listener (receives submissions)
+ENABLE_DEQUEUER=true      # Redis queue processor (processes submissions)
+ENABLE_FINALIZER=false    # Batch finalizer (needs IPFS for storage)
+ENABLE_CONSENSUS=false    # Consensus voting (votes on batches)
+DEQUEUER_WORKERS=5       # Worker pool size for dequeuer
+
+# Examples of common configurations:
+# Just listen to P2P (no processing):
+#   ENABLE_LISTENER=true, all others false
+# Process without consensus:
+#   ENABLE_LISTENER=true, ENABLE_DEQUEUER=true, others false
+# Full sequencer:
+#   All set to true
 ```
 
 ### 4. Build Options
@@ -103,14 +112,34 @@ docker-compose down
 ```
 
 #### Option B: Unified Sequencer (EXPERIMENTAL)
+
+**How launch.sh profiles work:**
+
 ```bash
-# launch.sh uses docker-compose.unified.yml with different profiles:
-./launch.sh unified      # All-in-one container
-./launch.sh distributed  # Separate components
-./launch.sh validators   # 3 validator nodes
-./launch.sh status       # Check status
-./launch.sh logs         # View logs
+# Each profile launches different container configurations:
+
+./launch.sh unified      # ONE container with ALL components enabled
+                        # ENABLE_LISTENER=true, ENABLE_DEQUEUER=true,
+                        # ENABLE_FINALIZER=true, ENABLE_CONSENSUS=true
+
+./launch.sh distributed  # SEPARATE containers, each doing one thing:
+                        # - listener-only (ENABLE_LISTENER=true only)
+                        # - dequeuer-1 (ENABLE_DEQUEUER=true only)
+                        # - finalizer-1 (ENABLE_FINALIZER=true only)
+
+./launch.sh validators   # THREE consensus nodes (validator-1,2,3):
+                        # ENABLE_LISTENER=true, ENABLE_CONSENSUS=true
+                        # (no dequeuer or finalizer)
+
+./launch.sh status       # Check status of running containers
+./launch.sh logs         # View logs from containers
 ```
+
+**NOTE**: These profiles use hardcoded configurations that are NOT overridden by .env files.
+If you need custom component combinations, either:
+- Run the unified binary directly with your env vars
+- Create a custom profile in docker-compose.unified.yml
+- Use `docker-compose` directly without profiles
 
 ## What You'll See in Logs
 

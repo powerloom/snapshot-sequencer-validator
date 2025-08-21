@@ -30,7 +30,6 @@ show_usage() {
     echo "Commands:"
     echo "  unified       - Launch all-in-one unified sequencer"
     echo "  distributed   - Launch distributed components (listener, dequeuer, finalizer)"
-    echo "  validators    - Launch 3 validator nodes for consensus"
     echo "  minimal       - Launch minimal setup (redis + unified)"
     echo "  full          - Launch full stack with monitoring"
     echo "  custom        - Launch with custom profile"
@@ -48,7 +47,6 @@ show_usage() {
     echo "Examples:"
     echo "  $0 unified                    # Run all-in-one sequencer"
     echo "  $0 distributed --debug        # Run distributed with debug"
-    echo "  $0 validators                 # Run 3 validators"
     echo "  $0 custom listener,dequeuer   # Run specific components"
 }
 
@@ -67,38 +65,15 @@ check_prerequisites() {
     print_color "$GREEN" "✓ Prerequisites checked"
 }
 
-# Function to create default env file if not exists
-create_env_file() {
+# Function to check env configuration
+check_env_config() {
     if [ ! -f "$ENV_FILE" ]; then
-        print_color "$YELLOW" "Creating default .env file..."
-        cat > "$ENV_FILE" << EOF
-# Bootstrap node configuration
-BOOTSTRAP_MULTIADDR=/ip4/159.203.190.22/tcp/9100/p2p/12D3KooWN4ovysY4dp45NhLPQ9ywEhK3Z1GmaCVhQKrKHrtk1R2x
-
-# Debug mode
-DEBUG_MODE=false
-
-# Component scaling
-DEQUEUER_REPLICAS=3
-FINALIZER_REPLICAS=2
-
-# Storage configuration
-STORAGE_PROVIDER=ipfs
-DA_PROVIDER=none
-IPFS_HOST=ipfs:5001
-
-# Ethereum RPC
-RPC_URL=https://eth-mainnet.g.alchemy.com/v2/YOUR_KEY
-
-# Private keys (generate unique keys for production)
-PRIVATE_KEY_ALL=
-PRIVATE_KEY_LISTENER=
-PRIVATE_KEY_FINALIZER=
-PRIVATE_KEY_VAL1=
-PRIVATE_KEY_VAL2=
-PRIVATE_KEY_VAL3=
-EOF
-        print_color "$GREEN" "✓ Created .env file"
+        print_color "$YELLOW" "Warning: No .env file found"
+        print_color "$YELLOW" "Copy .env.example to .env and configure it:"
+        echo "  cp .env.example .env"
+        echo "  nano .env"
+        echo ""
+        print_color "$YELLOW" "Continuing with environment variables if set..."
     fi
 }
 
@@ -121,17 +96,6 @@ launch_distributed() {
     echo "  - Finalizer: 2 replicas"
 }
 
-# Function to launch validators
-launch_validators() {
-    print_color "$BLUE" "Launching validator nodes..."
-    docker-compose -f "$COMPOSE_FILE" --profile validators up -d
-    print_color "$GREEN" "✓ Validators launched"
-    echo ""
-    echo "Validators running:"
-    echo "  - Validator 1: Port 9011"
-    echo "  - Validator 2: Port 9012"
-    echo "  - Validator 3: Port 9013"
-}
 
 # Function to launch minimal setup
 launch_minimal() {
@@ -143,7 +107,7 @@ launch_minimal() {
 # Function to launch full stack
 launch_full() {
     print_color "$BLUE" "Launching full stack with monitoring..."
-    docker-compose -f "$COMPOSE_FILE" --profile distributed --profile validators --profile storage --profile monitoring up -d
+    docker-compose -f "$COMPOSE_FILE" --profile distributed --profile storage --profile monitoring up -d
     print_color "$GREEN" "✓ Full stack launched"
     echo ""
     echo "Services available:"
@@ -239,7 +203,7 @@ done
 
 # Main execution
 check_prerequisites
-create_env_file
+check_env_config
 
 # Load environment file
 if [ -f "$ENV_FILE" ]; then
@@ -252,9 +216,6 @@ case $COMMAND in
         ;;
     distributed)
         launch_distributed
-        ;;
-    validators)
-        launch_validators
         ;;
     minimal)
         launch_minimal
