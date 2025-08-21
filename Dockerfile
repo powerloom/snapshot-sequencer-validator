@@ -12,8 +12,8 @@ RUN go mod download
 # Copy source code
 COPY . .
 
-# Build the binary
-RUN go build -o validator ./cmd/validator/main.go
+# Build the binary into bin directory
+RUN mkdir -p bin && go build -o bin/sequencer-consensus-test ./cmd/sequencer-consensus-test/main.go
 
 # Runtime stage
 FROM alpine:latest
@@ -23,10 +23,10 @@ RUN apk add --no-cache ca-certificates
 WORKDIR /app
 
 # Copy binary from builder
-COPY --from=builder /app/validator /app/validator
+COPY --from=builder /app/bin/sequencer-consensus-test /app/sequencer-consensus-test
 
 # Create data directory
 RUN mkdir -p /data
 
-# Run the validator
-ENTRYPOINT ["/app/validator"]
+# Run the sequencer consensus test
+ENTRYPOINT ["/app/sequencer-consensus-test"]

@@ -1,4 +1,20 @@
-# VPS Deployment Guide for Validators
+# VPS Deployment Guide
+
+## Two Deployment Systems Available
+
+### System 1: Sequencer Consensus Test (STABLE)
+- **Binary**: `cmd/sequencer-consensus-test/main.go`
+- **Docker**: `docker-compose.yml`
+- **Launcher**: `start.sh`
+- **Purpose**: Tests consensus with real P2P listener, dequeuer, but dummy batch generation
+- **Status**: Tested and stable for consensus testing
+
+### System 2: Unified Sequencer (EXPERIMENTAL)  
+- **Binary**: `cmd/unified/main.go`
+- **Docker**: `docker-compose.unified.yml`
+- **Launcher**: `launch.sh`
+- **Purpose**: Flexible components with toggles
+- **Status**: New, experimental
 
 ## Quick Start (Per VPS)
 
@@ -15,8 +31,8 @@ cd ..
 
 ```bash
 # Clone repository
-git clone https://github.com/your-repo/decentralized-sequencer.git
-cd decentralized-sequencer
+git clone https://github.com/powerloom/snapshot-sequencer-validator.git
+cd snapshot-sequencer-validator
 
 # Create .env from example
 cp .env.validator1.example .env
@@ -26,28 +42,74 @@ nano .env
 ```
 
 ### 3. Configure .env
+
+#### For Sequencer Consensus Test (start.sh)
 ```bash
-SEQUENCER_ID=validator1  # Change for each node (validator2, validator3, etc)
+SEQUENCER_ID=validator1  # Change for each node
 P2P_PORT=9001
 METRICS_PORT=8001
+
+# Redis configuration (required for queueing)
+REDIS_HOST=localhost      # Use 'redis' for Docker
+REDIS_PORT=6379
+REDIS_DB=0
+REDIS_PASSWORD=           # Leave empty if no auth
+
+# P2P configuration
 PRIVATE_KEY=<your-128-char-hex-key-from-generator>
 BOOTSTRAP_MULTIADDR=/ip4/YOUR_BOOTSTRAP_IP/tcp/9100/p2p/YOUR_BOOTSTRAP_PEER_ID
+
+# Logging
 LOG_LEVEL=info
 DEBUG_MODE=false
 ```
 
-### 4. Build Options
-
-#### Option A: Binary Only (for testing/debugging)
+#### For Unified Sequencer (launch.sh) - Additional Variables
 ```bash
-./build-binary.sh
-# Run directly: ./validator
+# Component toggles (in addition to above)
+ENABLE_LISTENER=true      # P2P gossipsub listener
+ENABLE_DEQUEUER=true      # Redis queue processor
+ENABLE_FINALIZER=false    # Batch finalizer (needs IPFS)
+ENABLE_CONSENSUS=false    # Consensus voting
+DEQUEUER_WORKERS=5       # Worker pool size
 ```
 
-#### Option B: Docker Only (for production)
+### 4. Build Options
+
+#### Current Available Scripts
+
+**Build Scripts:**
+- `./build-binary.sh` - Builds Go binaries
+- `./build-docker.sh` - Builds Docker images  
+- `./build.sh` - Builds both binary and Docker
+
+**Launch Scripts:**
+- `./start.sh` - Starts validator using docker-compose.yml (current default)
+- `./launch.sh` - Advanced launcher for docker-compose.unified.yml with profiles
+
+### 5. Running the Systems
+
+#### Option A: Sequencer Consensus Test (FOR CONSENSUS TESTING)
 ```bash
+# Build and start
 ./build-docker.sh
 ./start.sh
+
+# Check logs
+docker-compose logs -f
+
+# Stop
+docker-compose down
+```
+
+#### Option B: Unified Sequencer (EXPERIMENTAL)
+```bash
+# launch.sh uses docker-compose.unified.yml with different profiles:
+./launch.sh unified      # All-in-one container
+./launch.sh distributed  # Separate components
+./launch.sh validators   # 3 validator nodes
+./launch.sh status       # Check status
+./launch.sh logs         # View logs
 ```
 
 ## What You'll See in Logs

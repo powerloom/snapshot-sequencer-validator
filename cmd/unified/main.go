@@ -78,14 +78,35 @@ func main() {
 	// Initialize Redis if any component needs it
 	var redisClient *redis.Client
 	if enableListener || enableDequeuer || enableFinalizer {
-		redisAddr := os.Getenv("REDIS_ADDR")
-		if redisAddr == "" {
-			redisAddr = "localhost:6379"
+		// Get Redis configuration from environment
+		redisHost := os.Getenv("REDIS_HOST")
+		if redisHost == "" {
+			redisHost = "localhost"
 		}
 		
+		redisPort := os.Getenv("REDIS_PORT")
+		if redisPort == "" {
+			redisPort = "6379"
+		}
+		
+		redisDB := 0
+		if dbStr := os.Getenv("REDIS_DB"); dbStr != "" {
+			if db, err := strconv.Atoi(dbStr); err == nil {
+				redisDB = db
+			} else {
+				log.Warnf("Invalid REDIS_DB value: %s, using default 0", dbStr)
+			}
+		}
+		
+		redisPassword := os.Getenv("REDIS_PASSWORD")
+		
+		redisAddr := fmt.Sprintf("%s:%s", redisHost, redisPort)
+		log.Infof("Connecting to Redis at %s (DB: %d)", redisAddr, redisDB)
+		
 		redisClient = redis.NewClient(&redis.Options{
-			Addr: redisAddr,
-			DB:   0,
+			Addr:     redisAddr,
+			Password: redisPassword,
+			DB:       redisDB,
 		})
 		
 		if err := redisClient.Ping(ctx).Err(); err != nil {

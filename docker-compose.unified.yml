@@ -24,7 +24,10 @@ services:
     environment:
       - SEQUENCER_ID=unified-all
       - P2P_PORT=9001
-      - REDIS_ADDR=redis:6379
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - BOOTSTRAP_MULTIADDR=${BOOTSTRAP_MULTIADDR:-/ip4/159.203.190.22/tcp/9100/p2p/12D3KooWN4ovysY4dp45NhLPQ9ywEhK3Z1GmaCVhQKrKHrtk1R2x}
       - DEBUG_MODE=${DEBUG_MODE:-false}
       # Component toggles - all enabled
@@ -54,7 +57,10 @@ services:
     environment:
       - SEQUENCER_ID=listener-1
       - P2P_PORT=9100
-      - REDIS_ADDR=redis:6379
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - BOOTSTRAP_MULTIADDR=${BOOTSTRAP_MULTIADDR}
       - DEBUG_MODE=${DEBUG_MODE:-false}
       # Component toggles - only listener
@@ -81,7 +87,10 @@ services:
       dockerfile: Dockerfile.unified
     environment:
       - SEQUENCER_ID=dequeuer-1
-      - REDIS_ADDR=redis:6379
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - DEBUG_MODE=${DEBUG_MODE:-false}
       # Component toggles - only dequeuer
       - ENABLE_LISTENER=false
@@ -107,7 +116,10 @@ services:
       dockerfile: Dockerfile.unified
     environment:
       - SEQUENCER_ID=finalizer-1
-      - REDIS_ADDR=redis:6379
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - DEBUG_MODE=${DEBUG_MODE:-false}
       # Component toggles - only finalizer
       - ENABLE_LISTENER=false
@@ -138,7 +150,10 @@ services:
     environment:
       - SEQUENCER_ID=validator-1
       - P2P_PORT=9011
-      - REDIS_ADDR=redis:6379
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - BOOTSTRAP_MULTIADDR=${BOOTSTRAP_MULTIADDR}
       - DEBUG_MODE=${DEBUG_MODE:-false}
       # Component toggles - listener + consensus
@@ -165,7 +180,10 @@ services:
     environment:
       - SEQUENCER_ID=validator-2
       - P2P_PORT=9012
-      - REDIS_ADDR=redis:6379
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - BOOTSTRAP_MULTIADDR=${BOOTSTRAP_MULTIADDR}
       - DEBUG_MODE=${DEBUG_MODE:-false}
       # Component toggles - listener + consensus
@@ -192,7 +210,10 @@ services:
     environment:
       - SEQUENCER_ID=validator-3
       - P2P_PORT=9013
-      - REDIS_ADDR=redis:6379
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - BOOTSTRAP_MULTIADDR=${BOOTSTRAP_MULTIADDR}
       - DEBUG_MODE=${DEBUG_MODE:-false}
       # Component toggles - listener + consensus
