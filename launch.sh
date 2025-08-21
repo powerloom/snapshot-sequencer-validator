@@ -58,12 +58,18 @@ check_prerequisites() {
         exit 1
     fi
     
-    if ! command -v docker-compose &> /dev/null; then
+    # Check for docker-compose (either standalone or plugin)
+    if command -v docker-compose &> /dev/null; then
+        DOCKER_COMPOSE_CMD="docker-compose"
+    elif docker compose version &> /dev/null; then
+        DOCKER_COMPOSE_CMD="docker compose"
+    else
         print_color "$RED" "Error: Docker Compose is not installed"
+        print_color "$YELLOW" "Install with: sudo apt install docker-compose"
         exit 1
     fi
     
-    print_color "$GREEN" "✓ Prerequisites checked"
+    print_color "$GREEN" "✓ Prerequisites checked (using $DOCKER_COMPOSE_CMD)"
 }
 
 # Function to check env configuration
@@ -81,14 +87,14 @@ check_env_config() {
 # Function to launch sequencer mode
 launch_sequencer() {
     print_color "$BLUE" "Launching snapshot sequencer (all-in-one)..."
-    docker-compose -f "$COMPOSE_FILE" --profile sequencer up -d
+    $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" --profile sequencer up -d
     print_color "$GREEN" "✓ Snapshot sequencer launched"
 }
 
 # Function to launch distributed mode
 launch_distributed() {
     print_color "$BLUE" "Launching distributed sequencer..."
-    docker-compose -f "$COMPOSE_FILE" --profile distributed up -d
+    $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" --profile distributed up -d
     print_color "$GREEN" "✓ Distributed sequencer launched"
     echo ""
     echo "Components running:"
@@ -101,14 +107,14 @@ launch_distributed() {
 # Function to launch minimal setup
 launch_minimal() {
     print_color "$BLUE" "Launching minimal setup..."
-    docker-compose -f "$COMPOSE_FILE" up -d redis sequencer-all
+    $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" up -d redis sequencer-all
     print_color "$GREEN" "✓ Minimal setup launched"
 }
 
 # Function to launch full stack
 launch_full() {
     print_color "$BLUE" "Launching full stack with monitoring..."
-    docker-compose -f "$COMPOSE_FILE" --profile distributed --profile storage --profile monitoring up -d
+    $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" --profile distributed --profile storage --profile monitoring up -d
     print_color "$GREEN" "✓ Full stack launched"
     echo ""
     echo "Services available:"
@@ -128,14 +134,14 @@ launch_custom() {
         profile_args="$profile_args --profile $profile"
     done
     
-    docker-compose -f "$COMPOSE_FILE" $profile_args up -d
+    $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" $profile_args up -d
     print_color "$GREEN" "✓ Custom configuration launched"
 }
 
 # Function to stop all services
 stop_services() {
     print_color "$YELLOW" "Stopping all services..."
-    docker-compose -f "$COMPOSE_FILE" down
+    $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" down
     print_color "$GREEN" "✓ Services stopped"
 }
 
@@ -145,7 +151,7 @@ clean_all() {
     read -p "Are you sure? (y/N) " -n 1 -r
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
-        docker-compose -f "$COMPOSE_FILE" down -v
+        $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" down -v
         print_color "$GREEN" "✓ Cleaned all containers and volumes"
     else
         print_color "$YELLOW" "Cancelled"
@@ -156,16 +162,16 @@ clean_all() {
 show_logs() {
     service=$1
     if [ -z "$service" ]; then
-        docker-compose -f "$COMPOSE_FILE" logs -f
+        $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" logs -f
     else
-        docker-compose -f "$COMPOSE_FILE" logs -f "$service"
+        $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" logs -f "$service"
     fi
 }
 
 # Function to show status
 show_status() {
     print_color "$BLUE" "Service Status:"
-    docker-compose -f "$COMPOSE_FILE" ps
+    $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" ps
     
     echo ""
     print_color "$BLUE" "Redis Queue Status:"
@@ -217,7 +223,7 @@ case $COMMAND in
         ;;
     sequencer-custom)
         print_color "$BLUE" "Launching snapshot sequencer with custom .env settings..."
-        docker-compose -f "$COMPOSE_FILE" up -d sequencer-custom
+        $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" up -d sequencer-custom
         print_color "$GREEN" "✓ Snapshot sequencer launched with your custom settings"
         ;;
     distributed)
