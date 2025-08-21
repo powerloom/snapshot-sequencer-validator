@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -504,8 +505,13 @@ func getIntEnv(key string, defaultValue int) int {
 func loadOrCreatePrivateKey() (crypto.PrivKey, error) {
 	privKeyHex := os.Getenv("PRIVATE_KEY")
 	if privKeyHex != "" {
+		// Decode hex string to bytes
+		privKeyBytes, err := hex.DecodeString(privKeyHex)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode private key hex: %v", err)
+		}
 		// Load existing key
-		return crypto.UnmarshalEd25519PrivateKey([]byte(privKeyHex))
+		return crypto.UnmarshalEd25519PrivateKey(privKeyBytes)
 	}
 	// Generate new key
 	privKey, _, err := crypto.GenerateEd25519Key(nil)
