@@ -142,7 +142,7 @@ services:
 
   # Redis for caching and metrics storage
   redis:
-    image: redis:7-alpine
+    image: redis:8-alpine
     container_name: simulation-redis
     hostname: redis
     restart: unless-stopped

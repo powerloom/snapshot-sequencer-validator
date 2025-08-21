@@ -2,9 +2,8 @@ version: '3.8'
 
 services:
   redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    image: redis:8-alpine
+    # No ports exposed - only accessible within docker network
     volumes:
       - redis-data:/data
     command: redis-server --appendonly yes --maxmemory 2gb
