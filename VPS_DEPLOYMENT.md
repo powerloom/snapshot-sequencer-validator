@@ -148,6 +148,7 @@ echo "BOOTSTRAP_MULTIADDR=/ip4/YOUR_IP/tcp/9100/p2p/YOUR_PEER_ID" >> .env
 
 # Launch with your custom settings
 ./launch.sh sequencer-custom
+```
 
 ## What You'll See in Logs
 
@@ -168,12 +169,14 @@ Connected to bootstrap node: <YOUR_BOOTSTRAP_PEER_ID>
 ```
 
 ### Periodic Health Check (every 30s)
+
 ```
 ====== P2P LISTENER STATUS ======
 Host ID: QmYourPeerID...
 Connected Peers: 5
 Topic /powerloom/snapshot-submissions/0: 3 peers
 Topic /powerloom/snapshot-submissions/all: 4 peers
+
 =================================
 ```
 
