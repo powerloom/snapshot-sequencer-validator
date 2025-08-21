@@ -1,4 +1,4 @@
-module github.com/powerloom/powerloom-sequencer-validator
+module github.com/powerloom/snapshot-sequencer-validator
 
 go 1.24.5
 

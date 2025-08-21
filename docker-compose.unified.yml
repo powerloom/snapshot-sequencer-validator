@@ -14,7 +14,38 @@ services:
       timeout: 3s
       retries: 5
     networks:
-      - sequencer-network
+      - snapshot-sequencer
+
+  # Flexible unified sequencer (reads from .env)
+  unified-custom:
+    build:
+      context: .
+      dockerfile: Dockerfile.unified
+    environment:
+      - SEQUENCER_ID=${SEQUENCER_ID:-unified-custom}
+      - P2P_PORT=${P2P_PORT:-9001}
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_DB=${REDIS_DB:-0}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - BOOTSTRAP_MULTIADDR=${BOOTSTRAP_MULTIADDR}
+      - DEBUG_MODE=${DEBUG_MODE:-false}
+      # Component toggles - READ FROM ENV
+      - ENABLE_LISTENER=${ENABLE_LISTENER:-true}
+      - ENABLE_DEQUEUER=${ENABLE_DEQUEUER:-true}
+      - ENABLE_FINALIZER=${ENABLE_FINALIZER:-false}
+      - ENABLE_CONSENSUS=${ENABLE_CONSENSUS:-false}
+      # Configuration
+      - DEQUEUER_WORKERS=${DEQUEUER_WORKERS:-5}
+      - PRIVATE_KEY=${PRIVATE_KEY}
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "${P2P_PORT:-9001}:${P2P_PORT:-9001}"
+    networks:
+      - snapshot-sequencer
+    # No profile - run directly
 
   # All-in-one unified sequencer (all components enabled)
   unified-all:
@@ -44,7 +75,7 @@ services:
     ports:
       - "9001:9001"
     networks:
-      - sequencer-network
+      - snapshot-sequencer
     profiles:
       - all
       - unified
@@ -75,7 +106,7 @@ services:
     ports:
       - "9100:9100"
     networks:
-      - sequencer-network
+      - snapshot-sequencer
     profiles:
       - distributed
       - listener
@@ -102,7 +133,7 @@ services:
       redis:
         condition: service_healthy
     networks:
-      - sequencer-network
+      - snapshot-sequencer
     profiles:
       - distributed
       - dequeuer
@@ -135,7 +166,7 @@ services:
       redis:
         condition: service_healthy
     networks:
-      - sequencer-network
+      - snapshot-sequencer
     profiles:
       - distributed
       - finalizer
@@ -168,7 +199,7 @@ services:
     ports:
       - "9011:9011"
     networks:
-      - sequencer-network
+      - snapshot-sequencer
     profiles:
       - validators
       - consensus
@@ -198,7 +229,7 @@ services:
     ports:
       - "9012:9012"
     networks:
-      - sequencer-network
+      - snapshot-sequencer
     profiles:
       - validators
       - consensus
@@ -228,7 +259,7 @@ services:
     ports:
       - "9013:9013"
     networks:
-      - sequencer-network
+      - snapshot-sequencer
     profiles:
       - validators
       - consensus
@@ -242,7 +273,7 @@ services:
     volumes:
       - ipfs-data:/data/ipfs
     networks:
-      - sequencer-network
+      - snapshot-sequencer
     profiles:
       - storage
       - distributed
@@ -256,7 +287,7 @@ services:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
       - prometheus-data:/prometheus
     networks:
-      - sequencer-network
+      - snapshot-sequencer
     profiles:
       - monitoring
 
@@ -267,7 +298,7 @@ services:
     volumes:
       - grafana-data:/var/lib/grafana
     networks:
-      - sequencer-network
+      - snapshot-sequencer
     profiles:
       - monitoring
 
@@ -278,5 +309,5 @@ volumes:
   grafana-data:
 
 networks:
-  sequencer-network:
+  snapshot-sequencer:
     driver: bridge

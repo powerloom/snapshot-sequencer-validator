@@ -31,7 +31,7 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - DEBUG_MODE=${DEBUG_MODE:-false}
     networks:
-      - powerloom
+      - snapshot-sequencer
     volumes:
       - ./logs:/app/logs
       - ./logs/archive:/app/logs/archive
@@ -44,7 +44,7 @@ services:
         max-file: "3"
 
 networks:
-  powerloom:
+  snapshot-sequencer:
     driver: bridge
 
 volumes:

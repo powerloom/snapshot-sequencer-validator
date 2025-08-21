@@ -12,8 +12,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/powerloom/powerloom-sequencer-validator/pkgs/consensus"
-	"github.com/powerloom/powerloom-sequencer-validator/pkgs/submissions"
+	"github.com/powerloom/snapshot-sequencer-validator/pkgs/consensus"
+	"github.com/powerloom/snapshot-sequencer-validator/pkgs/submissions"
 	"github.com/go-redis/redis/v8"
 	"github.com/google/uuid"
 	"github.com/libp2p/go-libp2p"
