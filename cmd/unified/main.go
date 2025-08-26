@@ -21,6 +21,8 @@ import (
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/p2p/discovery/routing"
+	"github.com/libp2p/go-libp2p/p2p/discovery/util"
 	"github.com/multiformats/go-multiaddr"
 	log "github.com/sirupsen/logrus"
 )
@@ -156,8 +158,65 @@ func main() {
 		// Connect to bootstrap if configured
 		connectToBootstrap(ctx, h)
 		
-		// Create pubsub
+		// Start discovery on rendezvous point
+		rendezvousString := os.Getenv("RENDEZVOUS_POINT")
+		if rendezvousString == "" {
+			rendezvousString = "powerloom-snapshot-sequencer-network"
+		}
+		
+		routingDiscovery := routing.NewRoutingDiscovery(kademliaDHT)
+		
+		// Advertise and discover peers on rendezvous
+		go func() {
+			log.Infof("Starting peer discovery on rendezvous: %s", rendezvousString)
+			util.Advertise(ctx, routingDiscovery, rendezvousString)
+			
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+					peerChan, err := routingDiscovery.FindPeers(ctx, rendezvousString)
+					if err != nil {
+						log.Debugf("Error discovering peers: %v", err)
+						time.Sleep(10 * time.Second)
+						continue
+					}
+					
+					for p := range peerChan {
+						if p.ID == h.ID() {
+							continue
+						}
+						if h.Network().Connectedness(p.ID) != 2 {
+							log.Debugf("Found peer through rendezvous: %s", p.ID)
+							if err := h.Connect(ctx, p); err != nil {
+								log.Debugf("Failed to connect to peer %s: %v", p.ID, err)
+							} else {
+								log.Infof("Connected to peer via rendezvous: %s", p.ID)
+							}
+						}
+					}
+					time.Sleep(30 * time.Second)
+				}
+			}
+		}()
+		
+		// Also advertise on the submission topics for discovery
+		go func() {
+			time.Sleep(5 * time.Second) // Wait a bit for DHT to stabilize
+			topics := []string{
+				"/powerloom/snapshot-submissions/0",
+				"/powerloom/snapshot-submissions/all",
+			}
+			for _, topic := range topics {
+				log.Infof("Advertising on topic: %s", topic)
+				util.Advertise(ctx, routingDiscovery, topic)
+			}
+		}()
+		
+		// Create pubsub with discovery
 		ps, err = pubsub.NewGossipSub(ctx, h,
+			pubsub.WithDiscovery(routingDiscovery),
 			pubsub.WithFloodPublish(true),
 			pubsub.WithMessageSignaturePolicy(pubsub.StrictSign),
 		)
