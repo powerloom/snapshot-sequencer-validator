@@ -87,14 +87,14 @@ check_env_config() {
 # Function to launch sequencer mode
 launch_sequencer() {
     print_color "$BLUE" "Launching snapshot sequencer (all-in-one)..."
-    $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" --profile sequencer up -d
+    $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" --profile sequencer up
     print_color "$GREEN" "✓ Snapshot sequencer launched"
 }
 
 # Function to launch distributed mode
 launch_distributed() {
     print_color "$BLUE" "Launching distributed sequencer..."
-    $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" --profile distributed up -d
+    $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" --profile distributed up
     print_color "$GREEN" "✓ Distributed sequencer launched"
     echo ""
     echo "Components running:"
@@ -107,14 +107,14 @@ launch_distributed() {
 # Function to launch minimal setup
 launch_minimal() {
     print_color "$BLUE" "Launching minimal setup..."
-    $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" up -d redis sequencer-all
+    $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" up redis sequencer-all
     print_color "$GREEN" "✓ Minimal setup launched"
 }
 
 # Function to launch full stack
 launch_full() {
     print_color "$BLUE" "Launching full stack with monitoring..."
-    $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" --profile distributed --profile storage --profile monitoring up -d
+    $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" --profile distributed --profile storage --profile monitoring up
     print_color "$GREEN" "✓ Full stack launched"
     echo ""
     echo "Services available:"
@@ -134,7 +134,7 @@ launch_custom() {
         profile_args="$profile_args --profile $profile"
     done
     
-    $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" $profile_args up -d
+    $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" $profile_args up
     print_color "$GREEN" "✓ Custom configuration launched"
 }
 
@@ -225,7 +225,7 @@ case $COMMAND in
         ;;
     sequencer-custom)
         print_color "$BLUE" "Launching snapshot sequencer with custom .env settings..."
-        $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" up -d sequencer-custom
+        $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" up sequencer-custom
         print_color "$GREEN" "✓ Snapshot sequencer launched with your custom settings"
         ;;
     distributed)
