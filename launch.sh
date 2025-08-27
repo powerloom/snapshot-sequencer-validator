@@ -175,7 +175,13 @@ show_status() {
     
     echo ""
     print_color "$BLUE" "Redis Queue Status:"
-    docker exec -it decentralized-sequencer_redis_1 redis-cli LLEN submissionQueue 2>/dev/null || echo "Queue not accessible"
+    # Get the actual container name dynamically
+    REDIS_CONTAINER=$($DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" ps -q redis 2>/dev/null)
+    if [ -n "$REDIS_CONTAINER" ]; then
+        docker exec -it "$REDIS_CONTAINER" redis-cli LLEN submissionQueue 2>/dev/null || echo "Queue not accessible"
+    else
+        echo "Redis container not found"
+    fi
 }
 
 # Parse command line arguments
