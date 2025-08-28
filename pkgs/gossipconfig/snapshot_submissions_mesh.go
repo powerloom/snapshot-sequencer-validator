@@ -34,12 +34,10 @@ func SnapshotSubmissionsGossipParams() *pubsub.GossipSubParams {
 		// Opportunistic grafting for better mesh formation
 		OpportunisticGraftTicks:  30, // Check every 30 heartbeats (default 60)
 		OpportunisticGraftPeers:  4,  // Graft up to 4 peers (default 2)
-		OpportunisticGraftSamples: 10, // Sample 10 peers (default)
 
 		// Prune backoff to prevent aggressive pruning
 		PruneBackoff:        5 * time.Minute, // Longer backoff (default 1 min)
 		UnsubscribeBackoff:  30 * time.Second, // Unsubscribe backoff
-		ConnectorBackoff:    30 * time.Second, // Connector backoff
 
 		// Connection management
 		MaxPendingConnections: 256,             // More pending connections
