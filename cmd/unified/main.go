@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/consensus"
+	"github.com/powerloom/snapshot-sequencer-validator/pkgs/gossipconfig"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/submissions"
 	"github.com/go-redis/redis/v8"
 	"github.com/libp2p/go-libp2p"
@@ -133,12 +134,30 @@ func main() {
 			log.Fatalf("Failed to get private key: %v", err)
 		}
 		
-		// Create libp2p host
-		h, err = libp2p.New(
+		// Build libp2p options
+		opts := []libp2p.Option{
 			libp2p.Identity(privKey),
 			libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/0.0.0.0/tcp/%s", p2pPort)),
 			libp2p.EnableNATService(),
-		)
+		}
+		
+		// Add public IP address if configured
+		publicIP := os.Getenv("PUBLIC_IP")
+		if publicIP != "" {
+			publicAddr, err := multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%s", publicIP, p2pPort))
+			if err != nil {
+				log.Errorf("Failed to create public multiaddr: %v", err)
+			} else {
+				opts = append(opts, libp2p.AddrsFactory(func(addrs []multiaddr.Multiaddr) []multiaddr.Multiaddr {
+					// Add the public address to the list
+					return append(addrs, publicAddr)
+				}))
+				log.Infof("Advertising public IP: %s", publicIP)
+			}
+		}
+		
+		// Create libp2p host with options
+		h, err = libp2p.New(opts...)
 		if err != nil {
 			log.Fatalf("Failed to create host: %v", err)
 		}
@@ -214,8 +233,13 @@ func main() {
 			}
 		}()
 		
-		// Create pubsub with discovery
+		// Get standardized gossipsub parameters for snapshot submissions mesh
+		gossipParams, peerScoreParams, peerScoreThresholds := gossipconfig.ConfigureSnapshotSubmissionsMesh(h.ID())
+		
+		// Create pubsub with standardized parameters
 		ps, err = pubsub.NewGossipSub(ctx, h,
+			pubsub.WithGossipSubParams(*gossipParams),
+			pubsub.WithPeerScore(peerScoreParams, peerScoreThresholds),
 			pubsub.WithDiscovery(routingDiscovery),
 			pubsub.WithFloodPublish(true),
 			pubsub.WithMessageSignaturePolicy(pubsub.StrictSign),
@@ -223,6 +247,8 @@ func main() {
 		if err != nil {
 			log.Fatalf("Failed to create pubsub: %v", err)
 		}
+		
+		log.Info("Initialized gossipsub with standardized snapshot submissions mesh parameters")
 	}
 	
 	// Create unified sequencer
