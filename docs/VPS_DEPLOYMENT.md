@@ -1,15 +1,17 @@
-# VPS Deployment Guide
+# VPS Deployment Guide for Powerloom Decentralized Sequencer Validator 
 
 ## Two Deployment Systems Available
 
-### System 1: Sequencer Consensus Test (STABLE)
+### System 1: Only Consensus Test (STABLE)
 - **Binary**: `cmd/sequencer-consensus-test/main.go`
 - **Docker**: `docker-compose.yml`
 - **Launcher**: `start.sh`
 - **Purpose**: Tests consensus with real P2P listener, dequeuer, but dummy batch generation
 - **Status**: Tested and stable for consensus testing
 
-### System 2: Snapshot Sequencer (EXPERIMENTAL)  
+### System 2: Full Decentralized Sequencer (EXPERIMENTAL)  
+This combines the components in a similar fashion to the existing Powerloom Sequencer that handles all submissions on Powerloom Mainnet Datamarkets.
+
 - **Binary**: `cmd/unified/main.go`
 - **Docker**: `docker-compose.snapshot-sequencer.yml`
 - **Launcher**: `launch.sh`
