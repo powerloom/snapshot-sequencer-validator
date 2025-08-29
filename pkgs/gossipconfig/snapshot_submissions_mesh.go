@@ -1,3 +1,13 @@
+// Package gossipconfig provides standardized gossipsub configuration for the
+// snapshot submission network. All parameters have been carefully tuned to:
+// 1. Prevent aggressive pruning in asymmetric publisher/subscriber scenarios
+// 2. Maintain mesh stability with high positive peer scores
+// 3. Disable penalties that could disconnect low-activity peers
+// 4. Pass all validation requirements of go-libp2p-pubsub v0.14.2
+//
+// IMPORTANT: These parameters are validated against go-libp2p-pubsub v0.14.2
+// validation rules. Each parameter includes comments about its validation
+// requirements to prevent future breaking changes.
 package gossipconfig
 
 import (
@@ -70,22 +80,29 @@ func SnapshotSubmissionsPeerScoreParams(hostID peer.ID) *pubsub.PeerScoreParams 
 		},
 		AppSpecificWeight: 10.0, // Higher weight for app-specific scores
 
+		// Topic score cap - limits total positive contribution from topics
+		// Set high to allow topics to contribute significantly to positive scores
+		TopicScoreCap: 100000.0, // Very high cap to allow topic scores to accumulate
+
 		// CRITICAL: Disable IP colocation penalties completely
-		IPColocationFactorThreshold: 1000, // Effectively disabled
-		IPColocationFactorWeight:    0.0,  // No penalty
+		IPColocationFactorThreshold: 1000, // Effectively disabled (high threshold)
+		IPColocationFactorWeight:    0.0,  // No penalty (weight = 0)
 		IPColocationFactorWhitelist:  nil,
 
 		// CRITICAL: Completely disable behavior penalties
-		BehaviourPenaltyWeight:    0.0,     // NO penalty (disabled)
-		BehaviourPenaltyThreshold: 1000.0,  // Very high threshold
-		BehaviourPenaltyDecay:     0.999,   // Extremely slow decay
+		BehaviourPenaltyWeight:    0.0,    // NO penalty (disabled with weight = 0)
+		BehaviourPenaltyThreshold: 1000.0, // Very high threshold (but irrelevant since weight = 0)
+		BehaviourPenaltyDecay:     0.999,  // Extremely slow decay (but irrelevant since weight = 0)
 
-		// Score decay parameters (required)
+		// Score decay parameters (REQUIRED - validation will fail without these)
 		DecayInterval: 1 * time.Second, // Required: minimum 1s
-		DecayToZero:   0.01,             // Very slow decay to zero
+		DecayToZero:   0.01,             // Required: between 0 and 1, slow decay to zero
 
-		// Remove time in mesh penalty for new peers
+		// Time to retain scores for disconnected peers
 		RetainScore: 30 * time.Minute, // Keep scores longer
+
+		// Message TTL - 0 means use global default
+		SeenMsgTTL: 0, // Use global TimeCacheDuration
 
 		// Topics will be set per implementation
 		Topics: make(map[string]*pubsub.TopicScoreParams),
@@ -99,31 +116,34 @@ func SnapshotSubmissionsTopicScoreParams() *pubsub.TopicScoreParams {
 		// CRITICAL: High topic weight for positive scores
 		TopicWeight: 10.0, // High topic importance for positive scoring
 
-		// CRITICAL: Strongly reward staying in mesh
-		TimeInMeshWeight:  10.0,            // High positive weight
-		TimeInMeshQuantum: 1 * time.Second, // Fast accumulation
-		TimeInMeshCap:     10000.0,         // Very high cap
+		// P1: Time in mesh - strongly reward staying in mesh
+		TimeInMeshWeight:  10.0,            // High positive weight (must be >= 0)
+		TimeInMeshQuantum: 1 * time.Second, // Fast accumulation (must be > 0)
+		TimeInMeshCap:     10000.0,         // Very high cap (must be > 0)
 
-		// CRITICAL: Strongly reward publishing
-		FirstMessageDeliveriesWeight: 100.0,   // Very high positive weight
-		FirstMessageDeliveriesDecay:  0.999,   // Extremely slow decay
-		FirstMessageDeliveriesCap:    10000.0, // Very high cap
+		// P2: First message deliveries - strongly reward publishing
+		FirstMessageDeliveriesWeight: 100.0, // Very high positive weight (must be >= 0)
+		FirstMessageDeliveriesDecay:  0.999, // Extremely slow decay (must be between 0 and 1)
+		FirstMessageDeliveriesCap:    10000.0, // Very high cap (must be > 0)
 
-		// CRITICAL: COMPLETELY DISABLE mesh delivery penalties
-		MeshMessageDeliveriesWeight:     0.0,           // NO PENALTY (disabled)
-		MeshMessageDeliveriesDecay:      0.999,         // Extremely slow decay if ever enabled
-		MeshMessageDeliveriesThreshold:  0.001,         // Extremely low threshold
-		MeshMessageDeliveriesCap:        1.0,           // Minimal cap
-		MeshMessageDeliveriesActivation: 24 * time.Hour, // Never activate in practice
-		MeshMessageDeliveriesWindow:     24 * time.Hour, // Huge window
+		// P3: Mesh message deliveries - COMPLETELY DISABLED
+		// Setting weight to 0 disables this penalty entirely
+		MeshMessageDeliveriesWeight:     0.0,            // NO PENALTY (disabled with weight = 0)
+		MeshMessageDeliveriesDecay:      0.999,          // Decay between 0 and 1 (required even if disabled)
+		MeshMessageDeliveriesThreshold:  1.0,            // Must be > 0 (but irrelevant since weight = 0)
+		MeshMessageDeliveriesCap:        1.0,            // Must be > 0 (but irrelevant since weight = 0)
+		MeshMessageDeliveriesActivation: 24 * time.Hour, // Must be >= 1s (set high to never activate)
+		MeshMessageDeliveriesWindow:     24 * time.Hour, // Must be >= 0 (huge window)
 
-		// CRITICAL: Disable ALL failure penalties
-		MeshFailurePenaltyWeight: 0.0, // No penalty for mesh failures
-		MeshFailurePenaltyDecay:  0.0,
+		// P3b: Mesh failure penalty - COMPLETELY DISABLED
+		// Setting weight to 0 disables this penalty entirely
+		MeshFailurePenaltyWeight: 0.0, // No penalty for mesh failures (weight = 0 disables)
+		MeshFailurePenaltyDecay:  0.9, // Must be between 0 and 1 (even if disabled)
 
-		// Invalid messages - keep standard penalties
-		InvalidMessageDeliveriesWeight: -100.0,
-		InvalidMessageDeliveriesDecay:  0.5,
+		// P4: Invalid messages - keep standard penalties
+		// These parameters penalize peers that send invalid messages
+		InvalidMessageDeliveriesWeight: -100.0, // Negative weight for penalties (must be <= 0)
+		InvalidMessageDeliveriesDecay:  0.5,    // Moderate decay (must be between 0 and 1)
 	}
 }
 
@@ -131,11 +151,26 @@ func SnapshotSubmissionsTopicScoreParams() *pubsub.TopicScoreParams {
 // for the snapshot submissions mesh to prevent aggressive pruning.
 func SnapshotSubmissionsPeerScoreThresholds() *pubsub.PeerScoreThresholds {
 	return &pubsub.PeerScoreThresholds{
-		GossipThreshold:             -100000, // Extremely lenient (default -10)
-		PublishThreshold:            -200000, // Extremely lenient (default -50)
-		GraylistThreshold:           -500000, // Extremely lenient (default -80)
-		AcceptPXThreshold:           -10000,  // Accept peer exchange even from negative peers
-		OpportunisticGraftThreshold: -1000,   // Graft even slightly negative peers
+		// Gossip threshold - score below which gossip is suppressed
+		// Must be <= 0. Set very low to be extremely lenient
+		GossipThreshold: -100000, // Extremely lenient (default -10)
+		
+		// Publish threshold - score below which we don't publish to peer
+		// Must be <= 0 and <= GossipThreshold
+		PublishThreshold: -200000, // Extremely lenient (default -50)
+		
+		// Graylist threshold - score below which peer is graylisted
+		// Must be <= 0 and <= PublishThreshold
+		GraylistThreshold: -500000, // Extremely lenient (default -80)
+		
+		// Accept PX threshold - score threshold for accepting peer exchange
+		// Must be >= 0. Set to 0 to accept all peer exchanges
+		AcceptPXThreshold: 0, // Accept all peer exchanges (must be >= 0)
+		
+		// Opportunistic graft threshold - median score before opportunistic grafting
+		// Must be >= 0. Set to small positive value to enable opportunistic grafting
+		// even for peers with slightly positive scores
+		OpportunisticGraftThreshold: 1.0, // Small positive value (must be >= 0)
 	}
 }
 
@@ -165,7 +200,46 @@ func ConfigureSnapshotSubmissionsMesh(hostID peer.ID) (*pubsub.GossipSubParams, 
 // ps, err := pubsub.NewGossipSub(
 //     ctx,
 //     host,
-//     pubsub.WithGossipSubParams(gossipParams),
+//     pubsub.WithGossipSubParams(*gossipParams), // Note: dereference the pointer
 //     pubsub.WithPeerScore(peerScoreParams, peerScoreThresholds),
 //     pubsub.WithFloodPublish(true),
 // )
+//
+// PARAMETER VALIDATION SUMMARY (go-libp2p-pubsub v0.14.2):
+// 
+// PeerScoreParams requirements:
+// - AppSpecificScore: REQUIRED function (cannot be nil)
+// - TopicScoreCap: Must be >= 0 (0 means no cap)
+// - IPColocationFactorWeight: Must be <= 0 (0 disables, negative enables penalty)
+// - IPColocationFactorThreshold: Must be >= 1 if weight != 0
+// - BehaviourPenaltyWeight: Must be <= 0 (0 disables, negative enables penalty)
+// - BehaviourPenaltyDecay: Must be between 0 and 1 if weight != 0
+// - BehaviourPenaltyThreshold: Must be >= 0
+// - DecayInterval: REQUIRED, must be >= 1 second
+// - DecayToZero: REQUIRED, must be between 0 and 1
+//
+// TopicScoreParams requirements:
+// - TopicWeight: Must be >= 0
+// - TimeInMeshQuantum: Must be > 0 if TimeInMeshWeight != 0
+// - TimeInMeshCap: Must be > 0 if TimeInMeshWeight != 0
+// - TimeInMeshWeight: Must be >= 0 (0 disables)
+// - FirstMessageDeliveriesWeight: Must be >= 0 (0 disables)
+// - FirstMessageDeliveriesDecay: Must be between 0 and 1 if weight != 0
+// - FirstMessageDeliveriesCap: Must be > 0 if weight != 0
+// - MeshMessageDeliveriesWeight: Must be <= 0 (0 disables, negative enables penalty)
+// - MeshMessageDeliveriesDecay: Must be between 0 and 1 if weight != 0
+// - MeshMessageDeliveriesThreshold: Must be > 0 if weight != 0
+// - MeshMessageDeliveriesCap: Must be > 0 if weight != 0
+// - MeshMessageDeliveriesActivation: Must be >= 1s if weight != 0
+// - MeshMessageDeliveriesWindow: Must be >= 0
+// - MeshFailurePenaltyWeight: Must be <= 0 (0 disables, negative enables penalty)
+// - MeshFailurePenaltyDecay: Must be between 0 and 1 if weight != 0
+// - InvalidMessageDeliveriesWeight: Must be <= 0 (0 disables, negative enables penalty)
+// - InvalidMessageDeliveriesDecay: Must be between 0 and 1 if weight != 0
+//
+// PeerScoreThresholds requirements:
+// - GossipThreshold: Must be <= 0
+// - PublishThreshold: Must be <= 0 and <= GossipThreshold
+// - GraylistThreshold: Must be <= 0 and <= PublishThreshold
+// - AcceptPXThreshold: Must be >= 0
+// - OpportunisticGraftThreshold: Must be >= 0
