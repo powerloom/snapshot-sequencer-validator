@@ -80,6 +80,10 @@ func SnapshotSubmissionsPeerScoreParams(hostID peer.ID) *pubsub.PeerScoreParams 
 		BehaviourPenaltyThreshold: 1000.0,  // Very high threshold
 		BehaviourPenaltyDecay:     0.999,   // Extremely slow decay
 
+		// Score decay parameters (required)
+		DecayInterval: 1 * time.Second, // Required: minimum 1s
+		DecayToZero:   0.01,             // Very slow decay to zero
+
 		// Remove time in mesh penalty for new peers
 		RetainScore: 30 * time.Minute, // Keep scores longer
 
