@@ -11,6 +11,9 @@
 package gossipconfig
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"time"
 
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
@@ -174,14 +177,37 @@ func SnapshotSubmissionsPeerScoreThresholds() *pubsub.PeerScoreThresholds {
 	}
 }
 
+// GenerateParamHash creates a deterministic hash of gossipsub parameters
+// This hash can be used to verify all peers are using the same configuration
+func GenerateParamHash(params *pubsub.GossipSubParams) string {
+	// Create a deterministic string from key parameters
+	paramStr := fmt.Sprintf("D:%d_Dlo:%d_Dhi:%d_Dlazy:%d_HB:%d_FB:%d_MC:%d_MIT:%d",
+		params.D,
+		params.Dlo,
+		params.Dhi,
+		params.Dlazy,
+		params.HeartbeatInterval.Milliseconds(),
+		int(params.FanoutTTL.Seconds()),
+		params.MaxPendingConnections,
+		params.MaxIHaveLength,
+	)
+	
+	hash := sha256.Sum256([]byte(paramStr))
+	return hex.EncodeToString(hash[:8]) // First 8 bytes for readability
+}
+
 // ConfigureSnapshotSubmissionsMesh configures a pubsub instance with parameters
 // optimized for the snapshot submissions mesh. This should be called by all nodes
 // participating in snapshot submission topics.
-func ConfigureSnapshotSubmissionsMesh(hostID peer.ID) (*pubsub.GossipSubParams, *pubsub.PeerScoreParams, *pubsub.PeerScoreThresholds) {
+// Returns gossipsub params, peer score params, thresholds, and a parameter hash for verification.
+func ConfigureSnapshotSubmissionsMesh(hostID peer.ID) (*pubsub.GossipSubParams, *pubsub.PeerScoreParams, *pubsub.PeerScoreThresholds, string) {
 	// Get snapshot submissions mesh parameters
 	gossipParams := SnapshotSubmissionsGossipParams()
 	peerScoreParams := SnapshotSubmissionsPeerScoreParams(hostID)
 	peerScoreThresholds := SnapshotSubmissionsPeerScoreThresholds()
+	
+	// Generate parameter hash for verification
+	paramHash := GenerateParamHash(gossipParams)
 
 	// Configure topic score parameters for snapshot submission topics
 	topicScoreParams := SnapshotSubmissionsTopicScoreParams()
@@ -190,12 +216,13 @@ func ConfigureSnapshotSubmissionsMesh(hostID peer.ID) (*pubsub.GossipSubParams, 
 	peerScoreParams.Topics["/powerloom/snapshot-submissions/0"] = topicScoreParams   // Discovery topic
 	peerScoreParams.Topics["/powerloom/snapshot-submissions/all"] = topicScoreParams // Submissions topic
 
-	return gossipParams, peerScoreParams, peerScoreThresholds
+	return gossipParams, peerScoreParams, peerScoreThresholds, paramHash
 }
 
 // Example usage in your application:
 //
-// gossipParams, peerScoreParams, peerScoreThresholds := gossipconfig.ConfigureSnapshotSubmissionsMesh(host.ID())
+// gossipParams, peerScoreParams, peerScoreThresholds, paramHash := gossipconfig.ConfigureSnapshotSubmissionsMesh(host.ID())
+// log.Infof("Gossipsub parameter hash: %s", paramHash)
 // 
 // ps, err := pubsub.NewGossipSub(
 //     ctx,

@@ -234,7 +234,7 @@ func main() {
 		}()
 		
 		// Get standardized gossipsub parameters for snapshot submissions mesh
-		gossipParams, peerScoreParams, peerScoreThresholds := gossipconfig.ConfigureSnapshotSubmissionsMesh(h.ID())
+		gossipParams, peerScoreParams, peerScoreThresholds, paramHash := gossipconfig.ConfigureSnapshotSubmissionsMesh(h.ID())
 		
 		// Create pubsub with standardized parameters
 		ps, err = pubsub.NewGossipSub(ctx, h,
@@ -248,6 +248,7 @@ func main() {
 			log.Fatalf("Failed to create pubsub: %v", err)
 		}
 		
+		log.Infof("🔑 Gossipsub parameter hash: %s (unified sequencer)", paramHash)
 		log.Info("Initialized gossipsub with standardized snapshot submissions mesh parameters")
 	}
 	
