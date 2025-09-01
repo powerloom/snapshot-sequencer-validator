@@ -49,7 +49,7 @@ nano .env
 ```bash
 SEQUENCER_ID=validator1  # Change for each node
 P2P_PORT=9001
-METRICS_PORT=8001
+# METRICS_PORT=9090  # Reserved for future monitoring implementation
 
 # Redis configuration (required for queueing)
 REDIS_HOST=localhost      # Use 'redis' for Docker
@@ -254,7 +254,7 @@ PRIVATE_KEY=<bootstrap-key>
 ```bash
 SEQUENCER_ID=validator1
 P2P_PORT=9001
-METRICS_PORT=8001
+# METRICS_PORT=9090  # Reserved for future monitoring
 PRIVATE_KEY=<validator1-key>
 BOOTSTRAP_MULTIADDR=/ip4/<VPS1-IP>/tcp/9100/p2p/<bootstrap-peer-id>
 ```
