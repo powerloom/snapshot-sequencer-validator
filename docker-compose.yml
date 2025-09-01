@@ -13,7 +13,7 @@ services:
       - .env
     ports:
       - "${P2P_PORT:-9001}:${P2P_PORT:-9001}"
-      - "${METRICS_PORT:-8001}:${METRICS_PORT:-8001}"
+      # - "${METRICS_PORT:-9090}:${METRICS_PORT:-9090}"  # Uncomment when monitoring is implemented
     environment:
       # Identity
       - SEQUENCER_ID=${SEQUENCER_ID}  # REQUIRED: validator1, validator2, validator3, etc.

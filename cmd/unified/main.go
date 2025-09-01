@@ -24,6 +24,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	"github.com/libp2p/go-libp2p/p2p/discovery/util"
+	"github.com/libp2p/go-libp2p/p2p/net/connmgr"
 	"github.com/multiformats/go-multiaddr"
 	log "github.com/sirupsen/logrus"
 )
@@ -134,11 +135,25 @@ func main() {
 			log.Fatalf("Failed to get private key: %v", err)
 		}
 		
+		// Configure connection manager for subscriber mode
+		connLowWater := getIntEnv("CONN_MANAGER_LOW_WATER", 100)
+		connHighWater := getIntEnv("CONN_MANAGER_HIGH_WATER", 400)
+		connMgr, err := connmgr.NewConnManager(
+			connLowWater,
+			connHighWater, 
+			connmgr.WithGracePeriod(time.Minute),
+		)
+		if err != nil {
+			log.Fatalf("Failed to create connection manager: %v", err)
+		}
+		log.Infof("Connection manager configured: LowWater=%d, HighWater=%d", connLowWater, connHighWater)
+		
 		// Build libp2p options
 		opts := []libp2p.Option{
 			libp2p.Identity(privKey),
 			libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/0.0.0.0/tcp/%s", p2pPort)),
 			libp2p.EnableNATService(),
+			libp2p.ConnectionManager(connMgr),
 		}
 		
 		// Add public IP address if configured
