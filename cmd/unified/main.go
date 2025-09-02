@@ -482,6 +482,21 @@ func (s *UnifiedSequencer) queueSubmissionFromP2P(data []byte, topic string, pee
 			log.Infof("📋 Submission Details: Epoch=%v, Topic=%s, Peer=%s",
 				epochID, topic, peerID[:16])
 			
+			// Check if this is a heartbeat message (Epoch 0 with null submissions)
+			if epochID == float64(0) || epochID == 0 || epochID == "0" {
+				if submissions, ok := submissionInfo["submissions"]; ok && submissions == nil {
+					// This is a heartbeat message - log and skip
+					log.Debugf("💓 Heartbeat received from %s (skipping queue)", peerID[:16])
+					if signature, ok := submissionInfo["signature"]; ok {
+						// Try to decode the signature to see heartbeat info
+						if sigStr, ok := signature.(string); ok {
+							log.Debugf("   Heartbeat signature: %s", sigStr)
+						}
+					}
+					return // Don't queue heartbeat messages
+				}
+			}
+			
 			// Enhanced debug logging for ALL submissions
 			log.Infof("🔍 DEBUG: Full submission content:")
 			log.Infof("   Raw JSON (first 500 chars): %s", truncateString(string(data), 500))
