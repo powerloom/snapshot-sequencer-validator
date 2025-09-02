@@ -483,8 +483,12 @@ func (s *UnifiedSequencer) queueSubmissionFromP2P(data []byte, topic string, pee
 				epochID, topic, peerID[:16])
 			
 			// Check if this is a heartbeat message (Epoch 0 with null submissions)
+			// Real Epoch 0 submissions will have non-null submissions array
 			if epochID == float64(0) || epochID == 0 || epochID == "0" {
-				if submissions, ok := submissionInfo["submissions"]; ok && submissions == nil {
+				submissions, hasSubmissions := submissionInfo["submissions"]
+				
+				// Check if this is a heartbeat (null submissions) vs real Epoch 0 data
+				if hasSubmissions && submissions == nil {
 					// This is a heartbeat message - log and skip
 					log.Debugf("💓 Heartbeat received from %s (skipping queue)", peerID[:16])
 					if signature, ok := submissionInfo["signature"]; ok {
@@ -494,6 +498,9 @@ func (s *UnifiedSequencer) queueSubmissionFromP2P(data []byte, topic string, pee
 						}
 					}
 					return // Don't queue heartbeat messages
+				} else if hasSubmissions {
+					// This is a real Epoch 0 submission with data
+					log.Infof("📥 Real Epoch 0 submission received with data from %s", peerID[:16])
 				}
 			}
 			
