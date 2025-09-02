@@ -524,9 +524,21 @@ func (s *UnifiedSequencer) queueSubmissionFromP2P(data []byte, topic string, pee
 			}
 			if submissions, ok := submissionInfo["submissions"]; ok {
 				log.Infof("   Submissions field present: %T", submissions)
+				// If submissions is an array, check the first item for request field
+				if subArray, ok := submissions.([]interface{}); ok && len(subArray) > 0 {
+					if firstSub, ok := subArray[0].(map[string]interface{}); ok {
+						if request, ok := firstSub["request"]; ok {
+							if reqMap, ok := request.(map[string]interface{}); ok {
+								log.Infof("   First submission request: ProjectID=%v, SnapshotCID=%v, EpochID=%v",
+									reqMap["projectId"], reqMap["snapshotCid"], reqMap["epochId"])
+							}
+						}
+					}
+				}
 			}
+			// Check for top-level request (in case of different message format)
 			if request, ok := submissionInfo["request"]; ok {
-				log.Infof("   Request field present: %T", request)
+				log.Infof("   Request field present at top level: %T", request)
 			}
 		}
 		
