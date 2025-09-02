@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/consensus"
+	"github.com/powerloom/snapshot-sequencer-validator/pkgs/deduplication"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/gossipconfig"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/submissions"
 	"github.com/go-redis/redis/v8"
@@ -36,6 +37,7 @@ type UnifiedSequencer struct {
 	cancel      context.CancelFunc
 	ps          *pubsub.PubSub
 	redisClient *redis.Client
+	dedup       *deduplication.Deduplicator
 	
 	// Component flags
 	enableListener  bool
@@ -118,6 +120,21 @@ func main() {
 			log.Fatalf("Failed to connect to Redis: %v", err)
 		}
 		log.Infof("Connected to Redis at %s", redisAddr)
+	}
+	
+	// Initialize deduplicator if Redis is available
+	var dedup *deduplication.Deduplicator
+	if redisClient != nil && enableListener {
+		// Configure deduplication
+		localCacheSize := getIntEnv("DEDUP_LOCAL_CACHE_SIZE", 10000)
+		dedupTTL := time.Duration(getIntEnv("DEDUP_TTL_SECONDS", 7200)) * time.Second // 2 hours default
+		
+		var err error
+		dedup, err = deduplication.NewDeduplicator(redisClient, localCacheSize, dedupTTL)
+		if err != nil {
+			log.Fatalf("Failed to create deduplicator: %v", err)
+		}
+		log.Infof("Deduplicator initialized with local cache size %d and TTL %v", localCacheSize, dedupTTL)
 	}
 	
 	// Initialize P2P if listener or consensus is enabled
@@ -274,6 +291,7 @@ func main() {
 		cancel:          cancel,
 		ps:              ps,
 		redisClient:     redisClient,
+		dedup:           dedup,
 		enableListener:  enableListener,
 		enableDequeuer:  enableDequeuer,
 		enableFinalizer: enableFinalizer,
@@ -458,7 +476,9 @@ func (s *UnifiedSequencer) queueSubmissionFromP2P(data []byte, topic string, pee
 	var submissionInfo map[string]interface{}
 	if err := json.Unmarshal(data, &submissionInfo); err == nil {
 		// Successfully parsed - log key details
-		if epochID, ok := submissionInfo["epoch_id"]; ok {
+		var epochID interface{}
+		if eid, ok := submissionInfo["epoch_id"]; ok {
+			epochID = eid
 			log.Infof("📋 Submission Details: Epoch=%v, Topic=%s, Peer=%s",
 				epochID, topic, peerID[:16])
 		}
@@ -470,8 +490,46 @@ func (s *UnifiedSequencer) queueSubmissionFromP2P(data []byte, topic string, pee
 			}
 		}
 		
-		// Log request details if available
-		if request, ok := submissionInfo["request"].(map[string]interface{}); ok {
+		// Extract deduplication keys if dedup is enabled
+		var dedupKey string
+		if s.dedup != nil {
+			// Try to extract project_id and snapshot_cid for deduplication
+			if request, ok := submissionInfo["request"].(map[string]interface{}); ok {
+				projectID := fmt.Sprintf("%v", request["project_id"])
+				snapshotCID := fmt.Sprintf("%v", request["snapshot_cid"])
+				
+				// Convert epoch_id to uint64
+				var epoch uint64
+				switch v := epochID.(type) {
+				case float64:
+					epoch = uint64(v)
+				case int:
+					epoch = uint64(v)
+				case string:
+					if parsed, err := strconv.ParseUint(v, 10, 64); err == nil {
+						epoch = parsed
+					}
+				}
+				
+				if projectID != "" && snapshotCID != "" {
+					dedupKey = s.dedup.GenerateKey(projectID, epoch, snapshotCID)
+					
+					// Check if we've seen this submission before
+					isNew, err := s.dedup.CheckAndMark(s.ctx, dedupKey)
+					if err != nil {
+						log.Errorf("Deduplication check failed: %v", err)
+						// Continue processing on error to avoid losing submissions
+					} else if !isNew {
+						log.Debugf("🔁 Duplicate submission detected (key=%s), skipping", dedupKey[:16])
+						return // Skip duplicate
+					}
+				}
+				
+				log.Infof("   └─ SlotID=%v, ProjectID=%v, CID=%v",
+					request["slot_id"], projectID, snapshotCID)
+			}
+		} else if request, ok := submissionInfo["request"].(map[string]interface{}); ok {
+			// No dedup, just log
 			log.Infof("   └─ SlotID=%v, ProjectID=%v, CID=%v",
 				request["slot_id"], request["project_id"], request["snapshot_cid"])
 		}
