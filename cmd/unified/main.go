@@ -481,6 +481,31 @@ func (s *UnifiedSequencer) queueSubmissionFromP2P(data []byte, topic string, pee
 			epochID = eid
 			log.Infof("📋 Submission Details: Epoch=%v, Topic=%s, Peer=%s",
 				epochID, topic, peerID[:16])
+			
+			// Enhanced debug logging for ALL submissions
+			log.Infof("🔍 DEBUG: Full submission content:")
+			log.Infof("   Raw JSON (first 500 chars): %s", truncateString(string(data), 500))
+			
+			// Log all top-level keys
+			keys := make([]string, 0, len(submissionInfo))
+			for k := range submissionInfo {
+				keys = append(keys, k)
+			}
+			log.Infof("   Top-level keys: %v", keys)
+			
+			// Log specific fields if present
+			if snapshotterId, ok := submissionInfo["snapshotter_id"]; ok {
+				log.Infof("   Snapshotter ID: %v", snapshotterId)
+			}
+			if signature, ok := submissionInfo["signature"]; ok {
+				log.Infof("   Signature present: yes (len=%d)", len(fmt.Sprintf("%v", signature)))
+			}
+			if submissions, ok := submissionInfo["submissions"]; ok {
+				log.Infof("   Submissions field present: %T", submissions)
+			}
+			if request, ok := submissionInfo["request"]; ok {
+				log.Infof("   Request field present: %T", request)
+			}
 		}
 		
 		// Check if it's a P2P batch submission
@@ -639,6 +664,13 @@ func (s *UnifiedSequencer) monitorQueueDepth() {
 			return
 		}
 	}
+}
+
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
 
 func getBoolEnv(key string, defaultValue bool) bool {
