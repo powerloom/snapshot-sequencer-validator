@@ -19,7 +19,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.snapshot-sequencer
-    container_name: sequencer-listener
     environment:
       - SEQUENCER_ID=listener-${SEQUENCER_ID:-1}
       - P2P_PORT=${P2P_PORT:-9001}
@@ -106,7 +105,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.snapshot-sequencer
-    container_name: sequencer-event-monitor
     environment:
       - SEQUENCER_ID=event-monitor-${SEQUENCER_ID:-1}
       - REDIS_HOST=redis
@@ -121,9 +119,8 @@ services:
       - ENABLE_CONSENSUS=false
       - ENABLE_EVENT_MONITOR=true
       # RPC Configuration
-      - RPC_URL=${RPC_URL}
-      - RPC_NODES=${RPC_NODES}
-      - ARCHIVE_RPC_NODES=${ARCHIVE_RPC_NODES}
+      - POWERLOOM_RPC_NODES=${POWERLOOM_RPC_NODES}
+      - POWERLOOM_ARCHIVE_RPC_NODES=${POWERLOOM_ARCHIVE_RPC_NODES:-[]}
       # Contract addresses
       - PROTOCOL_STATE_CONTRACT=${PROTOCOL_STATE_CONTRACT}
       - DATA_MARKET_ADDRESSES=${DATA_MARKET_ADDRESSES}
@@ -150,7 +147,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.snapshot-sequencer
-    container_name: sequencer-finalizer
     environment:
       - SEQUENCER_ID=finalizer-${SEQUENCER_ID:-1}
       - REDIS_HOST=redis
@@ -190,7 +186,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.snapshot-sequencer
-    container_name: sequencer-consensus
     environment:
       - SEQUENCER_ID=consensus-${SEQUENCER_ID:-1}
       - P2P_PORT=9002  # Different port for consensus P2P
@@ -206,8 +201,8 @@ services:
       - ENABLE_CONSENSUS=true
       - ENABLE_EVENT_MONITOR=false
       # Consensus specific
-      - PRIVATE_KEY=${CONSENSUS_PRIVATE_KEY}
-      - BOOTSTRAP_MULTIADDR=${CONSENSUS_BOOTSTRAP}
+      - PRIVATE_KEY=${CONSENSUS_PRIVATE_KEY:-}
+      - BOOTSTRAP_MULTIADDR=${CONSENSUS_BOOTSTRAP:-}
     depends_on:
       redis:
         condition: service_healthy

@@ -144,23 +144,58 @@ docker-compose down
                          # Uses whatever ENABLE_* values you set in .env
 
 ./launch.sh distributed   # SEPARATE containers, each doing one thing:
-                         # - listener-only (ENABLE_LISTENER=true only)
-                         # - dequeuer-1 (ENABLE_DEQUEUER=true only)
-                         # - finalizer-1 (ENABLE_FINALIZER=true only)
+                         # - listener (ENABLE_LISTENER=true only)
+                         # - dequeuer x3 replicas (ENABLE_DEQUEUER=true only)
+                         # - event-monitor (ENABLE_EVENT_MONITOR=true only)
+                         # - finalizer x2 replicas (ENABLE_FINALIZER=true only)
+                         # - consensus (optional, ENABLE_CONSENSUS=true only)
+
+./launch.sh distributed --debug  # Distributed mode with Redis exposed
+./launch.sh distributed-debug   # Alternative syntax for above
 
 ./launch.sh status        # Check status of running containers
 ./launch.sh logs          # View logs from containers
 ./launch.sh monitor       # Monitor batch preparation status
-./launch.sh debug         # Launch with Redis exposed for debugging
+./launch.sh debug         # Launch single sequencer with Redis exposed
 ```
 
-**Custom Configuration Example:**
+**Distributed Mode Configuration:**
 ```bash
-# Create .env with your settings
+# Required environment variables for distributed mode
+cat > .env << EOF
+# P2P Configuration
+BOOTSTRAP_MULTIADDR=/ip4/YOUR_IP/tcp/9100/p2p/YOUR_PEER_ID
+PRIVATE_KEY=your-hex-private-key
+P2P_PORT=9001
+
+# RPC Configuration (Required for event monitor)
+POWERLOOM_RPC_NODES=["http://your-rpc:8545"]
+POWERLOOM_ARCHIVE_RPC_NODES=[]
+
+# Scaling Configuration
+DEQUEUER_REPLICAS=3  # Number of dequeuer containers
+FINALIZER_REPLICAS=2  # Number of finalizer containers
+
+# Protocol Contracts
+PROTOCOL_STATE_CONTRACT=0xE88E5f64AEB483d7057645326AdDFA24A3B312DF
+DATA_MARKET_ADDRESSES=["0x0C2E22fe7526fAeF28E7A58c84f8723dEFcE200c"]
+EOF
+
+# Launch distributed mode
+./launch.sh distributed
+
+# Launch with debugging (Redis exposed)
+./launch.sh distributed --debug
+```
+
+**Custom Single Container Configuration:**
+```bash
+# Create .env with your component toggles
 echo "ENABLE_LISTENER=true" >> .env
 echo "ENABLE_DEQUEUER=true" >> .env
 echo "ENABLE_FINALIZER=false" >> .env
 echo "ENABLE_CONSENSUS=false" >> .env
+echo "ENABLE_EVENT_MONITOR=false" >> .env
 echo "REDIS_HOST=redis" >> .env
 echo "BOOTSTRAP_MULTIADDR=/ip4/YOUR_IP/tcp/9100/p2p/YOUR_PEER_ID" >> .env
 
