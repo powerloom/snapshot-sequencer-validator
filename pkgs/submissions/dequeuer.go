@@ -118,7 +118,15 @@ func (d *Dequeuer) validateSubmission(submission *SnapshotSubmission) error {
 
 func (d *Dequeuer) storeProcessingResult(submissionID string, processed *ProcessedSubmission) {
 	ctx := context.Background()
-	key := fmt.Sprintf("processed:%s:%s", d.sequencerID, submissionID)
+	
+	// Extract protocol and market from submission
+	dataMarket := processed.Submission.DataMarket
+	protocolState := processed.Submission.ProtocolState
+	
+	// Namespace keys by protocol:market:epoch
+	// Format: {protocol}:{market}:processed:{sequencer_id}:{submission_id}
+	key := fmt.Sprintf("%s:%s:processed:%s:%s", 
+		protocolState, dataMarket, d.sequencerID, submissionID)
 	
 	data, err := json.Marshal(processed)
 	if err != nil {
@@ -132,10 +140,14 @@ func (d *Dequeuer) storeProcessingResult(submissionID string, processed *Process
 		log.Errorf("Failed to store processing result: %v", err)
 	}
 	
-	// Update epoch processing set
-	epochKey := fmt.Sprintf("epoch:%d:processed", processed.Submission.Request.EpochId)
+	// Update epoch processing set (namespaced by protocol:market:epoch)
+	epochKey := fmt.Sprintf("%s:%s:epoch:%d:processed", 
+		protocolState, dataMarket, processed.Submission.Request.EpochId)
 	d.redisClient.SAdd(ctx, epochKey, submissionID)
 	d.redisClient.Expire(ctx, epochKey, 1*time.Hour)
+	
+	log.Debugf("Stored submission %s for market %s, epoch %d", 
+		submissionID, dataMarket, processed.Submission.Request.EpochId)
 }
 
 func (d *Dequeuer) cleanupOldSubmissions() {

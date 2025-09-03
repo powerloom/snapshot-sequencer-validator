@@ -74,7 +74,21 @@ ENABLE_LISTENER=true      # P2P gossipsub listener (receives submissions)
 ENABLE_DEQUEUER=true      # Redis queue processor (processes submissions)
 ENABLE_FINALIZER=false    # Batch finalizer (needs IPFS for storage)
 ENABLE_CONSENSUS=false    # Consensus voting (votes on batches)
+ENABLE_EVENT_MONITOR=false # Event monitor for EpochReleased events
 DEQUEUER_WORKERS=5       # Worker pool size for dequeuer
+
+# RPC Configuration (Required for event monitoring and contract interactions)
+# All RPC interactions in this component are with the Powerloom protocol chain
+POWERLOOM_RPC_NODES=["http://your-rpc-endpoint:8545","http://backup-rpc:8545"]
+POWERLOOM_ARCHIVE_RPC_NODES=[]  # Optional archive nodes for historical queries
+
+# Protocol contracts (Required when event monitor is enabled)
+PROTOCOL_STATE_CONTRACT=0xE88E5f64AEB483d7057645326AdDFA24A3B312DF
+DATA_MARKET_ADDRESSES=["0x0C2E22fe7526fAeF28E7A58c84f8723dEFcE200c"]
+
+# Batch preparation configuration
+SUBMISSION_WINDOW_DURATION=60  # Seconds after epoch release to accept submissions
+MAX_CONCURRENT_WINDOWS=100     # Maximum simultaneous submission windows
 
 # Examples of common configurations:
 # Just listen to P2P (no processing):
@@ -136,6 +150,8 @@ docker-compose down
 
 ./launch.sh status        # Check status of running containers
 ./launch.sh logs          # View logs from containers
+./launch.sh monitor       # Monitor batch preparation status
+./launch.sh debug         # Launch with Redis exposed for debugging
 ```
 
 **Custom Configuration Example:**
@@ -194,19 +210,84 @@ docker logs <container> 2>&1 | grep "Connected to bootstrap"
 docker logs <container> 2>&1 | grep "Connected Peers"
 ```
 
-### 2. Monitor Submissions
+### 2. Monitor Submissions and Batch Preparation
 ```bash
 # Watch for received messages
 docker logs -f <container> 2>&1 | grep "RECEIVED"
 
-# Check Redis queue (if dequeuer enabled)
-docker exec <redis-container> redis-cli LLEN submissionQueue
+# Monitor batch preparation status (comprehensive view)
+./launch.sh monitor
+
+# Check Redis queue directly (requires debug mode)
+./launch.sh debug  # Exposes Redis port
+./scripts/check_batch_status.sh  # Run monitoring script
 ```
 
 ### 3. Test with Local Collector
 Your local collector should publish to epoch 0 topic:
 - Topic: `/powerloom/snapshot-submissions/0`
 - The validator will receive and process these as test submissions
+
+### 4. Monitoring Batch Preparation
+
+#### Available Monitoring Tools
+
+##### Option A: Using launch.sh monitor (Recommended)
+```bash
+./launch.sh monitor
+
+# Automatically finds running sequencer container
+# Executes monitoring inside container where Redis is accessible
+# Shows: window status, ready batches, pending queue, statistics
+```
+
+##### Option B: Direct Docker Script
+```bash
+# Monitor using first sequencer container found
+./scripts/monitor_batch_docker.sh
+
+# Monitor specific container (useful for distributed mode)
+./scripts/monitor_batch_docker.sh container-name
+
+# Examples:
+./scripts/monitor_batch_docker.sh decentralized-sequencer-sequencer-custom-1
+./scripts/monitor_batch_docker.sh sequencer-listener
+```
+
+##### Option C: Debug Mode with External Access
+```bash
+# Launch with Redis exposed
+./launch.sh debug                    # For single sequencer
+./launch.sh distributed-debug         # For distributed mode
+./launch.sh distributed --debug       # Alternative syntax
+
+# Then use external monitoring script
+./scripts/check_batch_status.sh      # Requires Redis on localhost:6379
+
+# Or use Redis CLI directly
+redis-cli -h localhost -p 6379
+```
+
+#### Monitoring Output Explanation
+```
+📊 Current Window: window-123         # Active submission window ID
+📦 Ready Batches:                     # Batches prepared, awaiting finalization
+  - batch:ready:window-122            # Previous window's batch ready
+⏳ Pending Submissions: 42            # Submissions in queue
+📈 Window Statistics:                 # Historical data
+  Window 121: 100 submissions         # Completed window stats
+  Window 122: 85 submissions          
+⏰ Last Batch Prepared: 2025-09-03    # Timestamp of last batch preparation
+```
+
+#### When to Use Each Method
+
+| Method | Use Case | Redis Access | Container Required |
+|--------|----------|--------------|--------------------|
+| `launch.sh monitor` | Quick status check | Internal | Yes |
+| `monitor_batch_docker.sh` | Specific container check | Internal | Yes |
+| `launch.sh debug` + scripts | Development/debugging | External | Yes |
+| Direct Redis CLI | Advanced debugging | External | Debug mode only |
 
 #### Option C: Both Binary and Docker
 ```bash

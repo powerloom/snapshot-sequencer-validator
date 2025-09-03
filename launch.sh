@@ -31,6 +31,7 @@ show_usage() {
     echo "  sequencer     - Launch all-in-one snapshot sequencer (all components hardcoded ON)"
     echo "  sequencer-custom - Launch snapshot sequencer with YOUR .env settings"
     echo "  distributed   - Launch distributed components (listener, dequeuer, finalizer)"
+    echo "  distributed-debug - Launch distributed with Redis exposed"
     echo "  minimal       - Launch minimal setup (redis + unified)"
     echo "  full          - Launch full stack with monitoring"
     echo "  custom        - Launch with custom profile"
@@ -38,6 +39,8 @@ show_usage() {
     echo "  clean         - Stop and remove all containers/volumes"
     echo "  logs          - Show logs for all services"
     echo "  status        - Show status of all services"
+    echo "  monitor       - Monitor batch preparation status"
+    echo "  debug         - Launch with Redis port exposed for debugging"
     echo ""
     echo "Options:"
     echo "  --debug       - Enable debug mode"
@@ -93,14 +96,46 @@ launch_sequencer() {
 
 # Function to launch distributed mode
 launch_distributed() {
-    print_color "$BLUE" "Launching distributed sequencer..."
-    $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" --profile distributed up
+    print_color "$BLUE" "Launching distributed sequencer with separate containers..."
+    
+    # Use the distributed compose file
+    if [ ! -f "docker-compose.distributed.yml" ]; then
+        print_color "$RED" "Error: docker-compose.distributed.yml not found"
+        exit 1
+    fi
+    
+    # Check if debug mode requested
+    COMPOSE_ARGS="-f docker-compose.distributed.yml"
+    if [ "$DEBUG_MODE" = "true" ]; then
+        print_color "$YELLOW" "Debug mode enabled - Redis port will be exposed"
+        COMPOSE_ARGS="$COMPOSE_ARGS -f docker-compose.debug.yml"
+    fi
+    
+    # Build images first
+    print_color "$YELLOW" "Building images..."
+    $DOCKER_COMPOSE_CMD $COMPOSE_ARGS build
+    
+    # Start services
+    print_color "$GREEN" "Starting distributed services..."
+    $DOCKER_COMPOSE_CMD $COMPOSE_ARGS up -d
+    
+    # Wait for services to be ready
+    sleep 3
+    
     print_color "$GREEN" "✓ Distributed sequencer launched"
     echo ""
     echo "Components running:"
-    echo "  - Listener: Port 9100"
-    echo "  - Dequeuer: 3 replicas"
-    echo "  - Finalizer: 2 replicas"
+    echo "  - Listener: P2P on port ${P2P_PORT:-9001}"
+    echo "  - Dequeuer: ${DEQUEUER_REPLICAS:-2} replicas"
+    echo "  - Event Monitor: Watching for EpochReleased events"
+    echo "  - Finalizer: ${FINALIZER_REPLICAS:-2} replicas"
+    echo ""
+    if [ "$DEBUG_MODE" = "true" ]; then
+        echo "  🔍 DEBUG MODE: Redis exposed on localhost:6379"
+        echo ""
+    fi
+    echo "Check status: docker-compose -f docker-compose.distributed.yml ps"
+    echo "View logs: docker-compose -f docker-compose.distributed.yml logs -f [service-name]"
 }
 
 
@@ -166,6 +201,80 @@ show_logs() {
     else
         $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" logs -f "$service"
     fi
+}
+
+# Function to monitor batch preparation
+monitor_batches() {
+    print_color "$BLUE" "Monitoring Batch Preparation Status..."
+    
+    # Find the first running sequencer container
+    CONTAINER=$(docker ps --filter "name=sequencer" --format "{{.Names}}" | head -1)
+    
+    if [ -z "$CONTAINER" ]; then
+        print_color "$RED" "No running sequencer container found"
+        echo "Please start the sequencer first: $0 sequencer-custom"
+        exit 1
+    fi
+    
+    print_color "$GREEN" "Using container: $CONTAINER"
+    echo ""
+    
+    # Execute monitoring inside the container
+    docker exec -it $CONTAINER /bin/sh -c '
+        REDIS_HOST="${REDIS_HOST:-redis}"
+        REDIS_PORT="${REDIS_PORT:-6379}"
+        
+        echo "📊 Redis: $REDIS_HOST:$REDIS_PORT"
+        echo "============================="
+        
+        # Current window
+        echo -e "\n🔷 Current Submission Window:"
+        redis-cli -h $REDIS_HOST -p $REDIS_PORT GET "submission_window:current" 2>/dev/null || echo "  None active"
+        
+        # Ready batches
+        echo -e "\n📦 Ready Batches:"
+        READY=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT KEYS "batch:ready:*" 2>/dev/null)
+        if [ ! -z "$READY" ]; then
+            echo "$READY" | while read batch; do
+                echo "  ✓ $batch"
+            done
+        else
+            echo "  None"
+        fi
+        
+        # Pending submissions
+        echo -e "\n⏳ Pending Submissions:"
+        COUNT=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT LLEN "submissions:pending" 2>/dev/null)
+        echo "  Count: ${COUNT:-0}"
+        
+        # Window statistics
+        echo -e "\n📈 Window Statistics:"
+        redis-cli -h $REDIS_HOST -p $REDIS_PORT KEYS "window:*:submissions" 2>/dev/null | while read window; do
+            if [ ! -z "$window" ]; then
+                COUNT=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT LLEN "$window" 2>/dev/null)
+                echo "  $window: $COUNT submissions"
+            fi
+        done
+        
+        # Last preparation time
+        echo -e "\n⏰ Last Batch Prepared:"
+        LAST=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT GET "batch:last_prepared_time" 2>/dev/null)
+        echo "  ${LAST:-Never}"
+    '
+}
+
+# Function to launch with debug mode (Redis exposed)
+launch_debug() {
+    print_color "$YELLOW" "Launching in DEBUG mode with Redis exposed..."
+    
+    # Use both compose files
+    $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" -f docker-compose.debug.yml up -d
+    
+    print_color "$GREEN" "✓ Debug mode enabled"
+    echo ""
+    echo "Redis is now accessible at: localhost:6379"
+    echo "You can use: redis-cli -h localhost -p 6379"
+    echo "Or run: ./scripts/check_batch_status.sh"
 }
 
 # Function to show status
@@ -237,6 +346,10 @@ case $COMMAND in
     distributed)
         launch_distributed
         ;;
+    distributed-debug)
+        export DEBUG_MODE=true
+        launch_distributed
+        ;;
     minimal)
         launch_minimal
         ;;
@@ -257,6 +370,12 @@ case $COMMAND in
         ;;
     status)
         show_status
+        ;;
+    monitor)
+        monitor_batches
+        ;;
+    debug)
+        launch_debug
         ;;
     *)
         show_usage

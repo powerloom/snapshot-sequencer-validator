@@ -12,11 +12,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/powerloom/snapshot-sequencer-validator/config"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/consensus"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/deduplication"
+	"github.com/powerloom/snapshot-sequencer-validator/pkgs/eventmonitor"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/gossipconfig"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/submissions"
 	"github.com/go-redis/redis/v8"
+	rpchelper "github.com/powerloom/go-rpc-helper"
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
@@ -40,80 +43,64 @@ type UnifiedSequencer struct {
 	dedup       *deduplication.Deduplicator
 	
 	// Component flags
-	enableListener  bool
-	enableDequeuer  bool
-	enableFinalizer bool
-	enableConsensus bool
+	enableListener     bool
+	enableDequeuer     bool
+	enableFinalizer    bool
+	enableConsensus    bool
+	enableEventMonitor bool
 	
 	// Component instances
-	dequeuer *submissions.Dequeuer
-	batchGen *consensus.DummyBatchGenerator
+	dequeuer     *submissions.Dequeuer
+	batchGen     *consensus.DummyBatchGenerator
+	eventMonitor *eventmonitor.EventMonitor
 	
 	// Configuration
+	config      *config.Settings
 	sequencerID string
 	wg          sync.WaitGroup
 }
 
 func main() {
+	// Load configuration
+	config.LoadConfig()
+	cfg := config.SettingsObj
+	
 	// Initialize logger
 	log.SetLevel(log.InfoLevel)
-	if os.Getenv("DEBUG_MODE") == "true" {
+	if cfg.DebugMode {
 		log.SetLevel(log.DebugLevel)
 	}
 	
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	
-	// Parse component flags from environment
-	enableListener := getBoolEnv("ENABLE_LISTENER", true)
-	enableDequeuer := getBoolEnv("ENABLE_DEQUEUER", true)
-	enableFinalizer := getBoolEnv("ENABLE_FINALIZER", true)
-	enableConsensus := getBoolEnv("ENABLE_CONSENSUS", true)
+	// Parse component flags from configuration
+	enableListener := cfg.EnableListener
+	enableDequeuer := cfg.EnableDequeuer
+	enableFinalizer := cfg.EnableFinalizer
+	enableConsensus := cfg.EnableConsensus
+	enableEventMonitor := cfg.EnableEventMonitor
 	
 	log.Infof("Starting Unified Sequencer with components:")
 	log.Infof("  - Listener: %v", enableListener)
 	log.Infof("  - Dequeuer: %v", enableDequeuer)
 	log.Infof("  - Finalizer: %v", enableFinalizer)
 	log.Infof("  - Consensus: %v", enableConsensus)
+	log.Infof("  - Event Monitor: %v", enableEventMonitor)
 	
-	// Get configuration
-	sequencerID := os.Getenv("SEQUENCER_ID")
-	if sequencerID == "" {
-		sequencerID = "unified-sequencer"
-	}
+	// Get sequencer ID from configuration
+	sequencerID := cfg.SequencerID
 	
 	// Initialize Redis if any component needs it
 	var redisClient *redis.Client
-	if enableListener || enableDequeuer || enableFinalizer {
-		// Get Redis configuration from environment
-		redisHost := os.Getenv("REDIS_HOST")
-		if redisHost == "" {
-			redisHost = "localhost"
-		}
-		
-		redisPort := os.Getenv("REDIS_PORT")
-		if redisPort == "" {
-			redisPort = "6379"
-		}
-		
-		redisDB := 0
-		if dbStr := os.Getenv("REDIS_DB"); dbStr != "" {
-			if db, err := strconv.Atoi(dbStr); err == nil {
-				redisDB = db
-			} else {
-				log.Warnf("Invalid REDIS_DB value: %s, using default 0", dbStr)
-			}
-		}
-		
-		redisPassword := os.Getenv("REDIS_PASSWORD")
-		
-		redisAddr := fmt.Sprintf("%s:%s", redisHost, redisPort)
-		log.Infof("Connecting to Redis at %s (DB: %d)", redisAddr, redisDB)
+	if enableListener || enableDequeuer || enableFinalizer || enableEventMonitor {
+		redisAddr := fmt.Sprintf("%s:%s", cfg.RedisHost, cfg.RedisPort)
+		log.Infof("Connecting to Redis at %s (DB: %d)", redisAddr, cfg.RedisDB)
 		
 		redisClient = redis.NewClient(&redis.Options{
 			Addr:     redisAddr,
-			Password: redisPassword,
-			DB:       redisDB,
+			Password: cfg.RedisPassword,
+			DB:       cfg.RedisDB,
 		})
 		
 		if err := redisClient.Ping(ctx).Err(); err != nil {
@@ -126,8 +113,8 @@ func main() {
 	var dedup *deduplication.Deduplicator
 	if redisClient != nil && enableListener {
 		// Configure deduplication
-		localCacheSize := getIntEnv("DEDUP_LOCAL_CACHE_SIZE", 10000)
-		dedupTTL := time.Duration(getIntEnv("DEDUP_TTL_SECONDS", 7200)) * time.Second // 2 hours default
+		localCacheSize := cfg.DedupLocalCacheSize
+		dedupTTL := cfg.DedupTTL
 		
 		var err error
 		dedup, err = deduplication.NewDeduplicator(redisClient, localCacheSize, dedupTTL)
@@ -141,29 +128,24 @@ func main() {
 	var h host.Host
 	var ps *pubsub.PubSub
 	if enableListener || enableConsensus {
-		p2pPort := os.Getenv("P2P_PORT")
-		if p2pPort == "" {
-			p2pPort = "9001"
-		}
+		p2pPort := strconv.Itoa(cfg.P2PPort)
 		
 		// Create or load private key
-		privKey, err := loadOrCreatePrivateKey()
+		privKey, err := loadOrCreatePrivateKey(cfg.P2PPrivateKey)
 		if err != nil {
 			log.Fatalf("Failed to get private key: %v", err)
 		}
 		
 		// Configure connection manager for subscriber mode
-		connLowWater := getIntEnv("CONN_MANAGER_LOW_WATER", 100)
-		connHighWater := getIntEnv("CONN_MANAGER_HIGH_WATER", 400)
 		connMgr, err := connmgr.NewConnManager(
-			connLowWater,
-			connHighWater, 
+			cfg.ConnManagerLowWater,
+			cfg.ConnManagerHighWater, 
 			connmgr.WithGracePeriod(time.Minute),
 		)
 		if err != nil {
 			log.Fatalf("Failed to create connection manager: %v", err)
 		}
-		log.Infof("Connection manager configured: LowWater=%d, HighWater=%d", connLowWater, connHighWater)
+		log.Infof("Connection manager configured: LowWater=%d, HighWater=%d", cfg.ConnManagerLowWater, cfg.ConnManagerHighWater)
 		
 		// Build libp2p options
 		opts := []libp2p.Option{
@@ -174,9 +156,8 @@ func main() {
 		}
 		
 		// Add public IP address if configured
-		publicIP := os.Getenv("PUBLIC_IP")
-		if publicIP != "" {
-			publicAddr, err := multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%s", publicIP, p2pPort))
+		if cfg.P2PPublicIP != "" {
+			publicAddr, err := multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%s", cfg.P2PPublicIP, p2pPort))
 			if err != nil {
 				log.Errorf("Failed to create public multiaddr: %v", err)
 			} else {
@@ -184,7 +165,7 @@ func main() {
 					// Add the public address to the list
 					return append(addrs, publicAddr)
 				}))
-				log.Infof("Advertising public IP: %s", publicIP)
+				log.Infof("Advertising public IP: %s", cfg.P2PPublicIP)
 			}
 		}
 		
@@ -207,13 +188,12 @@ func main() {
 		}
 		
 		// Connect to bootstrap if configured
-		connectToBootstrap(ctx, h)
+		if len(cfg.BootstrapPeers) > 0 {
+			connectToBootstrap(ctx, h, cfg.BootstrapPeers[0])
+		}
 		
 		// Start discovery on rendezvous point
-		rendezvousString := os.Getenv("RENDEZVOUS_POINT")
-		if rendezvousString == "" {
-			rendezvousString = "powerloom-snapshot-sequencer-network"
-		}
+		rendezvousString := cfg.Rendezvous
 		
 		routingDiscovery := routing.NewRoutingDiscovery(kademliaDHT)
 		
@@ -286,17 +266,19 @@ func main() {
 	
 	// Create unified sequencer
 	sequencer := &UnifiedSequencer{
-		host:            h,
-		ctx:             ctx,
-		cancel:          cancel,
-		ps:              ps,
-		redisClient:     redisClient,
-		dedup:           dedup,
-		enableListener:  enableListener,
-		enableDequeuer:  enableDequeuer,
-		enableFinalizer: enableFinalizer,
-		enableConsensus: enableConsensus,
-		sequencerID:     sequencerID,
+		host:               h,
+		ctx:                ctx,
+		cancel:             cancel,
+		ps:                 ps,
+		redisClient:        redisClient,
+		dedup:              dedup,
+		enableListener:     enableListener,
+		enableDequeuer:     enableDequeuer,
+		enableFinalizer:    enableFinalizer,
+		enableConsensus:    enableConsensus,
+		enableEventMonitor: enableEventMonitor,
+		config:             cfg,
+		sequencerID:        sequencerID,
 	}
 	
 	// Initialize components based on flags
@@ -306,6 +288,47 @@ func main() {
 	
 	if enableConsensus {
 		sequencer.batchGen = consensus.NewDummyBatchGenerator(sequencerID)
+	}
+	
+	if enableEventMonitor && redisClient != nil {
+		// Initialize RPC Helper with Powerloom chain config
+		rpcConfig := cfg.ToRPCConfig()
+		if rpcConfig == nil || len(rpcConfig.Nodes) == 0 {
+			log.Fatal("POWERLOOM_RPC_NODES must be configured for event monitoring")
+		}
+		
+		// Set default timeouts if not configured
+		if rpcConfig.RequestTimeout == 0 {
+			rpcConfig.RequestTimeout = 30 * time.Second
+		}
+		if rpcConfig.MaxRetries == 0 {
+			rpcConfig.MaxRetries = 3
+		}
+		
+		rpcHelper := rpchelper.NewRPCHelper(rpcConfig)
+		if err := rpcHelper.Initialize(context.Background()); err != nil {
+			log.Fatalf("Failed to initialize RPC helper: %v", err)
+		}
+		
+		// Create event monitor config
+		monitorCfg := &eventmonitor.Config{
+			RPCHelper:       rpcHelper,
+			ContractAddress: cfg.ProtocolStateContract,
+			RedisClient:     redisClient,
+			WindowDuration:  120 * time.Second, // Default 120 seconds from contract
+			StartBlock:      cfg.EventStartBlock,
+			PollInterval:    cfg.EventPollInterval,
+			DataMarkets:     cfg.DataMarketAddresses,
+			MaxWindows:      cfg.MaxConcurrentWindows,
+		}
+		
+		var err error
+		sequencer.eventMonitor, err = eventmonitor.NewEventMonitor(monitorCfg)
+		if err != nil {
+			log.Errorf("Failed to create event monitor: %v", err)
+			// Don't fail completely, just disable event monitor
+			sequencer.enableEventMonitor = false
+		}
 	}
 	
 	// Start components
@@ -335,7 +358,10 @@ func (s *UnifiedSequencer) Start() {
 	// Start dequeuer component
 	if s.enableDequeuer && s.redisClient != nil {
 		log.Info("Starting Dequeuer component...")
-		workers := getIntEnv("DEQUEUER_WORKERS", 5)
+		workers := s.config.DequeueWorkers
+		if workers == 0 {
+			workers = 5 // Default fallback
+		}
 		for i := 0; i < workers; i++ {
 			s.wg.Add(1)
 			go func(workerID int) {
@@ -597,7 +623,25 @@ func (s *UnifiedSequencer) queueSubmissionFromP2P(data []byte, topic string, pee
 	}
 	
 	if s.redisClient != nil {
-		err := s.redisClient.LPush(s.ctx, "submissionQueue", data).Err()
+		// Enrich submission with protocol state if not already present
+		var enrichedData []byte
+		if submissionInfo != nil {
+			// Add protocol state if missing
+			if _, hasProtocol := submissionInfo["protocol_state"]; !hasProtocol {
+				submissionInfo["protocol_state"] = s.config.ProtocolStateContract
+			}
+			
+			// Ensure data market is set (use first configured market as default if missing)
+			if _, hasMarket := submissionInfo["data_market"]; !hasMarket && len(s.config.DataMarketAddresses) > 0 {
+				submissionInfo["data_market"] = s.config.DataMarketAddresses[0]
+			}
+			
+			enrichedData, _ = json.Marshal(submissionInfo)
+		} else {
+			enrichedData = data // Use original if parsing failed
+		}
+		
+		err := s.redisClient.LPush(s.ctx, "submissionQueue", enrichedData).Err()
 		if err != nil {
 			log.Errorf("❌ Failed to queue submission: %v", err)
 		} else {
@@ -707,28 +751,7 @@ func truncateString(s string, maxLen int) string {
 	return s[:maxLen] + "..."
 }
 
-func getBoolEnv(key string, defaultValue bool) bool {
-	val := os.Getenv(key)
-	if val == "" {
-		return defaultValue
-	}
-	return val == "true" || val == "1" || val == "yes"
-}
-
-func getIntEnv(key string, defaultValue int) int {
-	val := os.Getenv(key)
-	if val == "" {
-		return defaultValue
-	}
-	intVal, err := strconv.Atoi(val)
-	if err != nil {
-		return defaultValue
-	}
-	return intVal
-}
-
-func loadOrCreatePrivateKey() (crypto.PrivKey, error) {
-	privKeyHex := os.Getenv("PRIVATE_KEY")
+func loadOrCreatePrivateKey(privKeyHex string) (crypto.PrivKey, error) {
 	if privKeyHex != "" {
 		// Decode hex string to bytes
 		privKeyBytes, err := hex.DecodeString(privKeyHex)
@@ -743,8 +766,7 @@ func loadOrCreatePrivateKey() (crypto.PrivKey, error) {
 	return privKey, err
 }
 
-func connectToBootstrap(ctx context.Context, h host.Host) {
-	bootstrapAddr := os.Getenv("BOOTSTRAP_MULTIADDR")
+func connectToBootstrap(ctx context.Context, h host.Host, bootstrapAddr string) {
 	if bootstrapAddr == "" {
 		log.Warn("No BOOTSTRAP_MULTIADDR configured, skipping bootstrap connection")
 		return
@@ -771,4 +793,19 @@ func connectToBootstrap(ctx context.Context, h host.Host) {
 	}
 	
 	log.Infof("✅ Connected to bootstrap node: %s", peerInfo.ID)
+}
+
+func (s *UnifiedSequencer) runEventMonitor() {
+	log.Info("🔍 Starting event monitor for EpochReleased events")
+	
+	// Start monitoring - this will handle submission windows
+	if err := s.eventMonitor.Start(); err != nil {
+		log.Errorf("Event monitor failed: %v", err)
+		return
+	}
+	
+	// Wait for context cancellation
+	<-s.ctx.Done()
+	s.eventMonitor.Stop()
+	log.Info("Event monitor stopped")
 }

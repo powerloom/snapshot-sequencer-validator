@@ -6,10 +6,11 @@ import (
 
 // SnapshotSubmission represents a snapshot submission from the network
 type SnapshotSubmission struct {
-	Request     SnapshotRequest `json:"request"`
-	Signature   string          `json:"signature"`
-	DataMarket  string          `json:"data_market"`
-	NodeVersion *string         `json:"node_version,omitempty"`
+	Request       SnapshotRequest `json:"request"`
+	Signature     string          `json:"signature"`
+	ProtocolState string          `json:"protocol_state"` // Protocol state contract address
+	DataMarket    string          `json:"data_market"`    // Data market contract address
+	NodeVersion   *string         `json:"node_version,omitempty"`
 }
 
 // SnapshotRequest contains the actual snapshot data
