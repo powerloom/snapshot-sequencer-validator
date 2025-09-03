@@ -51,7 +51,9 @@ show_usage() {
     echo "Examples:"
     echo "  $0 sequencer                  # Run all-in-one sequencer"
     echo "  $0 distributed --debug        # Run distributed with debug"
-    echo "  $0 custom listener,dequeuer   # Run specific components"
+    echo ""
+    echo "Note: All commands automatically build Docker images before starting."
+    echo "      No need to run build scripts separately."
 }
 
 # Function to check prerequisites
@@ -90,7 +92,15 @@ check_env_config() {
 # Function to launch sequencer mode
 launch_sequencer() {
     print_color "$BLUE" "Launching snapshot sequencer (all-in-one)..."
-    $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" --profile sequencer up
+    
+    # Build images first
+    print_color "$YELLOW" "Building images..."
+    $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" build
+    
+    # Start services
+    print_color "$GREEN" "Starting sequencer..."
+    $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" --profile sequencer up -d
+    
     print_color "$GREEN" "✓ Snapshot sequencer launched"
 }
 
@@ -142,14 +152,30 @@ launch_distributed() {
 # Function to launch minimal setup
 launch_minimal() {
     print_color "$BLUE" "Launching minimal setup..."
-    $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" up redis sequencer-all
+    
+    # Build images first
+    print_color "$YELLOW" "Building images..."
+    $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" build
+    
+    # Start services
+    print_color "$GREEN" "Starting minimal services..."
+    $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" up -d redis sequencer-all
+    
     print_color "$GREEN" "✓ Minimal setup launched"
 }
 
 # Function to launch full stack
 launch_full() {
     print_color "$BLUE" "Launching full stack with monitoring..."
-    $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" --profile distributed --profile storage --profile monitoring up
+    
+    # Build images first
+    print_color "$YELLOW" "Building images..."
+    $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" build
+    
+    # Start services
+    print_color "$GREEN" "Starting full stack..."
+    $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" --profile distributed --profile storage --profile monitoring up -d
+    
     print_color "$GREEN" "✓ Full stack launched"
     echo ""
     echo "Services available:"
@@ -176,8 +202,20 @@ launch_custom() {
 # Function to stop all services
 stop_services() {
     print_color "$YELLOW" "Stopping all services..."
-    $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" down
-    print_color "$GREEN" "✓ Services stopped"
+    
+    # Check if distributed services are running
+    if $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml ps --quiet 2>/dev/null | grep -q .; then
+        print_color "$BLUE" "Stopping distributed services..."
+        $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml down
+    fi
+    
+    # Check if regular services are running
+    if $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" ps --quiet 2>/dev/null | grep -q .; then
+        print_color "$BLUE" "Stopping sequencer services..."
+        $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" down
+    fi
+    
+    print_color "$GREEN" "✓ All services stopped"
 }
 
 # Function to clean everything
@@ -186,7 +224,18 @@ clean_all() {
     read -p "Are you sure? (y/N) " -n 1 -r
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
-        $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" down -v
+        # Check and clean distributed services
+        if $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml ps --quiet 2>/dev/null | grep -q .; then
+            print_color "$BLUE" "Cleaning distributed services..."
+            $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml down -v
+        fi
+        
+        # Check and clean regular services
+        if $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" ps --quiet 2>/dev/null | grep -q .; then
+            print_color "$BLUE" "Cleaning sequencer services..."
+            $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" down -v
+        fi
+        
         print_color "$GREEN" "✓ Cleaned all containers and volumes"
     else
         print_color "$YELLOW" "Cancelled"
@@ -267,7 +316,12 @@ monitor_batches() {
 launch_debug() {
     print_color "$YELLOW" "Launching in DEBUG mode with Redis exposed..."
     
-    # Use both compose files
+    # Build images first
+    print_color "$YELLOW" "Building images..."
+    $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" build
+    
+    # Use both compose files to start services
+    print_color "$GREEN" "Starting services with debug mode..."
     $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" -f docker-compose.debug.yml up -d
     
     print_color "$GREEN" "✓ Debug mode enabled"
@@ -279,8 +333,29 @@ launch_debug() {
 
 # Function to show status
 show_status() {
-    print_color "$BLUE" "Service Status:"
-    $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" ps
+    print_color "$BLUE" "Checking Service Status..."
+    echo ""
+    
+    # Check distributed services
+    if $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml ps 2>/dev/null | grep -q "Up"; then
+        print_color "$GREEN" "Distributed Mode Services:"
+        $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml ps
+        echo ""
+    fi
+    
+    # Check regular services
+    if $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" ps 2>/dev/null | grep -q "Up"; then
+        print_color "$GREEN" "Sequencer Services:"
+        $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" ps
+        echo ""
+    fi
+    
+    # If no services found
+    if ! $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml ps 2>/dev/null | grep -q "Up" && \
+       ! $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" ps 2>/dev/null | grep -q "Up"; then
+        print_color "$YELLOW" "No services are currently running"
+        echo "Use './launch.sh sequencer-custom' or './launch.sh distributed' to start"
+    fi
     
     echo ""
     print_color "$BLUE" "Redis Queue Status:"
@@ -340,7 +415,15 @@ case $COMMAND in
         ;;
     sequencer-custom)
         print_color "$BLUE" "Launching snapshot sequencer with custom .env settings..."
-        $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" up sequencer-custom
+        
+        # Build images first
+        print_color "$YELLOW" "Building images..."
+        $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" build
+        
+        # Start services
+        print_color "$GREEN" "Starting sequencer with custom configuration..."
+        $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" up -d sequencer-custom
+        
         print_color "$GREEN" "✓ Snapshot sequencer launched with your custom settings"
         ;;
     distributed)
