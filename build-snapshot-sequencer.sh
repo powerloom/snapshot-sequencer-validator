@@ -4,9 +4,9 @@ echo "Building Snapshot Sequencer Docker image..."
 
 # Build Docker image for snapshot sequencer
 if command -v docker-compose &> /dev/null; then
-    docker-compose -f docker-compose.snapshot-sequencer.yml build --no-cache
+    docker-compose -f docker-compose.snapshot-sequencer.yml build
 else
-    docker compose -f docker-compose.snapshot-sequencer.yml build --no-cache
+    docker compose -f docker-compose.snapshot-sequencer.yml build
 fi
 
 if [ $? -eq 0 ]; then

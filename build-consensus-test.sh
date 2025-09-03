@@ -4,9 +4,9 @@ echo "Building Sequencer Consensus Test Docker image..."
 
 # Build Docker image for consensus test
 if command -v docker-compose &> /dev/null; then
-    docker-compose -f docker-compose.yml build --no-cache
+    docker-compose -f docker-compose.yml build
 else
-    docker compose -f docker-compose.yml build --no-cache
+    docker compose -f docker-compose.yml build
 fi
 
 if [ $? -eq 0 ]; then
