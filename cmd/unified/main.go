@@ -62,7 +62,9 @@ type UnifiedSequencer struct {
 
 func main() {
 	// Load configuration
-	config.LoadConfig()
+	if err := config.LoadConfig(); err != nil {
+		log.Fatalf("Failed to load configuration: %v", err)
+	}
 	cfg := config.SettingsObj
 	
 	// Initialize logger

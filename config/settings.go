@@ -22,8 +22,7 @@ type Settings struct {
 	// Ethereum RPC Configuration
 	RPCNodes                 []string         // Primary RPC nodes for load balancing
 	ArchiveRPCNodes          []string         // Archive nodes for historical queries
-	ProtocolStateContract    string           // Protocol state contract address
-	IdentityRegistryContract string           // Future: LibP2P identity registry contract
+	ProtocolStateContract    string           // Protocol state contract address (manages identities)
 	ChainID                  int64
 	
 	// Data Market Configuration
@@ -113,130 +112,97 @@ var (
 // LoadConfig loads configuration from environment variables
 func LoadConfig() error {
 	SettingsObj = &Settings{
-		// Set defaults
-		ChainID:                  1, // Mainnet
-		P2PPort:                  9001,
-		RedisHost:                "localhost",
-		RedisPort:                "6379",
-		RedisDB:                  0,
-		Rendezvous:               "powerloom-snapshot-sequencer-network",
-		ConnManagerLowWater:      100,
-		ConnManagerHighWater:     400,
-		GossipsubHeartbeat:       700 * time.Millisecond,
-		SubmissionWindowDuration: 60 * time.Second,
-		MaxConcurrentWindows:     100,
+		// Core Identity
+		SequencerID: getEnv("SEQUENCER_ID", "unified-sequencer-1"),
+		
+		// Ethereum RPC Configuration
+		ChainID: int64(getEnvAsInt("CHAIN_ID", 1)),
+		
+		// Redis Configuration - Read directly from env
+		RedisHost:     getEnv("REDIS_HOST", "localhost"),
+		RedisPort:     getEnv("REDIS_PORT", "6379"),
+		RedisDB:       getEnvAsInt("REDIS_DB", 0),
+		RedisPassword: getEnv("REDIS_PASSWORD", ""),
+		
+		// P2P Network Configuration
+		P2PPort:       getEnvAsInt("P2P_PORT", 9001),
+		P2PPrivateKey: getEnv("PRIVATE_KEY", ""),
+		P2PPublicIP:   getEnv("PUBLIC_IP", ""),
+		Rendezvous:    getEnv("RENDEZVOUS_POINT", "powerloom-snapshot-sequencer-network"),
+		
+		// Connection Manager
+		ConnManagerLowWater:  getEnvAsInt("CONN_MANAGER_LOW_WATER", 100),
+		ConnManagerHighWater: getEnvAsInt("CONN_MANAGER_HIGH_WATER", 400),
+		
+		// Gossipsub Configuration
+		GossipsubHeartbeat: time.Duration(getEnvAsInt("GOSSIPSUB_HEARTBEAT_MS", 700)) * time.Millisecond,
+		GossipsubParams:    make(map[string]interface{}),
+		
+		// Submission Window Configuration
+		SubmissionWindowDuration: time.Duration(getEnvAsInt("SUBMISSION_WINDOW_DURATION", 60)) * time.Second,
+		MaxConcurrentWindows:     getEnvAsInt("MAX_CONCURRENT_WINDOWS", 100),
 		WindowCleanupInterval:    5 * time.Minute,
-		EventPollInterval:        12 * time.Second,
-		EventBlockBatchSize:      1000,
-		BlockFetchTimeout:        30 * time.Second,
-		VerificationCacheTTL:     10 * time.Minute,
-		DequeueWorkers:           5,
-		DequeueBatchSize:         10,
-		DequeueTimeout:           5 * time.Second,
-		MaxSubmissionsPerEpoch:   100,
-		DedupLocalCacheSize:      10000,
-		DedupTTL:                 2 * time.Hour,
-		DedupEnabled:             true,
-		EnableListener:           true,
-		EnableDequeuer:           true,
-		EnableFinalizer:          true,
-		EnableConsensus:          true,
-		EnableEventMonitor:       false, // Off by default until contracts configured
-		APIPort:                  8080,
-		MetricsPort:              9090,
-		LogLevel:                 "info",
-		BatchProcessingTimeout:   5 * time.Minute,
-		ContractQueryTimeout:     30 * time.Second,
-		SkipIdentityVerification: false,
-		FlaggedSnapshottersCheck: true,
-		GossipsubParams:          make(map[string]interface{}),
+		
+		// Event Monitoring
+		EventPollInterval:   time.Duration(getEnvAsInt("EVENT_POLL_INTERVAL", 12)) * time.Second,
+		EventStartBlock:     uint64(getEnvAsInt("EVENT_START_BLOCK", 0)),
+		EventBlockBatchSize: uint64(getEnvAsInt("EVENT_BLOCK_BATCH_SIZE", 1000)),
+		BlockFetchTimeout:   time.Duration(getEnvAsInt("BLOCK_FETCH_TIMEOUT", 30)) * time.Second,
+		
+		// Identity & Verification
+		SkipIdentityVerification: getBoolEnv("SKIP_IDENTITY_VERIFICATION", false),
+		FlaggedSnapshottersCheck: getBoolEnv("CHECK_FLAGGED_SNAPSHOTTERS", true),
+		VerificationCacheTTL:     time.Duration(getEnvAsInt("VERIFICATION_CACHE_TTL", 600)) * time.Second,
+		
+		// Dequeuer Configuration
+		DequeueWorkers:         getEnvAsInt("DEQUEUER_WORKERS", 5),
+		DequeueBatchSize:       getEnvAsInt("DEQUEUE_BATCH_SIZE", 10),
+		DequeueTimeout:         5 * time.Second,
+		MaxSubmissionsPerEpoch: getEnvAsInt("MAX_SUBMISSIONS_PER_EPOCH", 100),
+		
+		// Deduplication Configuration
+		DedupEnabled:        getBoolEnv("DEDUP_ENABLED", true),
+		DedupLocalCacheSize: getEnvAsInt("DEDUP_LOCAL_CACHE_SIZE", 10000),
+		DedupTTL:            time.Duration(getEnvAsInt("DEDUP_TTL_SECONDS", 7200)) * time.Second,
+		
+		// Component Toggles
+		EnableListener:     getBoolEnv("ENABLE_LISTENER", true),
+		EnableDequeuer:     getBoolEnv("ENABLE_DEQUEUER", true),
+		EnableFinalizer:    getBoolEnv("ENABLE_FINALIZER", true),
+		EnableConsensus:    getBoolEnv("ENABLE_CONSENSUS", true),
+		EnableEventMonitor: getBoolEnv("ENABLE_EVENT_MONITOR", false),
+		
+		// API Configuration
+		APIHost:      getEnv("API_HOST", "0.0.0.0"),
+		APIPort:      getEnvAsInt("API_PORT", 8080),
+		APIAuthToken: getEnv("API_AUTH_TOKEN", ""),
+		
+		// Monitoring & Debugging
+		SlackWebhookURL:        getEnv("SLACK_WEBHOOK_URL", ""),
+		MetricsEnabled:         getBoolEnv("METRICS_ENABLED", false),
+		MetricsPort:            getEnvAsInt("METRICS_PORT", 9090),
+		LogLevel:               getEnv("LOG_LEVEL", "info"),
+		DebugMode:              getBoolEnv("DEBUG_MODE", false),
+		
+		// Performance Tuning
+		BatchProcessingTimeout: 5 * time.Minute,
+		ContractQueryTimeout:   30 * time.Second,
+		
+		// Contract Addresses
+		ProtocolStateContract:    getEnv("PROTOCOL_STATE_CONTRACT", ""),
 	}
 	
-	// Core Identity
-	SettingsObj.SequencerID = getEnv("SEQUENCER_ID", "unified-sequencer-1")
-	
-	// Load RPC Configuration
+	// Load complex configurations that require additional parsing
 	if err := loadRPCConfig(); err != nil {
 		return fmt.Errorf("failed to load RPC config: %w", err)
 	}
 	
-	// Load Contract Addresses
-	SettingsObj.ProtocolStateContract = getEnv("PROTOCOL_STATE_CONTRACT", "")
-	SettingsObj.IdentityRegistryContract = getEnv("IDENTITY_REGISTRY_CONTRACT", "")
-	
-	// Load Data Markets
 	if err := loadDataMarkets(); err != nil {
 		return fmt.Errorf("failed to load data markets: %w", err)
 	}
 	
-	// Load Redis Configuration
-	SettingsObj.RedisHost = getEnv("REDIS_HOST", SettingsObj.RedisHost)
-	SettingsObj.RedisPort = getEnv("REDIS_PORT", SettingsObj.RedisPort)
-	SettingsObj.RedisDB = getEnvAsInt("REDIS_DB", SettingsObj.RedisDB)
-	SettingsObj.RedisPassword = getEnv("REDIS_PASSWORD", "")
-	
-	// Load P2P Configuration
-	SettingsObj.P2PPort = getEnvAsInt("P2P_PORT", SettingsObj.P2PPort)
-	SettingsObj.P2PPrivateKey = getEnv("PRIVATE_KEY", "")
-	SettingsObj.P2PPublicIP = getEnv("PUBLIC_IP", "")
-	SettingsObj.Rendezvous = getEnv("RENDEZVOUS_POINT", SettingsObj.Rendezvous)
 	loadBootstrapPeers()
-	
-	// Connection Manager
-	SettingsObj.ConnManagerLowWater = getEnvAsInt("CONN_MANAGER_LOW_WATER", SettingsObj.ConnManagerLowWater)
-	SettingsObj.ConnManagerHighWater = getEnvAsInt("CONN_MANAGER_HIGH_WATER", SettingsObj.ConnManagerHighWater)
-	
-	// Gossipsub
-	heartbeatMs := getEnvAsInt("GOSSIPSUB_HEARTBEAT_MS", 700)
-	SettingsObj.GossipsubHeartbeat = time.Duration(heartbeatMs) * time.Millisecond
-	
-	// Submission Window
-	windowSeconds := getEnvAsInt("SUBMISSION_WINDOW_DURATION", 60)
-	SettingsObj.SubmissionWindowDuration = time.Duration(windowSeconds) * time.Second
-	SettingsObj.MaxConcurrentWindows = getEnvAsInt("MAX_CONCURRENT_WINDOWS", SettingsObj.MaxConcurrentWindows)
-	
-	// Event Monitoring
-	SettingsObj.EventPollInterval = time.Duration(getEnvAsInt("EVENT_POLL_INTERVAL", 12)) * time.Second
-	SettingsObj.EventStartBlock = uint64(getEnvAsInt("EVENT_START_BLOCK", 0))
-	SettingsObj.EventBlockBatchSize = uint64(getEnvAsInt("EVENT_BLOCK_BATCH_SIZE", 1000))
-	SettingsObj.BlockFetchTimeout = time.Duration(getEnvAsInt("BLOCK_FETCH_TIMEOUT", 30)) * time.Second
-	
-	// Identity & Verification
 	loadFullNodeAddresses()
-	SettingsObj.SkipIdentityVerification = getBoolEnv("SKIP_IDENTITY_VERIFICATION", SettingsObj.SkipIdentityVerification)
-	SettingsObj.FlaggedSnapshottersCheck = getBoolEnv("CHECK_FLAGGED_SNAPSHOTTERS", SettingsObj.FlaggedSnapshottersCheck)
-	cacheTTLSeconds := getEnvAsInt("VERIFICATION_CACHE_TTL", 600)
-	SettingsObj.VerificationCacheTTL = time.Duration(cacheTTLSeconds) * time.Second
-	
-	// Dequeuer
-	SettingsObj.DequeueWorkers = getEnvAsInt("DEQUEUER_WORKERS", SettingsObj.DequeueWorkers)
-	SettingsObj.DequeueBatchSize = getEnvAsInt("DEQUEUE_BATCH_SIZE", SettingsObj.DequeueBatchSize)
-	SettingsObj.MaxSubmissionsPerEpoch = getEnvAsInt("MAX_SUBMISSIONS_PER_EPOCH", SettingsObj.MaxSubmissionsPerEpoch)
-	
-	// Deduplication
-	SettingsObj.DedupEnabled = getBoolEnv("DEDUP_ENABLED", SettingsObj.DedupEnabled)
-	SettingsObj.DedupLocalCacheSize = getEnvAsInt("DEDUP_LOCAL_CACHE_SIZE", SettingsObj.DedupLocalCacheSize)
-	dedupTTLSeconds := getEnvAsInt("DEDUP_TTL_SECONDS", 7200)
-	SettingsObj.DedupTTL = time.Duration(dedupTTLSeconds) * time.Second
-	
-	// Component Toggles
-	SettingsObj.EnableListener = getBoolEnv("ENABLE_LISTENER", SettingsObj.EnableListener)
-	SettingsObj.EnableDequeuer = getBoolEnv("ENABLE_DEQUEUER", SettingsObj.EnableDequeuer)
-	SettingsObj.EnableFinalizer = getBoolEnv("ENABLE_FINALIZER", SettingsObj.EnableFinalizer)
-	SettingsObj.EnableConsensus = getBoolEnv("ENABLE_CONSENSUS", SettingsObj.EnableConsensus)
-	SettingsObj.EnableEventMonitor = getBoolEnv("ENABLE_EVENT_MONITOR", SettingsObj.EnableEventMonitor)
-	
-	// API Configuration
-	SettingsObj.APIHost = getEnv("API_HOST", "0.0.0.0")
-	SettingsObj.APIPort = getEnvAsInt("API_PORT", SettingsObj.APIPort)
-	SettingsObj.APIAuthToken = getEnv("API_AUTH_TOKEN", "")
-	
-	// Monitoring
-	SettingsObj.SlackWebhookURL = getEnv("SLACK_WEBHOOK_URL", "")
-	SettingsObj.MetricsEnabled = getBoolEnv("METRICS_ENABLED", false)
-	SettingsObj.MetricsPort = getEnvAsInt("METRICS_PORT", SettingsObj.MetricsPort)
-	SettingsObj.LogLevel = getEnv("LOG_LEVEL", SettingsObj.LogLevel)
-	SettingsObj.DebugMode = getBoolEnv("DEBUG_MODE", false)
 	
 	// DATA_SOURCES removed - project IDs generated directly from contract addresses
 	
@@ -350,12 +316,6 @@ func loadFullNodeAddresses() {
 	}
 }
 
-// loadDataSources loads data sources per market
-func loadDataSources() error {
-	// DATA_SOURCES removed - project IDs generated directly from contract addresses
-	
-	return nil
-}
 
 // configureLogging sets up the logger based on configuration
 func configureLogging() {
