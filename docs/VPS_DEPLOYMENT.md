@@ -99,20 +99,21 @@ MAX_CONCURRENT_WINDOWS=100     # Maximum simultaneous submission windows
 #   All set to true
 ```
 
-### 4. Build Options
+### 4. Build and Launch Options
 
-#### Current Available Scripts
+#### Important: Automatic Building
+**Note:** The `launch.sh` script now automatically builds Docker images before starting services. You do NOT need to run build scripts separately.
 
-**Build Scripts:**
+**Build Scripts (Optional - only if building manually):**
 - `./build-binary.sh` - Builds Go binaries
 - `./build-consensus-test.sh` - Builds Docker image for consensus testing
 - `./build-snapshot-sequencer.sh` - Builds Docker image for snapshot sequencer
-- `./build-docker.sh` - DEPRECATED (use specific build scripts above)
+- `./build-docker.sh` - DEPRECATED
 - `./build.sh` - Builds both binary and Docker
 
 **Launch Scripts:**
-- `./start.sh` - Starts validator using docker-compose.yml (current default)
-- `./launch.sh` - Advanced launcher for docker-compose.snapshot-sequencer.yml with profiles
+- `./start.sh` - Starts validator using docker-compose.yml (consensus test mode)
+- `./launch.sh` - Primary launcher with automatic building and multiple modes
 
 ### 5. Running the Systems
 
@@ -153,10 +154,12 @@ docker-compose down
 ./launch.sh distributed --debug  # Distributed mode with Redis exposed
 ./launch.sh distributed-debug   # Alternative syntax for above
 
-./launch.sh status        # Check status of running containers
+./launch.sh status        # Shows which mode is running (distributed/sequencer)
 ./launch.sh logs          # View logs from containers
 ./launch.sh monitor       # Monitor batch preparation status
 ./launch.sh debug         # Launch single sequencer with Redis exposed
+./launch.sh stop          # Intelligently stops running services (detects mode)
+./launch.sh clean         # Remove containers and volumes (with confirmation)
 ```
 
 **Distributed Mode Configuration:**
@@ -196,10 +199,10 @@ echo "ENABLE_DEQUEUER=true" >> .env
 echo "ENABLE_FINALIZER=false" >> .env
 echo "ENABLE_CONSENSUS=false" >> .env
 echo "ENABLE_EVENT_MONITOR=false" >> .env
-echo "REDIS_HOST=redis" >> .env
+echo "REDIS_HOST=redis" >> .env  # IMPORTANT: Use 'redis' for Docker, 'localhost' for binary
 echo "BOOTSTRAP_MULTIADDR=/ip4/YOUR_IP/tcp/9100/p2p/YOUR_PEER_ID" >> .env
 
-# Launch with your custom settings
+# Launch with your custom settings (builds automatically)
 ./launch.sh sequencer-custom
 ```
 
@@ -233,6 +236,39 @@ Topic /powerloom/snapshot-submissions/all: 4 peers
 
 =================================
 ```
+
+## Managing Your Deployment
+
+### Stopping Services
+
+The `launch.sh stop` command intelligently detects which mode is running:
+
+```bash
+# Stop any running services (auto-detects mode)
+./launch.sh stop
+
+# Output varies based on what's running:
+# "Stopping distributed services..." - if distributed mode
+# "Stopping unified services..." - if unified/standalone mode  
+# "All services stopped" - when complete
+```
+
+### Cleaning Up
+
+```bash
+# Remove all containers and volumes (asks for confirmation)
+./launch.sh clean
+
+# Force cleanup without confirmation (use with caution)
+docker-compose -f docker-compose.distributed.yml down -v
+docker-compose -f docker-compose.snapshot-sequencer.yml down -v
+```
+
+### Important Notes on Redis Configuration
+
+- **For Docker deployments**: Always use `REDIS_HOST=redis`
+- **For local binary**: Use `REDIS_HOST=localhost`
+- **Why?** Docker containers communicate via service names in the Docker network
 
 ## Testing Your Deployment
 

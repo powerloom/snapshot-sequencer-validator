@@ -209,9 +209,9 @@ stop_services() {
         $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml down
     fi
     
-    # Check if regular services are running
+    # Check if unified/standalone services are running
     if $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" ps --quiet 2>/dev/null | grep -q .; then
-        print_color "$BLUE" "Stopping sequencer services..."
+        print_color "$BLUE" "Stopping unified services..."
         $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" down
     fi
     
