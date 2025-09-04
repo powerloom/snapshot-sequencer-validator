@@ -225,15 +225,25 @@ func loadRPCConfig() error {
 	// Load Powerloom Protocol Chain RPC nodes (all interactions in this component)
 	powerloomNodesStr := getEnv("POWERLOOM_RPC_NODES", "")
 	if powerloomNodesStr != "" {
-		if err := json.Unmarshal([]byte(powerloomNodesStr), &SettingsObj.RPCNodes); err != nil {
-			return fmt.Errorf("failed to parse POWERLOOM_RPC_NODES JSON: %w", err)
+		// Support comma-separated format (simplest)
+		if !strings.HasPrefix(powerloomNodesStr, "[") {
+			SettingsObj.RPCNodes = strings.Split(powerloomNodesStr, ",")
+		} else {
+			// JSON array format
+			if err := json.Unmarshal([]byte(powerloomNodesStr), &SettingsObj.RPCNodes); err != nil {
+				return fmt.Errorf("failed to parse POWERLOOM_RPC_NODES as JSON array: %w", err)
+			}
 		}
 	}
 	
 	// Load Powerloom Archive nodes (optional)
 	powerloomArchiveStr := getEnv("POWERLOOM_ARCHIVE_RPC_NODES", "")
-	if powerloomArchiveStr != "" {
-		json.Unmarshal([]byte(powerloomArchiveStr), &SettingsObj.ArchiveRPCNodes)
+	if powerloomArchiveStr != "" && powerloomArchiveStr != "[]" {
+		if !strings.HasPrefix(powerloomArchiveStr, "[") {
+			SettingsObj.ArchiveRPCNodes = strings.Split(powerloomArchiveStr, ",")
+		} else {
+			json.Unmarshal([]byte(powerloomArchiveStr), &SettingsObj.ArchiveRPCNodes)
+		}
 	}
 	
 	// Clean quotes from URLs
@@ -254,14 +264,20 @@ func loadRPCConfig() error {
 func loadDataMarkets() error {
 	dataMarketsStr := getEnv("DATA_MARKET_ADDRESSES", "")
 	
-	// Try JSON array format
-	if strings.HasPrefix(dataMarketsStr, "[") {
-		if err := json.Unmarshal([]byte(dataMarketsStr), &SettingsObj.DataMarketAddresses); err != nil {
-			return fmt.Errorf("failed to parse DATA_MARKET_ADDRESSES: %w", err)
-		}
-	} else if dataMarketsStr != "" {
-		// Try comma-separated
+	if dataMarketsStr == "" {
+		return nil
+	}
+	
+	// Support comma-separated format (simplest and most reliable)
+	// Example: 0x123...,0x456...,0x789...
+	if !strings.HasPrefix(dataMarketsStr, "[") {
 		SettingsObj.DataMarketAddresses = strings.Split(dataMarketsStr, ",")
+	} else {
+		// If it starts with [, require proper JSON with quoted strings
+		// Example: ["0x123...","0x456..."]
+		if err := json.Unmarshal([]byte(dataMarketsStr), &SettingsObj.DataMarketAddresses); err != nil {
+			return fmt.Errorf("failed to parse DATA_MARKET_ADDRESSES as JSON array (addresses must be quoted): %w", err)
+		}
 	}
 	
 	// Clean and convert to common.Address
