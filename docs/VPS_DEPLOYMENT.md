@@ -1,4 +1,7 @@
-# VPS Deployment Guide for Powerloom Decentralized Sequencer Validator 
+# VPS Deployment Guide for Powerloom Decentralized Sequencer Validator
+
+> [!IMPORTANT]
+> This guide covers deployment of the decentralized sequencer validator. Always ensure you're using the latest version and have reviewed the configuration requirements.
 
 ## Two Deployment Systems Available
 
@@ -79,12 +82,23 @@ DEQUEUER_WORKERS=5       # Worker pool size for dequeuer
 
 # RPC Configuration (Required for event monitoring and contract interactions)
 # All RPC interactions in this component are with the Powerloom protocol chain
-POWERLOOM_RPC_NODES=["http://your-rpc-endpoint:8545","http://backup-rpc:8545"]
-POWERLOOM_ARCHIVE_RPC_NODES=[]  # Optional archive nodes for historical queries
+# Option 1: Comma-separated (RECOMMENDED - simpler, no quote issues)
+POWERLOOM_RPC_NODES=http://your-rpc-endpoint:8545,http://backup-rpc:8545
+# Option 2: JSON array (must quote URLs properly)
+#POWERLOOM_RPC_NODES='["http://your-rpc-endpoint:8545","http://backup-rpc:8545"]'
+POWERLOOM_ARCHIVE_RPC_NODES=  # Optional archive nodes for historical queries
 
 # Protocol contracts (Required when event monitor is enabled)
+# The Protocol State Contract emits EpochReleased events on the Powerloom chain
 PROTOCOL_STATE_CONTRACT=0xE88E5f64AEB483d7057645326AdDFA24A3B312DF
-DATA_MARKET_ADDRESSES=["0x0C2E22fe7526fAeF28E7A58c84f8723dEFcE200c"]
+
+# Data Market Addresses
+# Option 1: Comma-separated (RECOMMENDED)
+DATA_MARKET_ADDRESSES=0x0C2E22fe7526fAeF28E7A58c84f8723dEFcE200c
+# Option 2: Multiple markets
+#DATA_MARKET_ADDRESSES=0x0C2E22fe7526fAeF28E7A58c84f8723dEFcE200c,0x21cb57C1f2352ad215a463DD867b838749CD3b8f
+# Option 3: JSON array (must quote addresses)
+#DATA_MARKET_ADDRESSES='["0x0C2E22fe7526fAeF28E7A58c84f8723dEFcE200c"]'
 
 # Batch preparation configuration
 SUBMISSION_WINDOW_DURATION=60  # Seconds after epoch release to accept submissions
@@ -102,7 +116,8 @@ MAX_CONCURRENT_WINDOWS=100     # Maximum simultaneous submission windows
 ### 4. Build and Launch Options
 
 #### Important: Automatic Building
-**Note:** The `launch.sh` script now automatically builds Docker images before starting services. You do NOT need to run build scripts separately.
+> [!NOTE]
+> The `launch.sh` script now automatically builds Docker images before starting services. You do NOT need to run build scripts separately.
 
 **Build Scripts (Optional - only if building manually):**
 - `./build-binary.sh` - Builds Go binaries
@@ -172,8 +187,9 @@ PRIVATE_KEY=your-hex-private-key
 P2P_PORT=9001
 
 # RPC Configuration (Required for event monitor)
-POWERLOOM_RPC_NODES=["http://your-rpc:8545"]
-POWERLOOM_ARCHIVE_RPC_NODES=[]
+# Use comma-separated format for simplicity
+POWERLOOM_RPC_NODES=http://your-rpc:8545,http://backup-rpc:8545
+POWERLOOM_ARCHIVE_RPC_NODES=
 
 # Scaling Configuration
 DEQUEUER_REPLICAS=3  # Number of dequeuer containers
@@ -199,7 +215,10 @@ echo "ENABLE_DEQUEUER=true" >> .env
 echo "ENABLE_FINALIZER=false" >> .env
 echo "ENABLE_CONSENSUS=false" >> .env
 echo "ENABLE_EVENT_MONITOR=false" >> .env
-echo "REDIS_HOST=redis" >> .env  # IMPORTANT: Use 'redis' for Docker, 'localhost' for binary
+echo "REDIS_HOST=redis" >> .env  # Use 'redis' for Docker, 'localhost' for binary
+
+> [!CAUTION]
+> Setting REDIS_HOST incorrectly is the most common cause of connection failures. Always use 'redis' for Docker deployments.
 echo "BOOTSTRAP_MULTIADDR=/ip4/YOUR_IP/tcp/9100/p2p/YOUR_PEER_ID" >> .env
 
 # Launch with your custom settings (builds automatically)
@@ -266,9 +285,10 @@ docker-compose -f docker-compose.snapshot-sequencer.yml down -v
 
 ### Important Notes on Redis Configuration
 
-- **For Docker deployments**: Always use `REDIS_HOST=redis`
-- **For local binary**: Use `REDIS_HOST=localhost`
-- **Why?** Docker containers communicate via service names in the Docker network
+> [!IMPORTANT]
+> - **For Docker deployments**: Always use `REDIS_HOST=redis`
+> - **For local binary**: Use `REDIS_HOST=localhost`
+> - **Why?** Docker containers communicate via service names in the Docker network
 
 ## Testing Your Deployment
 
@@ -303,7 +323,10 @@ Your local collector should publish to epoch 0 topic:
 
 #### Available Monitoring Tools
 
-##### Option A: Using launch.sh monitor (Recommended)
+##### Option A: Using launch.sh monitor
+
+> [!TIP]
+> This is the recommended monitoring method as it works without exposing Redis ports.
 ```bash
 ./launch.sh monitor
 
@@ -447,6 +470,67 @@ ufw allow 9001/tcp  # Or your configured P2P_PORT
 
 # Metrics/API
 ufw allow 8001/tcp  # Or your configured METRICS_PORT
+```
+
+## Troubleshooting Common Issues
+
+### Event Monitor Not Scanning for EpochReleased Events
+
+**Symptom:** No submission windows being created, monitor shows "None active"
+
+**Solution:**
+```bash
+# Pull latest code with the fix
+git pull
+
+# Restart (launch.sh automatically rebuilds)
+./launch.sh stop
+./launch.sh distributed
+
+# Verify Event Monitor is running
+docker logs -f snapshot-sequencer-validator-event-monitor-1
+# Should see: "🔍 Starting event monitor for EpochReleased events"
+```
+
+### JSON Array Parsing Errors
+
+**Symptom:** "invalid character 'x' after array element" in logs
+
+**Solution:** Use comma-separated format in .env:
+```bash
+# WRONG - causes parsing errors:
+DATA_MARKET_ADDRESSES=["0x21cb57C1f2352ad215a463DD867b838749CD3b8f"]
+
+# CORRECT - simple comma-separated:
+DATA_MARKET_ADDRESSES=0x21cb57C1f2352ad215a463DD867b838749CD3b8f,0x123...
+POWERLOOM_RPC_NODES=http://rpc1.com,http://rpc2.com
+```
+
+### Redis Connection Failed
+
+**Symptom:** "dial tcp 127.0.0.1:6379: connection refused"
+
+**Solution:** Ensure REDIS_HOST=redis in .env:
+```bash
+REDIS_HOST=redis  # MUST be 'redis' for distributed mode
+
+# Restart with fresh build
+./launch.sh stop
+./launch.sh distributed
+```
+
+### Viewing All Container Logs
+
+**Issue:** `./launch.sh logs` only shows Redis logs
+
+**Solution:** After running distributed mode:
+```bash
+# View all containers
+docker-compose -f docker-compose.distributed.yml logs -f
+
+# View specific service
+docker-compose -f docker-compose.distributed.yml logs -f listener
+docker-compose -f docker-compose.distributed.yml logs -f event-monitor
 ```
 
 ## Monitoring
