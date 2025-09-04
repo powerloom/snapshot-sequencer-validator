@@ -245,10 +245,25 @@ clean_all() {
 # Function to show logs
 show_logs() {
     service=$1
-    if [ -z "$service" ]; then
-        $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" logs -f
+    
+    # Check which mode is running and use appropriate compose file
+    if $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml ps --quiet 2>/dev/null | grep -q .; then
+        # Distributed mode is running
+        if [ -z "$service" ]; then
+            print_color "$BLUE" "Streaming logs from distributed mode containers..."
+            $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml logs -f
+        else
+            $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml logs -f "$service"
+        fi
+    elif $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" ps --quiet 2>/dev/null | grep -q .; then
+        # Unified mode is running
+        if [ -z "$service" ]; then
+            $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" logs -f
+        else
+            $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" logs -f "$service"
+        fi
     else
-        $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" logs -f "$service"
+        print_color "$YELLOW" "No services are currently running"
     fi
 }
 

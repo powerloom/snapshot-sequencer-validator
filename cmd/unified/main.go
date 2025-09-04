@@ -400,6 +400,16 @@ func (s *UnifiedSequencer) Start() {
 		}()
 	}
 	
+	// Start event monitor component
+	if s.enableEventMonitor && s.eventMonitor != nil {
+		log.Info("Starting Event Monitor component...")
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			s.runEventMonitor()
+		}()
+	}
+	
 	log.Info("All enabled components started successfully")
 }
 
