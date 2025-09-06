@@ -316,6 +316,7 @@ func main() {
 		monitorCfg := &eventmonitor.Config{
 			RPCHelper:       rpcHelper,
 			ContractAddress: cfg.ProtocolStateContract,
+			ContractABIPath: cfg.ContractABIPath,
 			RedisClient:     redisClient,
 			WindowDuration:  120 * time.Second, // Default 120 seconds from contract
 			StartBlock:      cfg.EventStartBlock,

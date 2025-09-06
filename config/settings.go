@@ -61,6 +61,7 @@ type Settings struct {
 	EventStartBlock     uint64
 	EventBlockBatchSize uint64
 	BlockFetchTimeout   time.Duration
+	ContractABIPath     string
 	
 	// Identity & Verification  
 	// Snapshotter identities managed by protocol state contract only
@@ -148,6 +149,7 @@ func LoadConfig() error {
 		EventStartBlock:     uint64(getEnvAsInt("EVENT_START_BLOCK", 0)),
 		EventBlockBatchSize: uint64(getEnvAsInt("EVENT_BLOCK_BATCH_SIZE", 1000)),
 		BlockFetchTimeout:   time.Duration(getEnvAsInt("BLOCK_FETCH_TIMEOUT", 30)) * time.Second,
+		ContractABIPath:     getEnv("CONTRACT_ABI_PATH", "./abi/ProtocolContract.json"),
 		
 		// Identity & Verification
 		SkipIdentityVerification: getBoolEnv("SKIP_IDENTITY_VERIFICATION", false),

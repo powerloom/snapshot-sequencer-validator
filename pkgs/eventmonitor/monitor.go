@@ -11,6 +11,7 @@ import (
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-redis/redis/v8"
 	rpchelper "github.com/powerloom/go-rpc-helper"
 	log "github.com/sirupsen/logrus"
@@ -21,6 +22,7 @@ type EventMonitor struct {
 	rpcHelper       *rpchelper.RPCHelper
 	redisClient     *redis.Client
 	contractAddr    common.Address
+	contractABI     *ContractABI
 	
 	// Window management
 	windowManager   *WindowManager
@@ -74,6 +76,7 @@ type EpochWindow struct {
 type Config struct {
 	RPCHelper        *rpchelper.RPCHelper
 	ContractAddress  string
+	ContractABIPath  string   // Path to the contract ABI JSON file
 	RedisClient      *redis.Client
 	WindowDuration   time.Duration // Default window duration
 	StartBlock       uint64
@@ -86,6 +89,22 @@ type Config struct {
 func NewEventMonitor(cfg *Config) (*EventMonitor, error) {
 	if cfg.RPCHelper == nil {
 		return nil, fmt.Errorf("RPC helper is required")
+	}
+	
+	// Load the contract ABI
+	var contractABI *ContractABI
+	if cfg.ContractABIPath != "" {
+		abi, err := LoadContractABI(cfg.ContractABIPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load contract ABI: %w", err)
+		}
+		contractABI = abi
+		log.Infof("✅ Loaded contract ABI from %s", cfg.ContractABIPath)
+		
+		// Verify the ABI has the EpochReleased event
+		if !contractABI.HasEvent("EpochReleased") {
+			return nil, fmt.Errorf("ABI does not contain EpochReleased event")
+		}
 	}
 	
 	ctx, cancel := context.WithCancel(context.Background())
@@ -102,6 +121,7 @@ func NewEventMonitor(cfg *Config) (*EventMonitor, error) {
 		rpcHelper:          cfg.RPCHelper,
 		redisClient:        cfg.RedisClient,
 		contractAddr:       common.HexToAddress(cfg.ContractAddress),
+		contractABI:        contractABI,
 		windowManager:      windowManager,
 		windowDuration:     cfg.WindowDuration,
 		lastProcessedBlock: cfg.StartBlock,
@@ -168,9 +188,21 @@ func (m *EventMonitor) checkForNewEvents() {
 		toBlock = currentBlock
 	}
 	
-	// Create filter query for EpochReleased events
-	// TODO: Replace with actual event signature from contract ABI
-	epochReleasedSig := common.HexToHash("0x...") // Placeholder - need actual signature
+	// Get event signature from ABI if available, otherwise use hardcoded
+	var epochReleasedSig common.Hash
+	if m.contractABI != nil {
+		sig, err := m.contractABI.GetEventHash("EpochReleased")
+		if err != nil {
+			log.Errorf("Failed to get EpochReleased event hash from ABI: %v", err)
+			return
+		}
+		epochReleasedSig = sig
+		log.Debugf("Using ABI-derived EpochReleased event signature: %s", epochReleasedSig.Hex())
+	} else {
+		// Fallback to hardcoded signature for backward compatibility
+		epochReleasedSig = getEpochReleasedEventSignature()
+		log.Debugf("Using hardcoded EpochReleased event signature: %s", epochReleasedSig.Hex())
+	}
 	
 	query := ethereum.FilterQuery{
 		FromBlock: big.NewInt(int64(m.lastProcessedBlock + 1)),
@@ -200,19 +232,42 @@ func (m *EventMonitor) checkForNewEvents() {
 
 // parseEpochReleasedEvent parses the log into an EpochReleasedEvent
 func (m *EventMonitor) parseEpochReleasedEvent(vLog types.Log) *EpochReleasedEvent {
-	// TODO: Implement actual parsing based on contract ABI
-	// This is a placeholder - need to parse topics and data
+	// Event: EpochReleased(address indexed dataMarketAddress, uint256 indexed epochId, uint256 begin, uint256 end, uint256 timestamp)
+	// topics[0] = event signature
+	// topics[1] = dataMarketAddress (indexed)
+	// topics[2] = epochId (indexed)
+	// data contains: begin, end, timestamp (non-indexed)
 	
 	if len(vLog.Topics) < 3 {
+		log.Warnf("Invalid EpochReleased event: expected at least 3 topics, got %d", len(vLog.Topics))
 		return nil
 	}
 	
+	// Parse indexed fields from topics
+	dataMarketAddress := common.HexToAddress(vLog.Topics[1].Hex())
+	epochID := new(big.Int).SetBytes(vLog.Topics[2].Bytes())
+	
+	// Parse non-indexed fields from data
+	// The data contains: begin (uint256), end (uint256), timestamp (uint256)
+	if len(vLog.Data) < 96 { // 3 * 32 bytes
+		log.Warnf("Invalid EpochReleased event data: expected at least 96 bytes, got %d", len(vLog.Data))
+		return nil
+	}
+	
+	// Each uint256 is 32 bytes
+	// begin := new(big.Int).SetBytes(vLog.Data[0:32])  // Not needed for our purposes
+	// end := new(big.Int).SetBytes(vLog.Data[32:64])   // Not needed for our purposes
+	timestamp := new(big.Int).SetBytes(vLog.Data[64:96])
+	
+	log.Debugf("Parsed EpochReleased event: DataMarket=%s, EpochID=%s, Timestamp=%s",
+		dataMarketAddress.Hex(), epochID.String(), timestamp.String())
+	
 	return &EpochReleasedEvent{
-		EpochID:           big.NewInt(0), // Parse from topics[1]
-		DataMarketAddress: common.HexToAddress("0x0"), // Parse from topics[2]
+		EpochID:           epochID,
+		DataMarketAddress: dataMarketAddress,
 		BlockNumber:       vLog.BlockNumber,
 		TransactionHash:   vLog.TxHash,
-		Timestamp:         uint64(time.Now().Unix()),
+		Timestamp:         timestamp.Uint64(),
 	}
 }
 
@@ -224,6 +279,24 @@ func (m *EventMonitor) isValidDataMarket(address string) bool {
 		}
 	}
 	return false
+}
+
+// getEpochReleasedEventSignature computes the keccak256 hash of the event signature
+func getEpochReleasedEventSignature() common.Hash {
+	// Event signature: EpochReleased(address,uint256,uint256,uint256,uint256)
+	// This matches the event definition:
+	// event EpochReleased(
+	//     address indexed dataMarketAddress,
+	//     uint256 indexed epochId,
+	//     uint256 begin,
+	//     uint256 end,
+	//     uint256 timestamp
+	// );
+	eventSignature := []byte("EpochReleased(address,uint256,uint256,uint256,uint256)")
+	hash := crypto.Keccak256Hash(eventSignature)
+	
+	log.Debugf("Computed EpochReleased event signature: %s", hash.Hex())
+	return hash
 }
 
 // processEvents handles incoming epoch events
