@@ -38,8 +38,12 @@ WORKDIR /app
 COPY --from=builder /app/bin/unified /usr/local/bin/unified
 COPY --from=builder /app/bin/sequencer-consensus-test /usr/local/bin/sequencer-consensus-test
 
-# Make binaries executable
-RUN chmod +x /usr/local/bin/unified /usr/local/bin/sequencer-consensus-test
+# Copy ABI files
+COPY --from=builder /app/abi /app/abi
+
+# Make binaries executable and set proper ownership
+RUN chmod +x /usr/local/bin/unified /usr/local/bin/sequencer-consensus-test && \
+    chown -R sequencer:sequencer /app/abi
 
 # Switch to non-root user
 USER sequencer

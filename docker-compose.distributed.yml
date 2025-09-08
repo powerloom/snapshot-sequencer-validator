@@ -124,6 +124,8 @@ services:
       # Contract addresses
       - PROTOCOL_STATE_CONTRACT=${PROTOCOL_STATE_CONTRACT}
       - DATA_MARKET_ADDRESSES=${DATA_MARKET_ADDRESSES}
+      # Contract ABI path
+      - CONTRACT_ABI_PATH=${CONTRACT_ABI_PATH:-./abi/ProtocolContract.json}
       # Event monitoring config
       - EVENT_POLL_INTERVAL=${EVENT_POLL_INTERVAL:-12}
       - EVENT_START_BLOCK=${EVENT_START_BLOCK:-0}

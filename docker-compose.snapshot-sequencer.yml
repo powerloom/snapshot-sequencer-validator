@@ -34,7 +34,9 @@ services:
       - ENABLE_DEQUEUER=${ENABLE_DEQUEUER:-true}
       - ENABLE_FINALIZER=${ENABLE_FINALIZER:-false}
       - ENABLE_CONSENSUS=${ENABLE_CONSENSUS:-false}
+      - ENABLE_EVENT_MONITOR=${ENABLE_EVENT_MONITOR:-false}
       # Configuration
+      - CONTRACT_ABI_PATH=${CONTRACT_ABI_PATH:-./abi/ProtocolContract.json}
       - DEQUEUER_WORKERS=${DEQUEUER_WORKERS:-5}
       - PRIVATE_KEY=${PRIVATE_KEY}
     depends_on:
@@ -65,7 +67,9 @@ services:
       - ENABLE_DEQUEUER=true
       - ENABLE_FINALIZER=true
       - ENABLE_CONSENSUS=true
+      - ENABLE_EVENT_MONITOR=false
       # Configuration
+      - CONTRACT_ABI_PATH=./abi/ProtocolContract.json
       - DEQUEUER_WORKERS=10
       - PRIVATE_KEY=${PRIVATE_KEY_ALL}
     depends_on:

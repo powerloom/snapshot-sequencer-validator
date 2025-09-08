@@ -92,6 +92,10 @@ POWERLOOM_ARCHIVE_RPC_NODES=  # Optional archive nodes for historical queries
 # The Protocol State Contract emits EpochReleased events on the Powerloom chain
 PROTOCOL_STATE_CONTRACT=0xE88E5f64AEB483d7057645326AdDFA24A3B312DF
 
+# Contract ABI path (for parsing EpochReleased events)
+# Default: ./abi/ProtocolContract.json (included in Docker image)
+CONTRACT_ABI_PATH=./abi/ProtocolContract.json
+
 # Data Market Addresses
 # Option 1: Comma-separated (RECOMMENDED)
 DATA_MARKET_ADDRESSES=0x0C2E22fe7526fAeF28E7A58c84f8723dEFcE200c
