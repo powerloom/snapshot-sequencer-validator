@@ -59,6 +59,7 @@ type WindowManager struct {
 	maxWindows      int
 	redisClient     *redis.Client
 	protocolState   string // Protocol state contract address for namespacing
+	finalizationBatchSize int // Number of projects per finalization batch
 }
 
 // EpochWindow represents an active submission window
@@ -84,6 +85,7 @@ type Config struct {
 	PollInterval     time.Duration
 	DataMarkets      []string // Data market addresses to monitor
 	MaxWindows       int      // Max concurrent submission windows
+	FinalizationBatchSize int  // Number of projects per finalization batch
 }
 
 // NewEventMonitor creates a new event monitor
@@ -146,6 +148,7 @@ func NewEventMonitor(cfg *Config) (*EventMonitor, error) {
 		maxWindows:      cfg.MaxWindows,
 		redisClient:     cfg.RedisClient,
 		protocolState:   cfg.ContractAddress, // Use protocol state for namespacing
+		finalizationBatchSize: cfg.FinalizationBatchSize,
 	}
 	
 	return &EventMonitor{
@@ -470,29 +473,74 @@ func (wm *WindowManager) triggerFinalization(dataMarket string, epochID *big.Int
 	// First, collect all submissions for this epoch from Redis
 	submissions := wm.collectEpochSubmissions(dataMarket, epochID)
 	
-	// Push to finalization queue with submission data (namespaced)
-	finalizationData := map[string]interface{}{
-		"protocol_state":   wm.protocolState,
-		"data_market":      dataMarket,
-		"epoch_id":         epochID.String(),
-		"closed_at":        time.Now().Unix(),
-		"start_block":      startBlock,
-		"trigger":          "window_timeout",
-		"submission_count": len(submissions),
+	// Split submissions into smaller batches for parallel processing
+	batchSize := wm.finalizationBatchSize
+	if batchSize <= 0 {
+		batchSize = 20 // Default fallback
+	}
+	batches := wm.splitIntoBatches(submissions, batchSize)
+	
+	// Track batch metadata in Redis for aggregation worker
+	ctx := context.Background()
+	batchMetaKey := fmt.Sprintf("%s:%s:epoch:%s:batch:meta", 
+		wm.protocolState, dataMarket, epochID.String())
+	
+	batchMeta := map[string]interface{}{
+		"epoch_id":     epochID.String(),
+		"total_batches": len(batches),
+		"total_projects": len(submissions),
+		"created_at":   time.Now().Unix(),
+		"data_market":  dataMarket,
 	}
 	
-	// Use namespaced finalization queue
-	// Format: {protocol}:{market}:finalizationQueue
+	metaData, _ := json.Marshal(batchMeta)
+	wm.redisClient.Set(ctx, batchMetaKey, metaData, 2*time.Hour)
+	
+	// Push each batch to finalization queue
 	queueKey := fmt.Sprintf("%s:%s:finalizationQueue", wm.protocolState, dataMarket)
 	
-	data, _ := json.Marshal(finalizationData)
-	if err := wm.redisClient.LPush(context.Background(), queueKey, data).Err(); err != nil {
-		log.Errorf("Failed to trigger finalization: %v", err)
-		return
+	for i, batch := range batches {
+		batchData := map[string]interface{}{
+			"epoch_id":    epochID.String(),
+			"batch_id":    i,
+			"total_batches": len(batches),
+			"projects":    batch,
+			"data_market": dataMarket,
+		}
+		
+		data, _ := json.Marshal(batchData)
+		if err := wm.redisClient.LPush(ctx, queueKey, data).Err(); err != nil {
+			log.Errorf("Failed to push batch %d to finalization queue: %v", i, err)
+			continue
+		}
 	}
 	
-	log.Infof("🎯 Triggered finalization for epoch %s in market %s (collected %d submissions)", 
-		epochID, dataMarket, len(submissions))
+	log.Infof("🎯 Split epoch %s into %d batches (%d projects total, batch size %d) for parallel finalization", 
+		epochID, len(batches), len(submissions), batchSize)
+}
+
+func (wm *WindowManager) splitIntoBatches(submissions map[string]interface{}, batchSize int) []map[string]interface{} {
+	var batches []map[string]interface{}
+	currentBatch := make(map[string]interface{})
+	count := 0
+	
+	for projectID, submissionData := range submissions {
+		currentBatch[projectID] = submissionData
+		count++
+		
+		if count >= batchSize {
+			batches = append(batches, currentBatch)
+			currentBatch = make(map[string]interface{})
+			count = 0
+		}
+	}
+	
+	// Add remaining projects as final batch
+	if len(currentBatch) > 0 {
+		batches = append(batches, currentBatch)
+	}
+	
+	return batches
 }
 
 // collectEpochSubmissions retrieves all processed submissions for an epoch
@@ -513,8 +561,9 @@ func (wm *WindowManager) collectEpochSubmissions(dataMarket string, epochID *big
 		return make(map[string]interface{})
 	}
 	
-	// Map to store project ID -> CID mappings
-	projectSubmissions := make(map[string]interface{})
+	// Track CIDs per project with vote counts
+	// Structure: map[projectID]map[CID]count
+	projectVotes := make(map[string]map[string]int)
 	
 	for _, submissionID := range submissionIDs {
 		// Get the processed submission data
@@ -537,15 +586,43 @@ func (wm *WindowManager) collectEpochSubmissions(dataMarket string, epochID *big
 			// Extract project ID and CID
 			if subData, ok := submission["submission"].(map[string]interface{}); ok {
 				if request, ok := subData["request"].(map[string]interface{}); ok {
-					projectID := request["projectId"]
-					snapshotCID := request["snapshotCid"]
-					
-					if projectID != nil && snapshotCID != nil {
-						// Store mapping (could have multiple submissions per project)
-						projectSubmissions[projectID.(string)] = snapshotCID
+					if projectID, ok := request["projectId"].(string); ok {
+						if snapshotCID, ok := request["snapshotCid"].(string); ok {
+							// Initialize project votes map if needed
+							if projectVotes[projectID] == nil {
+								projectVotes[projectID] = make(map[string]int)
+							}
+							// Increment vote count for this CID
+							projectVotes[projectID][snapshotCID]++
+						}
 					}
 				}
 			}
+		}
+	}
+	
+	// Select winning CID for each project (highest vote count)
+	projectSubmissions := make(map[string]interface{})
+	for projectID, cidVotes := range projectVotes {
+		var winningCID string
+		maxVotes := 0
+		
+		for cid, votes := range cidVotes {
+			if votes > maxVotes {
+				maxVotes = votes
+				winningCID = cid
+			}
+		}
+		
+		if winningCID != "" {
+			// Store winning CID with vote metadata
+			projectSubmissions[projectID] = map[string]interface{}{
+				"cid": winningCID,
+				"votes": maxVotes,
+				"totalSubmissions": len(cidVotes),
+			}
+			log.Debugf("Project %s: Winner CID %s with %d votes (out of %d unique CIDs)", 
+				projectID, winningCID, maxVotes, len(cidVotes))
 		}
 	}
 	
@@ -556,7 +633,7 @@ func (wm *WindowManager) collectEpochSubmissions(dataMarket string, epochID *big
 	batchData, _ := json.Marshal(projectSubmissions)
 	wm.redisClient.Set(ctx, batchKey, batchData, 1*time.Hour)
 	
-	log.Infof("📦 Collected %d unique project submissions for epoch %s", 
+	log.Infof("📦 Collected %d unique projects for epoch %s (after consensus)", 
 		len(projectSubmissions), epochID)
 	
 	return projectSubmissions

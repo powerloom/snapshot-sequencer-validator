@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -718,42 +719,208 @@ func (s *UnifiedSequencer) runDequeuerWorker(workerID int) {
 			submissionData := []byte(result[1])
 			
 			// Parse submission to extract details
-			var submission map[string]interface{}
+			var submission submissions.SnapshotSubmission
 			if err := json.Unmarshal(submissionData, &submission); err != nil {
 				log.Errorf("Worker %d: Failed to parse submission: %v", workerID, err)
 				log.Debugf("Worker %d: Raw submission data: %s", workerID, string(submissionData[:min(200, len(submissionData))]))
-			} else {
-				// Extract key fields for logging
-				epochID, _ := submission["epochId"]
-				projectID, _ := submission["projectId"]
-				slotID, _ := submission["slotId"]
-				dataMarket, _ := submission["dataMarket"]
-				submitterAddr, _ := submission["submitter"]
-				
-				log.Infof("Worker %d processing: Epoch=%v, Project=%v, Slot=%v, Market=%v, Submitter=%v",
-					workerID, epochID, projectID, slotID, dataMarket, submitterAddr)
+				continue
 			}
 			
-			// Processing logic here
-			// TODO: Add actual validation and batch preparation
+			// Generate submission ID
+			submissionID := fmt.Sprintf("%d-%s-%d-%s", 
+				submission.Request.EpochId, 
+				submission.Request.ProjectId,
+				submission.Request.SlotId,
+				submission.Request.SnapshotCid)
+			
+			// Log processing
+			log.Infof("Worker %d processing: Epoch=%d, Project=%s, Slot=%d, Market=%s, CID=%s",
+				workerID, submission.Request.EpochId, submission.Request.ProjectId, 
+				submission.Request.SlotId, submission.DataMarket, submission.Request.SnapshotCid)
+			
+			// Process and store the submission
+			if s.dequeuer != nil {
+				if err := s.dequeuer.ProcessSubmission(&submission, submissionID); err != nil {
+					log.Errorf("Worker %d: Failed to process submission %s: %v", workerID, submissionID, err)
+				} else {
+					log.Debugf("Worker %d: Successfully processed and stored submission %s", workerID, submissionID)
+				}
+			} else {
+				log.Warnf("Worker %d: Dequeuer not initialized, skipping storage", workerID)
+			}
 		}
 	}
 }
 
 func (s *UnifiedSequencer) runFinalizer() {
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
+	log.Info("Finalizer started")
+	
+	// Get protocol state and data market from config
+	protocolState := s.config.ProtocolStateContract
+	dataMarket := ""
+	if len(s.config.DataMarketAddresses) > 0 {
+		dataMarket = s.config.DataMarketAddresses[0]
+	}
+	
+	// Finalization queue key
+	queueKey := fmt.Sprintf("%s:%s:finalizationQueue", protocolState, dataMarket)
 	
 	for {
 		select {
-		case <-ticker.C:
-			log.Info("Finalizer: Checking for submissions to finalize...")
-			// Finalization logic here
 		case <-s.ctx.Done():
 			log.Info("Finalizer shutting down")
 			return
+		default:
+			// Pop from finalization queue with blocking timeout
+			result, err := s.redisClient.BRPop(s.ctx, 5*time.Second, queueKey).Result()
+			if err != nil {
+				if err == redis.Nil {
+					continue // Queue empty, wait
+				}
+				log.Errorf("Finalizer: Error popping from queue: %v", err)
+				time.Sleep(1 * time.Second)
+				continue
+			}
+			
+			if len(result) < 2 {
+				continue
+			}
+			
+			// Parse epoch ID
+			epochID, err := strconv.ParseUint(result[1], 10, 64)
+			if err != nil {
+				log.Errorf("Finalizer: Failed to parse epoch ID %s: %v", result[1], err)
+				continue
+			}
+			
+			// Process the finalization
+			s.processBatchFinalization(epochID)
 		}
 	}
+}
+
+func (s *UnifiedSequencer) processBatchFinalization(epochID uint64) {
+	ctx := context.Background()
+	
+	// Get protocol state and data market from config
+	protocolState := s.config.ProtocolStateContract
+	dataMarket := ""
+	if len(s.config.DataMarketAddresses) > 0 {
+		dataMarket = s.config.DataMarketAddresses[0]
+	}
+	
+	// Get ready batch for this epoch
+	batchKey := fmt.Sprintf("%s:%s:batch:ready:%d", protocolState, dataMarket, epochID)
+	batchData, err := s.redisClient.Get(ctx, batchKey).Result()
+	if err != nil {
+		if err == redis.Nil {
+			log.Warnf("Finalizer: No ready batch found for epoch %d", epochID)
+		} else {
+			log.Errorf("Finalizer: Failed to get batch for epoch %d: %v", epochID, err)
+		}
+		return
+	}
+	
+	// Parse batch data
+	var projectSubmissions map[string]interface{}
+	if err := json.Unmarshal([]byte(batchData), &projectSubmissions); err != nil {
+		log.Errorf("Finalizer: Failed to parse batch data for epoch %d: %v", epochID, err)
+		return
+	}
+	
+	// Create finalized batch (actual merkle tree and signing)
+	if err := s.createFinalizedBatch(epochID, projectSubmissions); err != nil {
+		log.Errorf("Finalizer: Failed to create finalized batch for epoch %d: %v", epochID, err)
+		return
+	}
+	
+	// Clean up ready batch
+	s.redisClient.Del(ctx, batchKey)
+	
+	log.Infof("✅ Finalizer: Successfully finalized batch for epoch %d with %d projects", 
+		epochID, len(projectSubmissions))
+}
+
+func (s *UnifiedSequencer) createFinalizedBatch(epochID uint64, projectSubmissions map[string]interface{}) error {
+	ctx := context.Background()
+	
+	// Extract project IDs and CIDs
+	projectIDs := make([]string, 0)
+	snapshotCIDs := make([]string, 0) 
+	projectVotes := make(map[string]uint32)
+	
+	for projectID, submissionData := range projectSubmissions {
+		// Handle the new structure with vote metadata
+		if dataMap, ok := submissionData.(map[string]interface{}); ok {
+			if cid, ok := dataMap["cid"].(string); ok {
+				projectIDs = append(projectIDs, projectID)
+				snapshotCIDs = append(snapshotCIDs, cid)
+				
+				// Extract vote count
+				if votes, ok := dataMap["votes"].(float64); ok {
+					projectVotes[projectID] = uint32(votes)
+				}
+			}
+		} else if cid, ok := submissionData.(string); ok {
+			// Fallback for old format (direct CID string)
+			projectIDs = append(projectIDs, projectID)
+			snapshotCIDs = append(snapshotCIDs, cid)
+			projectVotes[projectID] = 1 // Default to 1 vote
+		}
+	}
+	
+	if len(projectIDs) == 0 {
+		return fmt.Errorf("no valid projects in batch")
+	}
+	
+	// TODO: Implement actual merkle tree calculation
+	// For now, simple hash concatenation
+	combined := ""
+	for i := range projectIDs {
+		combined += projectIDs[i] + ":" + snapshotCIDs[i] + ","
+	}
+	hash := sha256.Sum256([]byte(combined))
+	merkleRoot := hash[:]
+	
+	// TODO: Implement actual BLS signing
+	// For now, placeholder signature
+	sigData := fmt.Sprintf("%d:%s:%s", epochID, merkleRoot, s.sequencerID)
+	sigHash := sha256.Sum256([]byte(sigData))
+	blsSignature := sigHash[:]
+	
+	finalizedBatch := &consensus.FinalizedBatch{
+		EpochId:      epochID,
+		ProjectIds:   projectIDs,
+		SnapshotCids: snapshotCIDs,
+		MerkleRoot:   merkleRoot,
+		BlsSignature: blsSignature,
+		SequencerId:  s.sequencerID,
+		Timestamp:    uint64(time.Now().Unix()),
+		ProjectVotes: projectVotes,
+	}
+	
+	// Store finalized batch in Redis
+	protocolState := s.config.ProtocolStateContract
+	dataMarket := ""
+	if len(s.config.DataMarketAddresses) > 0 {
+		dataMarket = s.config.DataMarketAddresses[0]
+	}
+	finalizedKey := fmt.Sprintf("%s:%s:finalized:%d", protocolState, dataMarket, epochID)
+	
+	finalizedData, err := json.Marshal(finalizedBatch)
+	if err != nil {
+		return fmt.Errorf("failed to marshal finalized batch: %w", err)
+	}
+	
+	// Store with TTL
+	if err := s.redisClient.Set(ctx, finalizedKey, finalizedData, 24*time.Hour).Err(); err != nil {
+		return fmt.Errorf("failed to store finalized batch: %w", err)
+	}
+	
+	log.Infof("📦 Created finalized batch for epoch %d: %d projects, merkle=%s", 
+		epochID, len(projectIDs), hex.EncodeToString(merkleRoot[:8]))
+	
+	return nil
 }
 
 func (s *UnifiedSequencer) runConsensus() {

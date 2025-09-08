@@ -199,6 +199,7 @@ The `launch.sh` script is the primary tool for managing your sequencer deploymen
 ./launch.sh clean --force
 
 # Monitor batch preparation status
+# Comprehensive pipeline monitoringn./launch.sh pipeline
 ./launch.sh monitor
 
 # View usage help
@@ -281,6 +282,9 @@ Monitor batch preparation and submission windows:
 ```bash
 # Quick monitoring via launch.sh
 ./launch.sh monitor
+
+# Comprehensive pipeline monitoring
+./launch.sh pipeline
 ```
 
 The monitor now correctly:
@@ -288,6 +292,15 @@ The monitor now correctly:
 - Falls back to dequeuer, then any sequencer container
 - Shows active submission windows with TTL
 - Displays ready batches and pending submissions
+
+**Comprehensive Pipeline Monitoring**
+The new `pipeline` command provides a detailed view of the entire submission and batch processing pipeline:
+- Current submission window status
+- Detailed pipeline stage metrics
+- Dequeuer worker health
+- Redis queue depths
+- Finalizer readiness
+- Consensus vote tracking
 
 **Example output:**
 ```
@@ -299,7 +312,25 @@ The monitor now correctly:
 
 ⏳ Pending Submissions:
   Count: 5
+
+🔄 Pipeline Stages:
+  Listener: ✅ Active (95% health)
+  Dequeuer: ✅ Processing (5/5 workers)
+  Finalizer: ⏳ Pending
+  Consensus: ⏳ Initializing
 ```
+
+The `pipeline` command leverages new monitoring utilities in `pkgs/workers/monitoring.go` to provide a comprehensive view of the entire batch processing workflow.
+
+📚 **For detailed monitoring documentation, see [MONITORING_GUIDE.md](./MONITORING_GUIDE.md)**
+
+The comprehensive monitoring guide covers:
+- All 5 pipeline stages in detail (submission → splitting → finalization → aggregation → output)
+- Redis key structures and data flow
+- Worker monitoring integration with code examples
+- Performance optimization and batch size tuning
+- Troubleshooting procedures and health indicators
+- Advanced monitoring queries and metrics collection
 
 ### Component Log Shortcuts
 
@@ -711,6 +742,7 @@ screen -S sequencer
 - ✅ Enhanced dequeuer logging with detailed submission information (Epoch, Project, Slot, Market, Submitter)
 - ✅ Fixed monitor script to prioritize containers with Redis access
 - ✅ SUBMISSION_WINDOW_DURATION now properly overrides contract values for testing flexibility
+- ✅ Added `pipeline` command for comprehensive pipeline monitoring in `pkgs/workers/monitoring.go`
 
 ### Configuration Changes
 - `SUBMISSION_WINDOW_DURATION` must be passed to event-monitor and finalizer containers in docker-compose.distributed.yml

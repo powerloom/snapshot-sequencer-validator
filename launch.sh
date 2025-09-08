@@ -45,6 +45,7 @@ show_usage() {
     echo "  redis-logs    - Show Redis logs"
     echo "  status        - Show status of all services"
     echo "  monitor       - Monitor batch preparation status"
+    echo "  pipeline      - Comprehensive pipeline monitoring (all stages)"
     echo "  debug         - Launch with Redis port exposed for debugging"
     echo ""
     echo "Options:"
@@ -532,6 +533,11 @@ case $COMMAND in
                 print_color "$YELLOW" "No Redis service is currently running"
             fi
         fi
+        ;;
+    pipeline)
+        # Comprehensive pipeline monitoring
+        print_color "$CYAN" "🔍 Launching Comprehensive Pipeline Monitor..."
+        ./scripts/monitor_pipeline.sh
         ;;
     debug)
         launch_debug
