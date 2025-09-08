@@ -95,6 +95,28 @@ check_env_config() {
     fi
 }
 
+# Function to check if distributed mode is running
+is_distributed_mode() {
+    # Check if distributed containers are running
+    if $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml ps --services 2>/dev/null | grep -q listener; then
+        return 0  # true - distributed mode is running
+    else
+        return 1  # false - distributed mode is not running
+    fi
+}
+
+# Function to detect which mode is currently running
+detect_running_mode() {
+    # Check for distributed mode first
+    if $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml ps --services 2>/dev/null | grep -q listener; then
+        echo "docker-compose.distributed.yml"
+    elif $DOCKER_COMPOSE_CMD -f docker-compose.snapshot-sequencer.yml ps --services 2>/dev/null | grep -q sequencer; then
+        echo "docker-compose.snapshot-sequencer.yml"
+    else
+        echo ""
+    fi
+}
+
 # Function to launch sequencer mode
 launch_sequencer() {
     print_color "$BLUE" "Launching snapshot sequencer (all-in-one)..."
@@ -277,22 +299,24 @@ show_logs() {
 monitor_batches() {
     print_color "$BLUE" "Monitoring Batch Preparation Status..."
     
-    # Try to find event-monitor container first (has Redis access), then fall back to others
-    CONTAINER=$(docker ps --filter "name=event-monitor" --format "{{.Names}}" | head -1)
-    
-    if [ -z "$CONTAINER" ]; then
-        # Fall back to dequeuer container
-        CONTAINER=$(docker ps --filter "name=dequeuer" --format "{{.Names}}" | head -1)
-    fi
-    
-    if [ -z "$CONTAINER" ]; then
-        # Fall back to any sequencer container
+    # Detect the correct container name based on running mode
+    if is_distributed_mode; then
+        # For distributed mode, try event-monitor first, then other services
+        CONTAINER=$(docker ps --filter "name=event-monitor" --format "{{.Names}}" | head -1)
+        if [ -z "$CONTAINER" ]; then
+            CONTAINER=$(docker ps --filter "name=dequeuer" --format "{{.Names}}" | head -1)
+        fi
+        if [ -z "$CONTAINER" ]; then
+            CONTAINER=$(docker ps --filter "name=listener" --format "{{.Names}}" | head -1)
+        fi
+    else
+        # For sequencer mode
         CONTAINER=$(docker ps --filter "name=sequencer" --format "{{.Names}}" | head -1)
     fi
     
     if [ -z "$CONTAINER" ]; then
         print_color "$RED" "No running sequencer container found"
-        echo "Please start the sequencer first: $0 distributed or $0 sequencer-custom"
+        echo "Please start the sequencer first: $0 distributed or $0 sequencer"
         exit 1
     fi
     
@@ -537,7 +561,23 @@ case $COMMAND in
     pipeline)
         # Comprehensive pipeline monitoring
         print_color "$CYAN" "🔍 Launching Comprehensive Pipeline Monitor..."
-        ./scripts/monitor_pipeline.sh
+        
+        # Detect the correct container name based on running mode
+        if is_distributed_mode; then
+            # For distributed mode, use one of the service containers (e.g., listener)
+            CONTAINER_NAME=$($DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml ps --format "table {{.Names}}" 2>/dev/null | grep -E "listener|dequeuer|finalizer" | head -1)
+        else
+            # For sequencer mode
+            CONTAINER_NAME=$($DOCKER_COMPOSE_CMD -f docker-compose.snapshot-sequencer.yml ps --format "table {{.Names}}" 2>/dev/null | grep sequencer | head -1)
+        fi
+        
+        if [ -z "$CONTAINER_NAME" ]; then
+            print_color "$RED" "Error: No running sequencer containers found"
+            print_color "$YELLOW" "Start the sequencer first with: ./launch.sh sequencer or ./launch.sh distributed"
+            exit 1
+        fi
+        
+        ./scripts/monitor_pipeline.sh "$CONTAINER_NAME"
         ;;
     debug)
         launch_debug

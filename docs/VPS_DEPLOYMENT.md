@@ -729,15 +729,31 @@ screen -S sequencer
    GOSSIPSUB_HEARTBEAT_MS=700
    ```
 
+4. **Finalization Worker Optimization**:
+   ```bash
+   # Control parallel finalization workers
+   FINALIZER_WORKERS=5      # Number of concurrent finalization workers
+   FINALIZATION_BATCH_SIZE=20  # Projects processed per batch
+   
+   # Recommended tuning:
+   # - Increase FINALIZER_WORKERS for high-throughput networks
+   # - Adjust FINALIZATION_BATCH_SIZE based on processing power
+   # - Monitor worker health with ./launch.sh pipeline
+   ```
+
 ### Support and Resources
 
 - **GitHub Issues**: https://github.com/powerloom/snapshot-sequencer-validator/issues
 - **Documentation**: Check `/docs` directory for additional guides
 - **Community**: Join our Discord for support
 
-## Recent Updates (September 8, 2025)
+## Recent Updates (September 9, 2025)
 
 ### New Features
+- ✅ Parallel Finalization Workers: Distributed batch processing
+- ✅ New configurations for worker parallelism: `FINALIZER_WORKERS`, `FINALIZATION_BATCH_SIZE`
+- ✅ Enhanced batch processing with concurrent worker support
+- ✅ Improved worker monitoring and status tracking
 - ✅ Individual component log shortcuts (`listener-logs`, `dequeuer-logs`, `finalizer-logs`, `event-monitor-logs`, `redis-logs`)
 - ✅ Enhanced dequeuer logging with detailed submission information (Epoch, Project, Slot, Market, Submitter)
 - ✅ Fixed monitor script to prioritize containers with Redis access
@@ -745,16 +761,18 @@ screen -S sequencer
 - ✅ Added `pipeline` command for comprehensive pipeline monitoring in `pkgs/workers/monitoring.go`
 
 ### Configuration Changes
+- Added `FINALIZER_WORKERS` to control parallel finalization workers
+- Added `FINALIZATION_BATCH_SIZE` to configure projects processed per batch
 - `SUBMISSION_WINDOW_DURATION` must be passed to event-monitor and finalizer containers in docker-compose.distributed.yml
-- Removed `IDENTITY_REGISTRY_CONTRACT` - identity registry is part of Protocol State Contract
 - Added `CONTRACT_ABI_PATH` for dynamic event signature loading
 
 ### Bug Fixes
 - Fixed window duration not being passed to event-monitor container
 - Fixed monitor script selecting wrong container (was using finalizer instead of event-monitor)
-- Fixed repetitive ABI signature debug logs in event monitor
+- Collection logic improved to track multiple CIDs per project with vote counts
+- Implemented batch consensus selection logic
 
 ---
 
-*Last Updated: September 8, 2025*
+*Last Updated: September 9, 2025*
 *Version: 1.1.0*

@@ -3,7 +3,26 @@
 # Comprehensive Batch Processing Pipeline Monitor
 # Shows detailed status of all pipeline stages from submission splitting to aggregation
 
-CONTAINER="${1:-decentralized-sequencer-sequencer-custom-1}"
+# Accept container name as parameter, or try to auto-detect
+CONTAINER="$1"
+
+if [ -z "$CONTAINER" ]; then
+    # Try to auto-detect container
+    CONTAINER=$(docker ps --filter "name=sequencer" --format "{{.Names}}" | head -1)
+    if [ -z "$CONTAINER" ]; then
+        CONTAINER=$(docker ps --filter "name=listener" --format "{{.Names}}" | head -1)
+    fi
+    if [ -z "$CONTAINER" ]; then
+        CONTAINER=$(docker ps --filter "name=dequeuer" --format "{{.Names}}" | head -1)
+    fi
+    
+    if [ -z "$CONTAINER" ]; then
+        echo "Error: No running sequencer containers found"
+        echo "Usage: $0 [container_name]"
+        echo "Or start the sequencer first with: ./launch.sh sequencer or ./launch.sh distributed"
+        exit 1
+    fi
+fi
 
 # Color definitions
 RED='\033[0;31m'
