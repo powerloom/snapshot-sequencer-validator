@@ -88,6 +88,10 @@ type Settings struct {
 	EnableConsensus    bool
 	EnableEventMonitor bool
 	
+	// Finalizer Configuration
+	FinalizerWorkers      int
+	FinalizationBatchSize int
+	
 	// API Configuration
 	APIHost      string
 	APIPort      int
@@ -173,6 +177,10 @@ func LoadConfig() error {
 		EnableFinalizer:    getBoolEnv("ENABLE_FINALIZER", true),
 		EnableConsensus:    getBoolEnv("ENABLE_CONSENSUS", true),
 		EnableEventMonitor: getBoolEnv("ENABLE_EVENT_MONITOR", false),
+		
+		// Finalizer Configuration
+		FinalizerWorkers:      getEnvAsInt("FINALIZER_WORKERS", 5),
+		FinalizationBatchSize: getEnvAsInt("FINALIZATION_BATCH_SIZE", 20),
 		
 		// API Configuration
 		APIHost:      getEnv("API_HOST", "0.0.0.0"),

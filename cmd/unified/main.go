@@ -19,6 +19,7 @@ import (
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/eventmonitor"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/gossipconfig"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/submissions"
+	"github.com/powerloom/snapshot-sequencer-validator/pkgs/workers"
 	"github.com/go-redis/redis/v8"
 	rpchelper "github.com/powerloom/go-rpc-helper"
 	"github.com/libp2p/go-libp2p"
@@ -753,7 +754,40 @@ func (s *UnifiedSequencer) runDequeuerWorker(workerID int) {
 }
 
 func (s *UnifiedSequencer) runFinalizer() {
-	log.Info("Finalizer started")
+	log.Info("Starting finalizer component with parallel workers")
+	
+	// Start multiple parallel workers
+	numWorkers := s.config.FinalizerWorkers
+	if numWorkers == 0 {
+		numWorkers = 5 // Default to 5 workers
+	}
+	
+	log.Infof("Starting %d parallel finalization workers", numWorkers)
+	
+	for i := 0; i < numWorkers; i++ {
+		go s.runFinalizationWorker(i)
+	}
+	
+	// Also start aggregation worker
+	go s.runAggregationWorker()
+	
+	// Wait for shutdown
+	<-s.ctx.Done()
+	log.Info("Finalizer component shutting down")
+}
+
+func (s *UnifiedSequencer) runFinalizationWorker(workerID int) {
+	log.Infof("Finalization worker %d started", workerID)
+	
+	// Create worker monitor
+	monitor := workers.NewWorkerMonitor(
+		s.redisClient, 
+		fmt.Sprintf("finalizer-%d", workerID),
+		workers.WorkerTypeFinalizer,
+		s.config.ProtocolStateContract,
+	)
+	monitor.StartWorker(s.ctx)
+	defer monitor.CleanupWorker()
 	
 	// Get protocol state and data market from config
 	protocolState := s.config.ProtocolStateContract
@@ -762,22 +796,22 @@ func (s *UnifiedSequencer) runFinalizer() {
 		dataMarket = s.config.DataMarketAddresses[0]
 	}
 	
-	// Finalization queue key
-	queueKey := fmt.Sprintf("%s:%s:finalizationQueue", protocolState, dataMarket)
+	// Batch parts queue key
+	queueKey := fmt.Sprintf("%s:%s:batchPartsQueue", protocolState, dataMarket)
 	
 	for {
 		select {
 		case <-s.ctx.Done():
-			log.Info("Finalizer shutting down")
+			log.Infof("Finalization worker %d shutting down", workerID)
 			return
 		default:
-			// Pop from finalization queue with blocking timeout
+			// Pop from batch parts queue with blocking timeout
 			result, err := s.redisClient.BRPop(s.ctx, 5*time.Second, queueKey).Result()
 			if err != nil {
 				if err == redis.Nil {
 					continue // Queue empty, wait
 				}
-				log.Errorf("Finalizer: Error popping from queue: %v", err)
+				log.Errorf("Worker %d: Error popping from queue: %v", workerID, err)
 				time.Sleep(1 * time.Second)
 				continue
 			}
@@ -786,17 +820,251 @@ func (s *UnifiedSequencer) runFinalizer() {
 				continue
 			}
 			
-			// Parse epoch ID
-			epochID, err := strconv.ParseUint(result[1], 10, 64)
-			if err != nil {
-				log.Errorf("Finalizer: Failed to parse epoch ID %s: %v", result[1], err)
+			// Parse batch part data
+			var batchPart map[string]interface{}
+			if err := json.Unmarshal([]byte(result[1]), &batchPart); err != nil {
+				log.Errorf("Worker %d: Failed to parse batch part: %v", workerID, err)
 				continue
 			}
 			
-			// Process the finalization
-			s.processBatchFinalization(epochID)
+			epochID := uint64(batchPart["epoch_id"].(float64))
+			batchID := int(batchPart["batch_id"].(float64))
+			totalBatches := int(batchPart["total_batches"].(float64))
+			projectIDs := batchPart["project_ids"].([]interface{})
+			
+			// Update monitoring
+			batchInfo := fmt.Sprintf("epoch:%d:batch:%d/%d", epochID, batchID, totalBatches)
+			monitor.ProcessingStarted(batchInfo)
+			
+			// Process this batch part
+			if err := s.processBatchPart(epochID, batchID, totalBatches, projectIDs, monitor); err != nil {
+				log.Errorf("Worker %d: Failed to process batch part %d for epoch %d: %v", 
+					workerID, batchID, epochID, err)
+				monitor.ProcessingFailed(err)
+			} else {
+				monitor.ProcessingCompleted()
+				log.Infof("Worker %d: Completed batch part %d/%d for epoch %d", 
+					workerID, batchID, totalBatches, epochID)
+			}
 		}
 	}
+}
+
+func (s *UnifiedSequencer) processBatchPart(epochID uint64, batchID int, totalBatches int, projectIDs []interface{}, monitor *workers.WorkerMonitor) error {
+	ctx := context.Background()
+	
+	// Get protocol state and data market from config
+	protocolState := s.config.ProtocolStateContract
+	dataMarket := ""
+	if len(s.config.DataMarketAddresses) > 0 {
+		dataMarket = s.config.DataMarketAddresses[0]
+	}
+	
+	// Track batch part as processing
+	epochStr := fmt.Sprintf("%d", epochID)
+	workers.TrackBatchPart(s.redisClient, epochStr, batchID, "processing")
+	
+	// Process each project in this batch part
+	partResults := make(map[string]interface{})
+	
+	for _, projectIDRaw := range projectIDs {
+		projectID := projectIDRaw.(string)
+		
+		// Get all submissions for this project in this epoch
+		submissionPattern := fmt.Sprintf("%s:%s:epoch:%d:project:%s:*", protocolState, dataMarket, epochID, projectID)
+		
+		// Use SCAN to find all submission keys for this project
+		iter := s.redisClient.Scan(ctx, 0, submissionPattern, 100).Iterator()
+		
+		// Track CID votes
+		cidVotes := make(map[string]int)
+		
+		for iter.Next(ctx) {
+			key := iter.Val()
+			
+			// Get the submission data
+			submissionData, err := s.redisClient.Get(ctx, key).Result()
+			if err != nil {
+				log.Errorf("Failed to get submission from %s: %v", key, err)
+				continue
+			}
+			
+			// Parse to get CID
+			var submission map[string]interface{}
+			if err := json.Unmarshal([]byte(submissionData), &submission); err != nil {
+				log.Errorf("Failed to parse submission: %v", err)
+				continue
+			}
+			
+			// Extract CID and count vote
+			if request, ok := submission["request"].(map[string]interface{}); ok {
+				if cid, ok := request["snapshot_cid"].(string); ok {
+					cidVotes[cid]++
+				}
+			}
+		}
+		
+		if err := iter.Err(); err != nil {
+			log.Errorf("Error scanning submissions: %v", err)
+		}
+		
+		// Select winning CID (majority vote)
+		var winningCID string
+		maxVotes := 0
+		for cid, votes := range cidVotes {
+			if votes > maxVotes {
+				winningCID = cid
+				maxVotes = votes
+			}
+		}
+		
+		if winningCID != "" {
+			partResults[projectID] = map[string]interface{}{
+				"cid":   winningCID,
+				"votes": maxVotes,
+			}
+		}
+	}
+	
+	// Store batch part results
+	partKey := fmt.Sprintf("%s:%s:batch:part:%d:%d", protocolState, dataMarket, epochID, batchID)
+	partData, err := json.Marshal(partResults)
+	if err != nil {
+		return fmt.Errorf("failed to marshal batch part: %w", err)
+	}
+	
+	if err := s.redisClient.Set(ctx, partKey, partData, 2*time.Hour).Err(); err != nil {
+		return fmt.Errorf("failed to store batch part: %w", err)
+	}
+	
+	// Mark batch part as completed
+	workers.TrackBatchPart(s.redisClient, epochStr, batchID, "completed")
+	
+	// Update progress tracking
+	completedKey := fmt.Sprintf("epoch:%d:parts:completed", epochID)
+	completed, _ := s.redisClient.Incr(ctx, completedKey).Result()
+	
+	// Check if all parts are complete
+	workers.UpdateBatchPartsProgress(s.redisClient, epochStr, int(completed), totalBatches)
+	
+	log.Infof("✅ Processed batch part %d/%d for epoch %d: %d projects finalized", 
+		batchID, totalBatches, epochID, len(partResults))
+	
+	return nil
+}
+
+func (s *UnifiedSequencer) runAggregationWorker() {
+	log.Info("Aggregation worker started")
+	
+	// Create worker monitor
+	monitor := workers.NewWorkerMonitor(
+		s.redisClient,
+		"aggregator-main",
+		workers.WorkerTypeAggregator,
+		s.config.ProtocolStateContract,
+	)
+	monitor.StartWorker(s.ctx)
+	defer monitor.CleanupWorker()
+	
+	for {
+		select {
+		case <-s.ctx.Done():
+			log.Info("Aggregation worker shutting down")
+			return
+		default:
+			// Pop from aggregation queue
+			result, err := s.redisClient.BRPop(s.ctx, 5*time.Second, "aggregationQueue").Result()
+			if err != nil {
+				if err == redis.Nil {
+					continue // Queue empty
+				}
+				log.Errorf("Aggregation worker: Error popping from queue: %v", err)
+				time.Sleep(1 * time.Second)
+				continue
+			}
+			
+			if len(result) < 2 {
+				continue
+			}
+			
+			// Parse aggregation data
+			var aggData map[string]interface{}
+			if err := json.Unmarshal([]byte(result[1]), &aggData); err != nil {
+				log.Errorf("Aggregation worker: Failed to parse data: %v", err)
+				continue
+			}
+			
+			epochIDStr := aggData["epoch_id"].(string)
+			epochID, _ := strconv.ParseUint(epochIDStr, 10, 64)
+			partsCompleted := int(aggData["parts_completed"].(float64))
+			
+			// Update monitoring
+			monitor.ProcessingStarted(fmt.Sprintf("epoch:%d", epochID))
+			
+			// Aggregate all batch parts
+			if err := s.aggregateBatchParts(epochID, partsCompleted); err != nil {
+				log.Errorf("Aggregation worker: Failed to aggregate epoch %d: %v", epochID, err)
+				monitor.ProcessingFailed(err)
+			} else {
+				monitor.ProcessingCompleted()
+				log.Infof("✅ Aggregation worker: Successfully aggregated epoch %d", epochID)
+			}
+		}
+	}
+}
+
+func (s *UnifiedSequencer) aggregateBatchParts(epochID uint64, totalParts int) error {
+	ctx := context.Background()
+	
+	// Get protocol state and data market
+	protocolState := s.config.ProtocolStateContract
+	dataMarket := ""
+	if len(s.config.DataMarketAddresses) > 0 {
+		dataMarket = s.config.DataMarketAddresses[0]
+	}
+	
+	// Collect all batch parts
+	aggregatedResults := make(map[string]interface{})
+	
+	for i := 0; i < totalParts; i++ {
+		partKey := fmt.Sprintf("%s:%s:batch:part:%d:%d", protocolState, dataMarket, epochID, i)
+		partData, err := s.redisClient.Get(ctx, partKey).Result()
+		if err != nil {
+			log.Errorf("Failed to get batch part %d for epoch %d: %v", i, epochID, err)
+			continue
+		}
+		
+		var partResults map[string]interface{}
+		if err := json.Unmarshal([]byte(partData), &partResults); err != nil {
+			log.Errorf("Failed to parse batch part %d: %v", i, err)
+			continue
+		}
+		
+		// Merge results
+		for projectID, data := range partResults {
+			aggregatedResults[projectID] = data
+		}
+		
+		// Clean up part data
+		s.redisClient.Del(ctx, partKey)
+	}
+	
+	// Create finalized batch
+	if err := s.createFinalizedBatch(epochID, aggregatedResults); err != nil {
+		return fmt.Errorf("failed to create finalized batch: %w", err)
+	}
+	
+	// Clean up tracking data
+	s.redisClient.Del(ctx, 
+		fmt.Sprintf("epoch:%d:parts:completed", epochID),
+		fmt.Sprintf("epoch:%d:parts:total", epochID),
+		fmt.Sprintf("epoch:%d:parts:ready", epochID),
+	)
+	
+	log.Infof("📦 Aggregated %d projects from %d batch parts for epoch %d", 
+		len(aggregatedResults), totalParts, epochID)
+	
+	return nil
 }
 
 func (s *UnifiedSequencer) processBatchFinalization(epochID uint64) {
