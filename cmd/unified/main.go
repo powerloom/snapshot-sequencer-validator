@@ -318,7 +318,7 @@ func main() {
 			ContractAddress: cfg.ProtocolStateContract,
 			ContractABIPath: cfg.ContractABIPath,
 			RedisClient:     redisClient,
-			WindowDuration:  120 * time.Second, // Default 120 seconds from contract
+			WindowDuration:  cfg.SubmissionWindowDuration, // Use configured duration
 			StartBlock:      cfg.EventStartBlock,
 			PollInterval:    cfg.EventPollInterval,
 			DataMarkets:     cfg.DataMarketAddresses,

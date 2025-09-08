@@ -16,10 +16,24 @@ docker exec -it $CONTAINER /bin/sh -c '
     echo "📊 Checking Redis at $REDIS_HOST:$REDIS_PORT"
     echo ""
     
-    # Check current submission window
-    CURRENT_WINDOW=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT GET "submission_window:current" 2>/dev/null)
-    if [ ! -z "$CURRENT_WINDOW" ]; then
-        echo "📊 Current Window: $CURRENT_WINDOW"
+    # Check active submission windows
+    echo "🔷 Current Submission Window:"
+    WINDOWS_FOUND=0
+    redis-cli -h $REDIS_HOST -p $REDIS_PORT KEYS "epoch:*:window" 2>/dev/null | while read window_key; do
+        if [ ! -z "$window_key" ]; then
+            STATUS=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT GET "$window_key" 2>/dev/null)
+            if [ "$STATUS" = "open" ]; then
+                # Extract market and epoch from key
+                EPOCH_INFO=$(echo "$window_key" | sed "s/^epoch://;s/:window$//")
+                TTL=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT TTL "$window_key" 2>/dev/null)
+                echo "  ✅ $EPOCH_INFO (TTL: ${TTL}s)"
+                WINDOWS_FOUND=1
+            fi
+        fi
+    done
+    
+    if [ "$WINDOWS_FOUND" -eq 0 ]; then
+        echo "  None active"
     fi
     
     # Check ready batches
