@@ -658,7 +658,20 @@ func (s *UnifiedSequencer) queueSubmissionFromP2P(data []byte, topic string, pee
 		if err != nil {
 			log.Errorf("❌ Failed to queue submission: %v", err)
 		} else {
-			log.Infof("✅ Successfully queued submission to Redis")
+			// Extract key info for logging
+			epochID := "unknown"
+			projectID := "unknown"
+			if submissionInfo != nil {
+				if ep, ok := submissionInfo["epochId"]; ok {
+					epochID = fmt.Sprintf("%v", ep)
+				}
+				if proj, ok := submissionInfo["projectId"]; ok {
+					projectID = fmt.Sprintf("%v", proj)
+				}
+			}
+			
+			log.Infof("✅ Queued submission: Epoch=%s, Project=%s from peer %s", 
+				epochID, projectID, peerID[:16])
 			
 			// Log current queue depth
 			if length, err := s.redisClient.LLen(s.ctx, "submissionQueue").Result(); err == nil {
@@ -668,6 +681,14 @@ func (s *UnifiedSequencer) queueSubmissionFromP2P(data []byte, topic string, pee
 	} else {
 		log.Warnf("⚠️ Redis not available - submission not queued")
 	}
+}
+
+// Helper function for min of two ints
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func (s *UnifiedSequencer) runDequeuerWorker(workerID int) {
@@ -694,8 +715,27 @@ func (s *UnifiedSequencer) runDequeuerWorker(workerID int) {
 			}
 			
 			// Process the submission
-			log.Debugf("Worker %d processing submission", workerID)
+			submissionData := []byte(result[1])
+			
+			// Parse submission to extract details
+			var submission map[string]interface{}
+			if err := json.Unmarshal(submissionData, &submission); err != nil {
+				log.Errorf("Worker %d: Failed to parse submission: %v", workerID, err)
+				log.Debugf("Worker %d: Raw submission data: %s", workerID, string(submissionData[:min(200, len(submissionData))]))
+			} else {
+				// Extract key fields for logging
+				epochID, _ := submission["epochId"]
+				projectID, _ := submission["projectId"]
+				slotID, _ := submission["slotId"]
+				dataMarket, _ := submission["dataMarket"]
+				submitterAddr, _ := submission["submitter"]
+				
+				log.Infof("Worker %d processing: Epoch=%v, Project=%v, Slot=%v, Market=%v, Submitter=%v",
+					workerID, epochID, projectID, slotID, dataMarket, submitterAddr)
+			}
+			
 			// Processing logic here
+			// TODO: Add actual validation and batch preparation
 		}
 	}
 }

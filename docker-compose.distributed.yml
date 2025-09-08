@@ -131,7 +131,7 @@ services:
       - EVENT_START_BLOCK=${EVENT_START_BLOCK:-0}
       - EVENT_BLOCK_BATCH_SIZE=${EVENT_BLOCK_BATCH_SIZE:-1000}
       - MAX_CONCURRENT_WINDOWS=${MAX_CONCURRENT_WINDOWS:-100}
-      # Note: SUBMISSION_WINDOW_DURATION removed - read from contract
+      - SUBMISSION_WINDOW_DURATION=${SUBMISSION_WINDOW_DURATION:-60}
     depends_on:
       redis:
         condition: service_healthy
@@ -169,6 +169,7 @@ services:
       # Protocol/Market config
       - PROTOCOL_STATE_CONTRACT=${PROTOCOL_STATE_CONTRACT}
       - DATA_MARKET_ADDRESSES=${DATA_MARKET_ADDRESSES}
+      - SUBMISSION_WINDOW_DURATION=${SUBMISSION_WINDOW_DURATION:-60}
     depends_on:
       redis:
         condition: service_healthy
