@@ -30,6 +30,7 @@ type EventMonitor struct {
 	// Event tracking
 	lastProcessedBlock uint64
 	eventChan          chan *EpochReleasedEvent
+	epochReleasedSig   common.Hash // Cache the event signature to avoid recomputing
 	
 	// Configuration
 	pollInterval    time.Duration
@@ -124,6 +125,21 @@ func NewEventMonitor(cfg *Config) (*EventMonitor, error) {
 		}
 	}
 	
+	// Compute and cache event signature once at startup
+	var epochReleasedSig common.Hash
+	if contractABI != nil {
+		sig, err := contractABI.GetEventHash("EpochReleased")
+		if err != nil {
+			return nil, fmt.Errorf("failed to get EpochReleased event hash from ABI: %w", err)
+		}
+		epochReleasedSig = sig
+		log.Infof("✅ Using ABI-derived EpochReleased event signature: %s", epochReleasedSig.Hex())
+	} else {
+		// Fallback to hardcoded signature for backward compatibility
+		epochReleasedSig = getEpochReleasedEventSignature()
+		log.Infof("✅ Using hardcoded EpochReleased event signature: %s", epochReleasedSig.Hex())
+	}
+	
 	windowManager := &WindowManager{
 		activeWindows:   make(map[string]*EpochWindow),
 		windowSemaphore: make(chan struct{}, cfg.MaxWindows),
@@ -141,6 +157,7 @@ func NewEventMonitor(cfg *Config) (*EventMonitor, error) {
 		windowDuration:     cfg.WindowDuration,
 		lastProcessedBlock: startBlock,
 		eventChan:          make(chan *EpochReleasedEvent, 100),
+		epochReleasedSig:   epochReleasedSig, // Set the cached signature
 		pollInterval:       cfg.PollInterval,
 		dataMarkets:        cfg.DataMarkets,
 		ctx:                ctx,
@@ -203,27 +220,12 @@ func (m *EventMonitor) checkForNewEvents() {
 		toBlock = currentBlock
 	}
 	
-	// Get event signature from ABI if available, otherwise use hardcoded
-	var epochReleasedSig common.Hash
-	if m.contractABI != nil {
-		sig, err := m.contractABI.GetEventHash("EpochReleased")
-		if err != nil {
-			log.Errorf("Failed to get EpochReleased event hash from ABI: %v", err)
-			return
-		}
-		epochReleasedSig = sig
-		log.Debugf("Using ABI-derived EpochReleased event signature: %s", epochReleasedSig.Hex())
-	} else {
-		// Fallback to hardcoded signature for backward compatibility
-		epochReleasedSig = getEpochReleasedEventSignature()
-		log.Debugf("Using hardcoded EpochReleased event signature: %s", epochReleasedSig.Hex())
-	}
-	
+	// Use cached event signature (computed once at startup)
 	query := ethereum.FilterQuery{
 		FromBlock: big.NewInt(int64(m.lastProcessedBlock + 1)),
 		ToBlock:   big.NewInt(int64(toBlock)),
 		Addresses: []common.Address{m.contractAddr},
-		Topics:    [][]common.Hash{{epochReleasedSig}},
+		Topics:    [][]common.Hash{{m.epochReleasedSig}},
 	}
 	
 	logs, err := m.rpcHelper.FilterLogs(m.ctx, query)

@@ -38,6 +38,7 @@ show_usage() {
     echo "  stop          - Stop all services"
     echo "  clean         - Stop and remove all containers/volumes"
     echo "  logs          - Show logs for all services"
+    echo "  event-monitor-logs    - Show event monitor logs (shortcut for event-monitor service)"
     echo "  status        - Show status of all services"
     echo "  monitor       - Monitor batch preparation status"
     echo "  debug         - Launch with Redis port exposed for debugging"
@@ -471,6 +472,14 @@ case $COMMAND in
         ;;
     monitor)
         monitor_batches
+        ;;
+    event-monitor-logs)
+        # Shortcut for viewing event monitor logs
+        if is_distributed_mode; then
+            $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml logs -f event-monitor
+        else
+            print_color "$YELLOW" "Event monitor only runs in distributed mode. Use: ./launch.sh distributed"
+        fi
         ;;
     debug)
         launch_debug
