@@ -109,6 +109,21 @@ func NewEventMonitor(cfg *Config) (*EventMonitor, error) {
 	
 	ctx, cancel := context.WithCancel(context.Background())
 	
+	// If StartBlock is 0, fetch current block to start from latest
+	startBlock := cfg.StartBlock
+	if startBlock == 0 {
+		currentBlock, err := cfg.RPCHelper.BlockNumber(context.Background())
+		if err != nil {
+			log.Warnf("Failed to get current block for start, using 0: %v", err)
+		} else {
+			// Start from current block minus 1 (like legacy collector)
+			if currentBlock > 0 {
+				startBlock = currentBlock - 1
+			}
+			log.Infof("Starting event monitor from current block: %d", startBlock)
+		}
+	}
+	
 	windowManager := &WindowManager{
 		activeWindows:   make(map[string]*EpochWindow),
 		windowSemaphore: make(chan struct{}, cfg.MaxWindows),
@@ -124,7 +139,7 @@ func NewEventMonitor(cfg *Config) (*EventMonitor, error) {
 		contractABI:        contractABI,
 		windowManager:      windowManager,
 		windowDuration:     cfg.WindowDuration,
-		lastProcessedBlock: cfg.StartBlock,
+		lastProcessedBlock: startBlock,
 		eventChan:          make(chan *EpochReleasedEvent, 100),
 		pollInterval:       cfg.PollInterval,
 		dataMarkets:        cfg.DataMarkets,
@@ -315,6 +330,15 @@ func (m *EventMonitor) processEvents() {
 func (m *EventMonitor) handleEpochReleased(event *EpochReleasedEvent) {
 	log.Infof("📅 Epoch %s released for market %s at block %d", 
 		event.EpochID, event.DataMarketAddress.Hex(), event.BlockNumber)
+	
+	// Skip old epochs whose windows would have already expired
+	// This prevents filling up the window manager with historical epochs
+	epochAge := time.Since(time.Unix(int64(event.Timestamp), 0))
+	if epochAge > m.windowDuration*2 {
+		log.Debugf("Skipping old epoch %s (age: %v, window duration: %v)", 
+			event.EpochID, epochAge, m.windowDuration)
+		return
+	}
 	
 	// Store epoch info in Redis
 	epochKey := fmt.Sprintf("epoch:%s:%s:info", event.DataMarketAddress.Hex(), event.EpochID.String())

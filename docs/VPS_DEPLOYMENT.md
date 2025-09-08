@@ -157,7 +157,7 @@ MAX_CONCURRENT_WINDOWS=100
 
 # Event monitoring
 EVENT_POLL_INTERVAL=12
-EVENT_START_BLOCK=0
+EVENT_START_BLOCK=0      # 0 = start from current block (recommended)
 EVENT_BLOCK_BATCH_SIZE=1000
 
 # Deduplication
