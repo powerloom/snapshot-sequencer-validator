@@ -152,7 +152,9 @@ DEQUEUER_REPLICAS=3      # For distributed mode
 MAX_SUBMISSIONS_PER_EPOCH=100
 
 # Submission windows
-SUBMISSION_WINDOW_DURATION=60
+# IMPORTANT: This OVERRIDES any contract-specified duration for testing flexibility
+# Production should typically match contract settings, but this allows shorter windows for testing
+SUBMISSION_WINDOW_DURATION=60  # seconds
 MAX_CONCURRENT_WINDOWS=100
 
 # Event monitoring
@@ -272,27 +274,70 @@ For running the consensus test system:
 
 ## Monitoring Tools
 
-### scripts/monitor_batch_docker.sh
+### Batch Status Monitoring
 
-Monitors batch preparation status from inside Docker containers:
+Monitor batch preparation and submission windows:
 
 ```bash
-# Auto-detect container and monitor
-./scripts/monitor_batch_docker.sh
-
-# Monitor specific container
-./scripts/monitor_batch_docker.sh powerloom-sequencer-validator-listener-1
-
-# Or use via launch.sh
+# Quick monitoring via launch.sh
 ./launch.sh monitor
 ```
 
-**Output includes:**
-- Active submission windows
-- Ready batches by epoch
-- Pending queue depth  
-- Processing statistics
-- Recent batch history
+The monitor now correctly:
+- Prioritizes event-monitor container (has Redis access)
+- Falls back to dequeuer, then any sequencer container
+- Shows active submission windows with TTL
+- Displays ready batches and pending submissions
+
+**Example output:**
+```
+🔷 Current Submission Window:
+  ✅ 0x21cb57C1f2352ad215a463DD867b838749CD3b8f:172883 (TTL: 18s)
+
+📦 Ready Batches:
+  None
+
+⏳ Pending Submissions:
+  Count: 5
+```
+
+### Component Log Shortcuts
+
+New dedicated log commands for each component:
+
+```bash
+# View P2P listener logs
+./launch.sh listener-logs
+
+# View dequeuer worker logs (now with enhanced details)
+./launch.sh dequeuer-logs
+
+# View finalizer logs
+./launch.sh finalizer-logs
+
+# View event monitor logs
+./launch.sh event-monitor-logs
+
+# View Redis logs
+./launch.sh redis-logs
+
+# View all logs
+./launch.sh logs
+```
+
+**Enhanced Dequeuer Logging:**
+The dequeuer now logs detailed submission information:
+- Epoch ID
+- Project ID
+- Slot ID
+- Data Market
+- Submitter address
+
+Example log output:
+```
+INFO[2025-09-08T10:30:15Z] Worker 2 processing: Epoch=172883, Project=uniswap_v3, Slot=1, Market=0x21cb57C1f2352ad215a463DD867b838749CD3b8f, Submitter=0xabc...
+INFO[2025-09-08T10:30:15Z] ✅ Queued submission: Epoch=172883, Project=uniswap_v3 from peer 12D3KooWFFRQCs9N
+```
 
 ### scripts/check_batch_status.sh
 
@@ -481,6 +526,26 @@ git pull
 docker exec <container> ls -la /app/abi/
 ```
 
+#### Window Duration Not Applying
+
+**Problem**: Submission window shows wrong duration (e.g., 1m instead of configured 20s)
+
+**Solution**:
+```bash
+# Ensure SUBMISSION_WINDOW_DURATION is in .env
+echo "SUBMISSION_WINDOW_DURATION=20" >> .env
+
+# Rebuild containers to pick up env changes
+./launch.sh stop
+docker compose -f docker-compose.distributed.yml build --no-cache
+./launch.sh distributed
+
+# Verify in event monitor logs
+./launch.sh event-monitor-logs | grep "window opened"
+```
+
+**Note**: The SUBMISSION_WINDOW_DURATION env var overrides any contract-specified duration for testing flexibility
+
 #### Redis Connection Failed
 
 **Problem**: `Failed to connect to Redis: connection refused`
@@ -639,7 +704,25 @@ screen -S sequencer
 - **Documentation**: Check `/docs` directory for additional guides
 - **Community**: Join our Discord for support
 
+## Recent Updates (September 8, 2025)
+
+### New Features
+- ✅ Individual component log shortcuts (`listener-logs`, `dequeuer-logs`, `finalizer-logs`, `event-monitor-logs`, `redis-logs`)
+- ✅ Enhanced dequeuer logging with detailed submission information (Epoch, Project, Slot, Market, Submitter)
+- ✅ Fixed monitor script to prioritize containers with Redis access
+- ✅ SUBMISSION_WINDOW_DURATION now properly overrides contract values for testing flexibility
+
+### Configuration Changes
+- `SUBMISSION_WINDOW_DURATION` must be passed to event-monitor and finalizer containers in docker-compose.distributed.yml
+- Removed `IDENTITY_REGISTRY_CONTRACT` - identity registry is part of Protocol State Contract
+- Added `CONTRACT_ABI_PATH` for dynamic event signature loading
+
+### Bug Fixes
+- Fixed window duration not being passed to event-monitor container
+- Fixed monitor script selecting wrong container (was using finalizer instead of event-monitor)
+- Fixed repetitive ABI signature debug logs in event monitor
+
 ---
 
-*Last Updated: September 2025*
-*Version: 1.0.0*
+*Last Updated: September 8, 2025*
+*Version: 1.1.0*

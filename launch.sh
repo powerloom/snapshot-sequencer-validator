@@ -38,7 +38,11 @@ show_usage() {
     echo "  stop          - Stop all services"
     echo "  clean         - Stop and remove all containers/volumes"
     echo "  logs          - Show logs for all services"
-    echo "  event-monitor-logs    - Show event monitor logs (shortcut for event-monitor service)"
+    echo "  listener-logs - Show P2P listener logs"
+    echo "  dequeuer-logs - Show dequeuer worker logs"
+    echo "  finalizer-logs - Show finalizer logs"
+    echo "  event-monitor-logs - Show event monitor logs"
+    echo "  redis-logs    - Show Redis logs"
     echo "  status        - Show status of all services"
     echo "  monitor       - Monitor batch preparation status"
     echo "  debug         - Launch with Redis port exposed for debugging"
@@ -272,12 +276,22 @@ show_logs() {
 monitor_batches() {
     print_color "$BLUE" "Monitoring Batch Preparation Status..."
     
-    # Find the first running sequencer container
-    CONTAINER=$(docker ps --filter "name=sequencer" --format "{{.Names}}" | head -1)
+    # Try to find event-monitor container first (has Redis access), then fall back to others
+    CONTAINER=$(docker ps --filter "name=event-monitor" --format "{{.Names}}" | head -1)
+    
+    if [ -z "$CONTAINER" ]; then
+        # Fall back to dequeuer container
+        CONTAINER=$(docker ps --filter "name=dequeuer" --format "{{.Names}}" | head -1)
+    fi
+    
+    if [ -z "$CONTAINER" ]; then
+        # Fall back to any sequencer container
+        CONTAINER=$(docker ps --filter "name=sequencer" --format "{{.Names}}" | head -1)
+    fi
     
     if [ -z "$CONTAINER" ]; then
         print_color "$RED" "No running sequencer container found"
-        echo "Please start the sequencer first: $0 sequencer-custom"
+        echo "Please start the sequencer first: $0 distributed or $0 sequencer-custom"
         exit 1
     fi
     
@@ -473,12 +487,50 @@ case $COMMAND in
     monitor)
         monitor_batches
         ;;
+    listener-logs)
+        # Shortcut for viewing P2P listener logs
+        if is_distributed_mode; then
+            $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml logs -f listener
+        else
+            print_color "$YELLOW" "Listener only runs in distributed mode. Use: ./launch.sh distributed"
+        fi
+        ;;
+    dequeuer-logs)
+        # Shortcut for viewing dequeuer worker logs
+        if is_distributed_mode; then
+            $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml logs -f dequeuer
+        else
+            print_color "$YELLOW" "Dequeuer only runs in distributed mode. Use: ./launch.sh distributed"
+        fi
+        ;;
+    finalizer-logs)
+        # Shortcut for viewing finalizer logs
+        if is_distributed_mode; then
+            $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml logs -f finalizer
+        else
+            print_color "$YELLOW" "Finalizer only runs in distributed mode. Use: ./launch.sh distributed"
+        fi
+        ;;
     event-monitor-logs)
         # Shortcut for viewing event monitor logs
         if is_distributed_mode; then
             $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml logs -f event-monitor
         else
             print_color "$YELLOW" "Event monitor only runs in distributed mode. Use: ./launch.sh distributed"
+        fi
+        ;;
+    redis-logs)
+        # Shortcut for viewing Redis logs
+        if is_distributed_mode; then
+            $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml logs -f redis
+        else
+            # Try to show Redis logs from any compose file that's running
+            COMPOSE_FILE=$(detect_running_mode)
+            if [ ! -z "$COMPOSE_FILE" ]; then
+                $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" logs -f redis
+            else
+                print_color "$YELLOW" "No Redis service is currently running"
+            fi
         fi
         ;;
     debug)
