@@ -607,6 +607,30 @@ POWERLOOM_RPC_NODES=http://rpc1.com,http://rpc2.com
 # Avoid JSON arrays unless necessary
 ```
 
+### Submission Processing Issues
+
+**Problem**: Incorrect data model parsing, submissions not being processed
+
+**Solution**:
+```bash
+# Check submission format strategy
+cat .env | grep SUBMISSION_FORMAT_STRATEGY
+
+# If 'auto' fails, manually set format
+SUBMISSION_FORMAT_STRATEGY=single  # or 'batch'
+
+# Debug submission processing logs
+./launch.sh dequeuer-logs | grep -E 'Processing|P2PSnapshotSubmission|epochId'
+
+# Check for field name conversions (snake_case → camelCase)
+grep -R 'epoch_id' .  # Should return no results if converted
+```
+
+#### Common Conversion Issues
+- `epoch_id` → `epochId`
+- `project_id` → `projectId`
+- `submitter_address` → `submitterAddress`
+
 #### P2P Connection Issues
 
 **Problem**: `peer_count: 0` or no peers connecting
@@ -637,6 +661,9 @@ docker logs powerloom-sequencer-validator-dequeuer-1 2>&1 | grep ERROR
 
 # Save logs to file
 docker logs powerloom-sequencer-validator-listener-1 > listener.log 2>&1
+
+# Debug new submission processing
+docker logs powerloom-sequencer-validator-dequeuer-1 2>&1 | grep -E 'epochId|projectId|P2PSnapshotSubmission'
 ```
 
 ### Health Checks

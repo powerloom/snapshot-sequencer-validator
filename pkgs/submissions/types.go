@@ -15,11 +15,11 @@ type SnapshotSubmission struct {
 
 // SnapshotRequest contains the actual snapshot data
 type SnapshotRequest struct {
-	SlotId           uint64 `json:"slot_id"`
+	SlotId           uint64 `json:"slotId,omitempty"`
 	Deadline         uint64 `json:"deadline"`
-	SnapshotCid      string `json:"snapshot_cid"`
-	EpochId          uint64 `json:"epoch_id"`
-	ProjectId        string `json:"project_id"`
+	SnapshotCid      string `json:"snapshotCid,omitempty"`
+	EpochId          uint64 `json:"epochId,omitempty"`
+	ProjectId        string `json:"projectId,omitempty"`
 	AggregateRequest bool   `json:"aggregate_request,omitempty"`
 }
 

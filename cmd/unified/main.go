@@ -719,35 +719,67 @@ func (s *UnifiedSequencer) runDequeuerWorker(workerID int) {
 			// Process the submission
 			submissionData := []byte(result[1])
 			
-			// Parse submission to extract details
-			var submission submissions.SnapshotSubmission
-			if err := json.Unmarshal(submissionData, &submission); err != nil {
-				log.Errorf("Worker %d: Failed to parse submission: %v", workerID, err)
-				log.Debugf("Worker %d: Raw submission data: %s", workerID, string(submissionData[:min(200, len(submissionData))]))
-				continue
-			}
-			
-			// Generate submission ID
-			submissionID := fmt.Sprintf("%d-%s-%d-%s", 
-				submission.Request.EpochId, 
-				submission.Request.ProjectId,
-				submission.Request.SlotId,
-				submission.Request.SnapshotCid)
-			
-			// Log processing
-			log.Infof("Worker %d processing: Epoch=%d, Project=%s, Slot=%d, Market=%s, CID=%s",
-				workerID, submission.Request.EpochId, submission.Request.ProjectId, 
-				submission.Request.SlotId, submission.DataMarket, submission.Request.SnapshotCid)
-			
-			// Process and store the submission
-			if s.dequeuer != nil {
-				if err := s.dequeuer.ProcessSubmission(&submission, submissionID); err != nil {
-					log.Errorf("Worker %d: Failed to process submission %s: %v", workerID, submissionID, err)
-				} else {
-					log.Debugf("Worker %d: Successfully processed and stored submission %s", workerID, submissionID)
+			// First try to parse as P2P batch submission
+			var p2pSubmission submissions.P2PSnapshotSubmission
+			if err := json.Unmarshal(submissionData, &p2pSubmission); err == nil && p2pSubmission.Submissions != nil {
+				// This is a P2P batch submission
+				log.Debugf("Worker %d: Processing P2P batch with %d submissions for epoch %d", 
+					workerID, len(p2pSubmission.Submissions), p2pSubmission.EpochID)
+				
+				// Process each submission in the batch
+				for _, submission := range p2pSubmission.Submissions {
+					// Generate submission ID
+					submissionID := fmt.Sprintf("%d-%s-%d-%s", 
+						submission.Request.EpochId, 
+						submission.Request.ProjectId,
+						submission.Request.SlotId,
+						submission.Request.SnapshotCid)
+					
+					// Log processing
+					log.Infof("Worker %d processing: Epoch=%d, Project=%s, Slot=%d, Market=%s, CID=%s",
+						workerID, submission.Request.EpochId, submission.Request.ProjectId, 
+						submission.Request.SlotId, submission.DataMarket, submission.Request.SnapshotCid)
+					
+					// Process and store the submission
+					if s.dequeuer != nil {
+						if err := s.dequeuer.ProcessSubmission(submission, submissionID); err != nil {
+							log.Errorf("Worker %d: Failed to process submission %s: %v", workerID, submissionID, err)
+						} else {
+							log.Debugf("Worker %d: Successfully processed and stored submission %s", workerID, submissionID)
+						}
+					}
 				}
 			} else {
-				log.Warnf("Worker %d: Dequeuer not initialized, skipping storage", workerID)
+				// Try parsing as single submission (fallback)
+				var submission submissions.SnapshotSubmission
+				if err := json.Unmarshal(submissionData, &submission); err != nil {
+					log.Errorf("Worker %d: Failed to parse submission: %v", workerID, err)
+					log.Debugf("Worker %d: Raw submission data: %s", workerID, string(submissionData[:min(200, len(submissionData))]))
+					continue
+				}
+				
+				// Generate submission ID
+				submissionID := fmt.Sprintf("%d-%s-%d-%s", 
+					submission.Request.EpochId, 
+					submission.Request.ProjectId,
+					submission.Request.SlotId,
+					submission.Request.SnapshotCid)
+				
+				// Log processing
+				log.Infof("Worker %d processing: Epoch=%d, Project=%s, Slot=%d, Market=%s, CID=%s",
+					workerID, submission.Request.EpochId, submission.Request.ProjectId, 
+					submission.Request.SlotId, submission.DataMarket, submission.Request.SnapshotCid)
+				
+				// Process and store the submission
+				if s.dequeuer != nil {
+					if err := s.dequeuer.ProcessSubmission(&submission, submissionID); err != nil {
+						log.Errorf("Worker %d: Failed to process submission %s: %v", workerID, submissionID, err)
+					} else {
+						log.Debugf("Worker %d: Successfully processed and stored submission %s", workerID, submissionID)
+					}
+				} else {
+					log.Warnf("Worker %d: Dequeuer not initialized, skipping storage", workerID)
+				}
 			}
 		}
 	}

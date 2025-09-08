@@ -331,39 +331,81 @@ monitor_batches() {
         echo "📊 Redis: $REDIS_HOST:$REDIS_PORT"
         echo "============================="
         
-        # Current window
-        echo -e "\n🔷 Current Submission Window:"
-        redis-cli -h $REDIS_HOST -p $REDIS_PORT GET "submission_window:current" 2>/dev/null || echo "  None active"
+        # Active submission windows (Updated for new format: epoch:market:epochID:window)
+        echo -e "\n🔷 Active Submission Windows:"
+        WINDOWS=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT KEYS "epoch:*:*:window" 2>/dev/null)
+        if [ ! -z "$WINDOWS" ]; then
+            echo "$WINDOWS" | while read window; do
+                STATUS=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT GET "$window" 2>/dev/null)
+                if [ "$STATUS" = "open" ]; then
+                    # Parse epoch:market:epochID:window format
+                    MARKET_EPOCH=$(echo "$window" | sed "s/epoch://;s/:window//" | sed "s/^[^:]*://" )
+                    TTL=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT TTL "$window" 2>/dev/null)
+                    echo "  ✓ Market-Epoch: $MARKET_EPOCH (TTL: ${TTL}s)"
+                fi
+            done
+        else
+            echo "  None active"
+        fi
         
-        # Ready batches
+        # Submission queue depth
+        echo -e "\n📥 Submission Queue:"
+        COUNT=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT LLEN "submissionQueue" 2>/dev/null)
+        echo "  Pending: ${COUNT:-0} submissions"
+        
+        # Ready batches for finalization (Updated format: protocol:market:batch:ready:epochID)
         echo -e "\n📦 Ready Batches:"
-        READY=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT KEYS "batch:ready:*" 2>/dev/null)
+        READY=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT KEYS "*:*:batch:ready:*" 2>/dev/null)
         if [ ! -z "$READY" ]; then
             echo "$READY" | while read batch; do
-                echo "  ✓ $batch"
+                # Extract protocol:market and epoch from protocol:market:batch:ready:epochID
+                PROTOCOL_MARKET=$(echo "$batch" | sed "s/:batch:ready:.*//")
+                EPOCH=$(echo "$batch" | grep -oE "[0-9]+$")
+                echo "  ✓ $PROTOCOL_MARKET - Epoch $EPOCH ready for finalization"
             done
         else
             echo "  None"
         fi
         
-        # Pending submissions
-        echo -e "\n⏳ Pending Submissions:"
-        COUNT=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT LLEN "submissions:pending" 2>/dev/null)
-        echo "  Count: ${COUNT:-0}"
+        # Finalized batches (Updated to look for batch:finalized:epochID keys)
+        echo -e "\n✅ Finalized Batches (last 5):"
+        FINALIZED=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT KEYS "batch:finalized:*" 2>/dev/null | sort -rn | head -5)
+        if [ ! -z "$FINALIZED" ]; then
+            echo "$FINALIZED" | while read batch; do
+                EPOCH=$(echo "$batch" | grep -oE "[0-9]+$")
+                # Try to get additional metadata if available
+                MERKLE=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT HGET "$batch" "merkle_root" 2>/dev/null)
+                IPFS=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT HGET "$batch" "ipfs_cid" 2>/dev/null)
+                if [ ! -z "$MERKLE" ]; then
+                    echo "  ✓ Epoch $EPOCH (Merkle: ${MERKLE:0:12}...)"
+                else
+                    echo "  ✓ Epoch $EPOCH"
+                fi
+            done
+        else
+            echo "  None"
+        fi
         
-        # Window statistics
-        echo -e "\n📈 Window Statistics:"
-        redis-cli -h $REDIS_HOST -p $REDIS_PORT KEYS "window:*:submissions" 2>/dev/null | while read window; do
-            if [ ! -z "$window" ]; then
-                COUNT=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT LLEN "$window" 2>/dev/null)
-                echo "  $window: $COUNT submissions"
-            fi
-        done
+        # Worker status
+        echo -e "\n👷 Worker Status:"
+        WORKERS=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT KEYS "worker:*:status" 2>/dev/null)
+        if [ ! -z "$WORKERS" ]; then
+            echo "$WORKERS" | while read worker; do
+                STATUS=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT GET "$worker" 2>/dev/null)
+                WORKER_NAME=$(echo "$worker" | sed "s/worker://;s/:status//")
+                echo "  $WORKER_NAME: $STATUS"
+            done
+        else
+            echo "  No active workers"
+        fi
         
-        # Last preparation time
-        echo -e "\n⏰ Last Batch Prepared:"
-        LAST=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT GET "batch:last_prepared_time" 2>/dev/null)
-        echo "  ${LAST:-Never}"
+        # Statistics
+        echo -e "\n📈 Statistics:"
+        PROCESSED=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT SCARD "*:processed" 2>/dev/null | head -1)
+        echo "  Processed submissions: ${PROCESSED:-0}"
+        
+        QUEUE_DEPTH=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT LLEN "submissionQueue" 2>/dev/null)
+        echo "  Current queue depth: ${QUEUE_DEPTH:-0}"
     '
 }
 
@@ -510,7 +552,13 @@ case $COMMAND in
         show_status
         ;;
     monitor)
-        monitor_batches
+        # Try the simple monitor first (more reliable)
+        if [ -f "./scripts/monitor_simple.sh" ]; then
+            ./scripts/monitor_simple.sh
+        else
+            # Fallback to container-based monitoring
+            monitor_batches
+        fi
         ;;
     listener-logs)
         # Shortcut for viewing P2P listener logs

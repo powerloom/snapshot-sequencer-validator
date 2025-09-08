@@ -4,6 +4,8 @@
 
 The enhanced monitoring system provides comprehensive visibility into the parallel batch processing pipeline, tracking data flow from submission collection through final aggregation.
 
+The system now supports both P2PSnapshotSubmission batch format (multiple submissions per message) and single SnapshotSubmission format, with updated Redis key patterns for better organization.
+
 ## Quick Start
 
 ### Basic Monitoring
@@ -20,9 +22,10 @@ The enhanced monitoring system provides comprehensive visibility into the parall
 The monitoring system tracks 5 distinct stages:
 
 ### Stage 1: Submission Collection
-- **Active Windows**: Open submission windows accepting data
+- **Active Windows**: Open submission windows accepting data (format: `epoch:market:epochID:window`)
 - **Queue Depth**: Pending submissions in processing queue
 - **Vote Distribution**: Multiple CIDs per project with vote counts
+- **Batch vs Single Submissions**: Now handles P2PSnapshotSubmission batch format
 
 ### Stage 2: Batch Splitting
 - **Split Metadata**: How epochs are divided into parallel batches
@@ -71,20 +74,28 @@ The monitoring system tracks 5 distinct stages:
 
 ## Redis Keys Structure
 
-### Submission Tracking
+### Submission Tracking (Updated Format)
 ```
-submissionQueue                           # Raw P2P submissions
-{protocol}:{market}:epoch:{id}:processed  # Processed submission IDs
-{protocol}:{market}:epoch:{id}:project:{pid}:votes  # Vote counts per CID
+submissionQueue                                     # Raw P2P submissions
+{protocol}:{market}:processed:{sequencerID}:{id}    # Individual processed submissions (10min TTL)
+{protocol}:{market}:epoch:{epochId}:processed       # Set of submission IDs per epoch (1hr TTL)
+{protocol}:{market}:epoch:{epochId}:project:{pid}:votes # Vote counts per CID
+```
+
+### Window Management (Updated Format)
+```
+epoch:{market}:{epochId}:window                     # Active submission windows
+{protocol}:{market}:batch:ready:{epochId}          # Ready batches for finalization
+batch:finalized:{epochId}                          # Finalized batches with metadata
 ```
 
 ### Batch Processing
 ```
-{protocol}:{market}:epoch:{id}:batch:meta # Split batch metadata
-{protocol}:{market}:finalizationQueue     # Queue of batch parts
-batch:{epochId}:part:{partId}:status      # Part processing status
-epoch:{epochId}:parts:completed           # Completed parts count
-epoch:{epochId}:parts:total               # Total parts count
+{protocol}:{market}:epoch:{epochId}:batch:meta      # Split batch metadata
+{protocol}:{market}:finalizationQueue               # Queue of batch parts
+batch:{epochId}:part:{partId}:status                # Part processing status
+epoch:{epochId}:parts:completed                     # Completed parts count
+epoch:{epochId}:parts:total                         # Total parts count
 ```
 
 ### Worker Monitoring
@@ -206,6 +217,51 @@ Workers only appear when implemented. Current status:
 # Monitor queue depth trends
 watch -n 5 "./launch.sh monitor | grep 'Pending'"
 ```
+
+### Data Format Issues
+The system now handles both batch and single submission formats with advanced conversion strategies:
+```bash
+# Check for batch format submissions
+./launch.sh dequeuer-logs | grep "P2PSnapshotSubmission"
+
+# Check field name changes (snake_case → camelCase)
+./launch.sh dequeuer-logs | grep "epochId\|projectId"
+
+# Verify conversion strategy
+docker exec powerloom-sequencer-validator-dequeuer-1 \
+  printenv SUBMISSION_FORMAT_STRATEGY
+
+# Manual format override
+# Possible values: 'auto', 'single', 'batch'
+SUBMISSION_FORMAT_STRATEGY=single ./launch.sh distributed
+```
+
+#### Conversion Troubleshooting
+- **Auto Strategy**: Automatically detects and converts submission formats
+- **Single Strategy**: Forces single submission parsing
+- **Batch Strategy**: Forces batch submission parsing
+
+##### Common Conversion Mappings
+| Old (snake_case) | New (camelCase) |
+|-----------------|----------------|
+| `epoch_id`     | `epochId`       |
+| `project_id`   | `projectId`     |
+| `market_id`    | `marketId`      |
+| `submitter`    | `submitterAddress` |
+
+**Warning Signs**:
+- Logs showing parsing errors
+- Submissions not being processed
+- Inconsistent queue depths
+- Metrics not being collected
+
+##### Debugging Conversion
+1. Check logs for detailed parsing information
+2. Verify container environment variables
+3. Test with explicit conversion strategy
+4. Monitor metrics and queue processing
+
+**Tip**: Always use the most recent version of launch scripts and monitor containers for the latest conversion utilities.
 
 ### Stale Heartbeats
 Indicates worker process issues:

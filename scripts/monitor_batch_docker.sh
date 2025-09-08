@@ -16,17 +16,18 @@ docker exec -it $CONTAINER /bin/sh -c '
     echo "📊 Checking Redis at $REDIS_HOST:$REDIS_PORT"
     echo ""
     
-    # Check active submission windows
+    # Check active submission windows (Updated format: epoch:market:epochID:window)
     echo "🔷 Current Submission Window:"
     WINDOWS_FOUND=0
-    redis-cli -h $REDIS_HOST -p $REDIS_PORT KEYS "epoch:*:window" 2>/dev/null | while read window_key; do
+    redis-cli -h $REDIS_HOST -p $REDIS_PORT KEYS "epoch:*:*:window" 2>/dev/null | while read window_key; do
         if [ ! -z "$window_key" ]; then
             STATUS=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT GET "$window_key" 2>/dev/null)
             if [ "$STATUS" = "open" ]; then
-                # Extract market and epoch from key
-                EPOCH_INFO=$(echo "$window_key" | sed "s/^epoch://;s/:window$//")
+                # Parse epoch:market:epochID:window format
+                MARKET=$(echo "$window_key" | sed "s/^epoch://;s/:.*:window$//" | cut -d: -f1)
+                EPOCH=$(echo "$window_key" | sed "s/^epoch:[^:]*://;s/:window$//")
                 TTL=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT TTL "$window_key" 2>/dev/null)
-                echo "  ✅ $EPOCH_INFO (TTL: ${TTL}s)"
+                echo "  ✅ Market: $MARKET, Epoch: $EPOCH (TTL: ${TTL}s)"
                 WINDOWS_FOUND=1
             fi
         fi
@@ -36,11 +37,14 @@ docker exec -it $CONTAINER /bin/sh -c '
         echo "  None active"
     fi
     
-    # Check ready batches
+    # Check ready batches (Updated format: protocol:market:batch:ready:epochID)
     echo -e "\n📦 Ready Batches:"
-    redis-cli -h $REDIS_HOST -p $REDIS_PORT KEYS "batch:ready:*" 2>/dev/null | while read batch; do
+    redis-cli -h $REDIS_HOST -p $REDIS_PORT KEYS "*:*:batch:ready:*" 2>/dev/null | while read batch; do
         if [ ! -z "$batch" ]; then
-            echo "  - $batch"
+            # Extract protocol:market and epoch from protocol:market:batch:ready:epochID
+            PROTOCOL_MARKET=$(echo "$batch" | sed "s/:batch:ready:.*//")
+            EPOCH=$(echo "$batch" | grep -oE "[0-9]+$")
+            echo "  - $PROTOCOL_MARKET - Epoch $EPOCH"
             BATCH_SIZE=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT GET "$batch" 2>/dev/null | wc -c)
             echo "    Size: ~$BATCH_SIZE bytes"
         fi

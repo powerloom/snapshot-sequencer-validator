@@ -50,20 +50,22 @@ docker exec -it $CONTAINER /bin/sh -c '
     echo "📥 STAGE 1: SUBMISSION COLLECTION"
     echo "─────────────────────────────────────"
     
-    # Active submission windows
+    # Active submission windows (Updated format: epoch:market:epochID:window)
     echo "🔷 Active Submission Windows:"
     WINDOWS_FOUND=0
-    redis-cli -h $REDIS_HOST -p $REDIS_PORT KEYS "epoch:*:window" 2>/dev/null | while read window_key; do
+    redis-cli -h $REDIS_HOST -p $REDIS_PORT KEYS "epoch:*:*:window" 2>/dev/null | while read window_key; do
         if [ ! -z "$window_key" ]; then
             STATUS=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT GET "$window_key" 2>/dev/null)
             if [ "$STATUS" = "open" ]; then
-                EPOCH_INFO=$(echo "$window_key" | sed "s/^epoch://;s/:window$//")
+                # Parse epoch:market:epochID:window format
+                MARKET=$(echo "$window_key" | sed "s/^epoch://;s/:.*:window$//" | sed "s/:.*//")
+                EPOCH_ID=$(echo "$window_key" | sed "s/^epoch:[^:]*://;s/:window$//" )
                 TTL=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT TTL "$window_key" 2>/dev/null)
                 
-                # Count submissions for this epoch
-                SUBMISSION_COUNT=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT SCARD "powerloom-localnet:eth:epoch:${EPOCH_INFO##*:}:processed" 2>/dev/null)
+                # Count submissions for this epoch using new format: protocol:market:epoch:epochID:processed
+                SUBMISSION_COUNT=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT SCARD "*:*:epoch:$EPOCH_ID:processed" 2>/dev/null | head -1)
                 
-                echo "  ✅ Epoch: $EPOCH_INFO"
+                echo "  ✅ Market: $MARKET, Epoch: $EPOCH_ID"
                 echo "     Submissions: ${SUBMISSION_COUNT:-0} | TTL: ${TTL}s | Status: COLLECTING"
                 WINDOWS_FOUND=1
             fi
@@ -132,25 +134,36 @@ docker exec -it $CONTAINER /bin/sh -c '
         echo "  ⚫ No batches split yet"
     fi
     
-    # Finalization queue status
+    # Finalization queue status (Updated format: protocol:market:finalizationQueue)
     echo ""
     echo "⏳ Finalization Queue:"
-    FIN_QUEUE_DEPTH=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT LLEN "powerloom-localnet:eth:finalizationQueue" 2>/dev/null)
-    if [ ! -z "$FIN_QUEUE_DEPTH" ] && [ "$FIN_QUEUE_DEPTH" -gt 0 ]; then
-        echo "  📦 Batches waiting: $FIN_QUEUE_DEPTH"
-        
-        # Show details of first few batches
-        echo "  📋 Next batches in queue:"
-        for i in 0 1 2; do
-            BATCH_DATA=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT LINDEX "powerloom-localnet:eth:finalizationQueue" $i 2>/dev/null)
-            if [ ! -z "$BATCH_DATA" ]; then
-                BATCH_EPOCH=$(echo "$BATCH_DATA" | grep -o "\"epoch_id\":\"[^\"]*" | cut -d"\"" -f4)
-                BATCH_ID=$(echo "$BATCH_DATA" | grep -o "\"batch_id\":[0-9]*" | cut -d: -f2)
-                echo "     [$((i+1))] Epoch $BATCH_EPOCH, Batch #$BATCH_ID"
+    # Look for finalization queues with pattern protocol:market:finalizationQueue
+    FIN_QUEUES=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT KEYS "*:*:finalizationQueue" 2>/dev/null)
+    TOTAL_BATCHES=0
+    if [ ! -z "$FIN_QUEUES" ]; then
+        echo "$FIN_QUEUES" | while read queue_key; do
+            if [ ! -z "$queue_key" ]; then
+                MARKET=$(echo "$queue_key" | sed "s/:finalizationQueue$//" | sed "s/^[^:]*://")
+                QUEUE_DEPTH=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT LLEN "$queue_key" 2>/dev/null)
+                echo "  📦 Market $MARKET: $QUEUE_DEPTH batches waiting"
+                TOTAL_BATCHES=$((TOTAL_BATCHES + QUEUE_DEPTH))
+                
+                # Show details of first few batches for this market
+                if [ "$QUEUE_DEPTH" -gt 0 ]; then
+                    echo "  📋 Next batches in $MARKET queue:"
+                    for i in 0 1; do
+                        BATCH_DATA=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT LINDEX "$queue_key" $i 2>/dev/null)
+                        if [ ! -z "$BATCH_DATA" ]; then
+                            BATCH_EPOCH=$(echo "$BATCH_DATA" | grep -o "\"epoch_id\":\"[^\"]*" | cut -d"\"" -f4)
+                            BATCH_ID=$(echo "$BATCH_DATA" | grep -o "\"batch_id\":[0-9]*" | cut -d: -f2)
+                            echo "     [$((i+1))] Epoch $BATCH_EPOCH, Batch #$BATCH_ID"
+                        fi
+                    done
+                fi
             fi
         done
     else
-        echo "  ✓ Queue empty (no batches pending)"
+        echo "  ✓ No finalization queues found"
     fi
     
     echo ""
