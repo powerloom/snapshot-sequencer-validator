@@ -38,11 +38,11 @@ show_usage() {
     echo "  stop          - Stop all services"
     echo "  clean         - Stop and remove all containers/volumes"
     echo "  logs          - Show logs for all services"
-    echo "  listener-logs - Show P2P listener logs"
-    echo "  dequeuer-logs - Show dequeuer worker logs"
-    echo "  finalizer-logs - Show finalizer logs"
-    echo "  event-monitor-logs - Show event monitor logs"
-    echo "  redis-logs    - Show Redis logs"
+    echo "  listener-logs [N] - Show P2P listener logs (last N lines if specified)"
+    echo "  dequeuer-logs [N] - Show dequeuer worker logs (last N lines if specified)"
+    echo "  finalizer-logs [N] - Show finalizer logs (last N lines if specified)"
+    echo "  event-monitor-logs [N] - Show event monitor logs (last N lines if specified)"
+    echo "  redis-logs [N]    - Show Redis logs (last N lines if specified)"
     echo "  status        - Show status of all services"
     echo "  monitor       - Monitor batch preparation status"
     echo "  pipeline      - Comprehensive pipeline monitoring (all stages)"
@@ -562,45 +562,79 @@ case $COMMAND in
         ;;
     listener-logs)
         # Shortcut for viewing P2P listener logs
+        # Usage: ./launch.sh listener-logs [number_of_lines]
         if is_distributed_mode; then
-            $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml logs -f listener
+            LINES="${2:-}"
+            if [ ! -z "$LINES" ] && [ "$LINES" -eq "$LINES" ] 2>/dev/null; then
+                $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml logs -f --tail="$LINES" listener
+            else
+                $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml logs -f listener
+            fi
         else
             print_color "$YELLOW" "Listener only runs in distributed mode. Use: ./launch.sh distributed"
         fi
         ;;
     dequeuer-logs)
         # Shortcut for viewing dequeuer worker logs
+        # Usage: ./launch.sh dequeuer-logs [number_of_lines]
         if is_distributed_mode; then
-            $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml logs -f dequeuer
+            LINES="${2:-}"
+            if [ ! -z "$LINES" ] && [ "$LINES" -eq "$LINES" ] 2>/dev/null; then
+                $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml logs -f --tail="$LINES" dequeuer
+            else
+                $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml logs -f dequeuer
+            fi
         else
             print_color "$YELLOW" "Dequeuer only runs in distributed mode. Use: ./launch.sh distributed"
         fi
         ;;
     finalizer-logs)
         # Shortcut for viewing finalizer logs
+        # Usage: ./launch.sh finalizer-logs [number_of_lines]
         if is_distributed_mode; then
-            $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml logs -f finalizer
+            LINES="${2:-}"
+            if [ ! -z "$LINES" ] && [ "$LINES" -eq "$LINES" ] 2>/dev/null; then
+                $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml logs -f --tail="$LINES" finalizer
+            else
+                $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml logs -f finalizer
+            fi
         else
             print_color "$YELLOW" "Finalizer only runs in distributed mode. Use: ./launch.sh distributed"
         fi
         ;;
     event-monitor-logs)
         # Shortcut for viewing event monitor logs
+        # Usage: ./launch.sh event-monitor-logs [number_of_lines]
         if is_distributed_mode; then
-            $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml logs -f event-monitor
+            LINES="${2:-}"
+            if [ ! -z "$LINES" ] && [ "$LINES" -eq "$LINES" ] 2>/dev/null; then
+                $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml logs -f --tail="$LINES" event-monitor
+            else
+                $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml logs -f event-monitor
+            fi
         else
             print_color "$YELLOW" "Event monitor only runs in distributed mode. Use: ./launch.sh distributed"
         fi
         ;;
     redis-logs)
         # Shortcut for viewing Redis logs
+        # Usage: ./launch.sh redis-logs [number_of_lines]
+        LINES="${2:-}"
         if is_distributed_mode; then
-            $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml logs -f redis
+            if [ ! -z "$LINES" ] && [ "$LINES" -eq "$LINES" ] 2>/dev/null; then
+                $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml logs -f --tail="$LINES" redis
+            else
+                $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml logs -f redis
+            fi
         else
             # Try to show Redis logs from any compose file that's running
             COMPOSE_FILE=$(detect_running_mode)
             if [ ! -z "$COMPOSE_FILE" ]; then
-                $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" logs -f redis
+                if [ ! -z "$LINES" ] && [ "$LINES" -eq "$LINES" ] 2>/dev/null; then
+                    $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" logs -f --tail="$LINES" redis
+                else
+                    $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" logs -f redis
+                fi
             else
                 print_color "$YELLOW" "No Redis service is currently running"
             fi

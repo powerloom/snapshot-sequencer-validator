@@ -334,27 +334,47 @@ The comprehensive monitoring guide covers:
 
 ### Component Log Shortcuts
 
-New dedicated log commands for each component:
+New dedicated log commands for each component support optional line count for initial view and continuous follow:
 
 ```bash
-# View P2P listener logs
+# View P2P listener logs (default: follow)
 ./launch.sh listener-logs
+
+# View last 50 lines of listener logs and continue following
+./launch.sh listener-logs 50
 
 # View dequeuer worker logs (now with enhanced details)
 ./launch.sh dequeuer-logs
 
+# View last 100 lines of dequeuer logs and continue following
+./launch.sh dequeuer-logs 100
+
 # View finalizer logs
 ./launch.sh finalizer-logs
+
+# View last 75 lines of finalizer logs and continue following
+./launch.sh finalizer-logs 75
 
 # View event monitor logs
 ./launch.sh event-monitor-logs
 
+# View last 25 lines of event monitor logs and continue following
+./launch.sh event-monitor-logs 25
+
 # View Redis logs
 ./launch.sh redis-logs
+
+# View last 50 lines of Redis logs and continue following
+./launch.sh redis-logs 50
 
 # View all logs
 ./launch.sh logs
 ```
+
+**Log Command Usage Notes:**
+- Without a number, the command follows logs in real-time
+- Providing a number shows the last N lines, then continues following
+- Useful for quickly checking recent log history before monitoring live output
 
 **Enhanced Dequeuer Logging:**
 The dequeuer now logs detailed submission information:
