@@ -68,7 +68,12 @@ if [ ! -z "$READY" ]; then
         DATA=$(redis_cmd GET "$batch")
         if [ ! -z "$DATA" ]; then
             # Count actual project IDs (top-level keys only, excluding cid_votes and total_submissions)
-            PROJECT_COUNT=$(echo "$DATA" | jq 'keys | map(select(. != "cid_votes" and . != "total_submissions")) | length' 2>/dev/null || echo "0")
+            if command -v jq >/dev/null 2>&1; then
+                PROJECT_COUNT=$(echo "$DATA" | jq 'keys | length' 2>/dev/null || echo "0")
+            else
+                # Fallback if jq not available
+                PROJECT_COUNT=$(echo "$DATA" | grep -o '"[^"]*":{' | wc -l)
+            fi
             if echo "$DATA" | grep -q '"cid_votes"'; then
                 echo -e "  ${GREEN}✓ $PROTOCOL_MARKET - Epoch $EPOCH (${PROJECT_COUNT} projects with FULL vote data)${NC}"
             else

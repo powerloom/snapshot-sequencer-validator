@@ -120,8 +120,13 @@ docker exec -it $CONTAINER /bin/sh -c '
                 EPOCH_ID=$(echo "$meta_key" | grep -oE "[0-9]+$")
                 META_DATA=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT GET "$meta_key" 2>/dev/null)
                 if [ ! -z "$META_DATA" ]; then
-                    # Count actual projects
-                    PROJECT_COUNT=$(echo "$META_DATA" | jq 'keys | length' 2>/dev/null || echo "0")
+                    # Count actual projects - check if jq is available
+                    if command -v jq >/dev/null 2>&1; then
+                        PROJECT_COUNT=$(echo "$META_DATA" | jq 'keys | length' 2>/dev/null || echo "0")
+                    else
+                        # Fallback to simple grep count if jq not available
+                        PROJECT_COUNT=$(echo "$META_DATA" | grep -o '"[^"]*":{' | wc -l)
+                    fi
                     HAS_VOTES=$(echo "$META_DATA" | grep -q '"cid_votes"' && echo "with vote data" || echo "pre-selected")
                     
                     echo "  📋 Epoch $EPOCH_ID:"

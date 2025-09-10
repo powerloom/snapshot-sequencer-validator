@@ -667,7 +667,7 @@ case $COMMAND in
         print_color "$BLUE" "📦 Viewing collection pipeline logs (dequeuer + event-monitor)..."
         LINES="${2:-100}"
         if is_distributed_mode; then
-            $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml logs -f --tail="$LINES" snapshot-sequencer-validator-dequeuer snapshot-sequencer-validator-event-monitor
+            $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml logs -f --tail="$LINES" dequeuer event-monitor
         else
             COMPOSE_FILE=$(detect_running_mode)
             if [ ! -z "$COMPOSE_FILE" ]; then
@@ -684,7 +684,7 @@ case $COMMAND in
         print_color "$BLUE" "🎯 Viewing finalization pipeline logs (event-monitor + finalizer)..."
         LINES="${2:-100}"
         if is_distributed_mode; then
-            $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml logs -f --tail="$LINES" snapshot-sequencer-validator-event-monitor snapshot-sequencer-validator-finalizer
+            $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml logs -f --tail="$LINES" event-monitor finalizer
         else
             COMPOSE_FILE=$(detect_running_mode)
             if [ ! -z "$COMPOSE_FILE" ]; then
@@ -701,7 +701,7 @@ case $COMMAND in
         print_color "$BLUE" "🔄 Viewing full pipeline logs (dequeuer + event-monitor + finalizer)..."
         LINES="${2:-100}"
         if is_distributed_mode; then
-            $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml logs -f --tail="$LINES" snapshot-sequencer-validator-dequeuer snapshot-sequencer-validator-event-monitor snapshot-sequencer-validator-finalizer
+            $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml logs -f --tail="$LINES" dequeuer event-monitor finalizer
         else
             COMPOSE_FILE=$(detect_running_mode)
             if [ ! -z "$COMPOSE_FILE" ]; then

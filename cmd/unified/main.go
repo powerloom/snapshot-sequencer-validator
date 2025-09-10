@@ -1005,8 +1005,26 @@ func (s *UnifiedSequencer) processBatchPart(epochID uint64, batchID int, totalBa
 	// Check if all parts are complete
 	workers.UpdateBatchPartsProgress(s.redisClient, epochStr, int(completed), totalBatches)
 	
+	// Log batch contents for operator visibility
 	log.Infof("✅ Processed batch part %d/%d for epoch %d: %d projects finalized", 
 		batchID, totalBatches, epochID, len(partResults))
+	
+	// Show first few projects as examples (limit to avoid log spam)
+	count := 0
+	for projectID, projectData := range partResults {
+		if count >= 3 {
+			if len(partResults) > 3 {
+				log.Debugf("  ... and %d more projects", len(partResults)-3)
+			}
+			break
+		}
+		if pd, ok := projectData.(map[string]interface{}); ok {
+			if cid, ok := pd["cid"].(string); ok {
+				log.Infof("  • %s → %s", projectID, cid[:16]+"...")
+			}
+		}
+		count++
+	}
 	
 	return nil
 }
@@ -1121,6 +1139,11 @@ func (s *UnifiedSequencer) aggregateBatchParts(epochID uint64, totalParts int) e
 	
 	log.Infof("📦 Aggregated %d projects from %d batch parts for epoch %d", 
 		len(aggregatedResults), totalParts, epochID)
+	
+	// Log aggregation summary
+	if totalParts > 1 {
+		log.Debugf("Aggregation details: Combined %d parallel batch parts into single batch", totalParts)
+	}
 	
 	return nil
 }
@@ -1243,8 +1266,26 @@ func (s *UnifiedSequencer) createFinalizedBatch(epochID uint64, projectSubmissio
 		return fmt.Errorf("failed to store finalized batch: %w", err)
 	}
 	
+	// Log finalized batch summary for operators
 	log.Infof("📦 Created finalized batch for epoch %d: %d projects, merkle=%s", 
 		epochID, len(projectIDs), hex.EncodeToString(merkleRoot[:8]))
+	
+	// Show batch contents summary (limit to first 5 to avoid log spam)
+	log.Infof("📊 Finalized Batch Summary - Epoch %d:", epochID)
+	for i, projectID := range projectIDs {
+		if i >= 5 {
+			log.Infof("  ... and %d more projects", len(projectIDs)-5)
+			break
+		}
+		cidPreview := snapshotCIDs[i]
+		if len(cidPreview) > 20 {
+			cidPreview = cidPreview[:20] + "..."
+		}
+		voteCount := projectVotes[projectID]
+		log.Infof("  • %s → %s (votes: %d)", projectID, cidPreview, voteCount)
+	}
+	log.Infof("  Full Merkle Root: %s", hex.EncodeToString(merkleRoot))
+	log.Infof("  Total Projects: %d", len(projectIDs))
 	
 	return nil
 }
