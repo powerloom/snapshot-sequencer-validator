@@ -106,13 +106,6 @@ func (d *Dequeuer) validateSubmission(submission *SnapshotSubmission) error {
 		return fmt.Errorf("empty data market address")
 	}
 	
-	// Check deadline (allow 5 minute grace period)
-	currentTime := uint64(time.Now().Unix())
-	if submission.Request.Deadline > 0 && currentTime > submission.Request.Deadline+300 {
-		return fmt.Errorf("submission past deadline: deadline=%d, current=%d",
-			submission.Request.Deadline, currentTime)
-	}
-	
 	return nil
 }
 
