@@ -113,6 +113,18 @@ else
     echo "  No active workers"
 fi
 
+# Check finalization queue
+echo -e "\n${BLUE}🔄 Finalization Queue:${NC}"
+FIN_QUEUES=$(redis_cmd KEYS "*:*:finalizationQueue")
+if [ ! -z "$FIN_QUEUES" ]; then
+    for queue in $FIN_QUEUES; do
+        QUEUE_LEN=$(redis_cmd LLEN "$queue")
+        echo "  $queue: ${QUEUE_LEN:-0} batches pending"
+    done
+else
+    echo "  No finalization queues found"
+fi
+
 # Quick Stats
 echo -e "\n${BLUE}📈 Quick Stats:${NC}"
 echo "  Queue Depth: ${QUEUE_DEPTH:-0}"

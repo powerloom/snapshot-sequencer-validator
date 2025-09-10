@@ -498,6 +498,7 @@ func (wm *WindowManager) triggerFinalization(dataMarket string, epochID *big.Int
 	
 	// Push each batch to finalization queue
 	queueKey := fmt.Sprintf("%s:%s:finalizationQueue", wm.protocolState, dataMarket)
+	log.Debugf("Pushing %d batches to finalization queue: %s", len(batches), queueKey)
 	
 	for i, batch := range batches {
 		batchData := map[string]interface{}{
@@ -513,6 +514,7 @@ func (wm *WindowManager) triggerFinalization(dataMarket string, epochID *big.Int
 			log.Errorf("Failed to push batch %d to finalization queue: %v", i, err)
 			continue
 		}
+		log.Debugf("Pushed batch %d to finalization queue: %s", i, queueKey)
 	}
 	
 	log.Infof("🎯 Split epoch %s into %d batches (%d projects total, batch size %d) for parallel finalization", 

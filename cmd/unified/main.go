@@ -831,6 +831,7 @@ func (s *UnifiedSequencer) runFinalizationWorker(workerID int) {
 	
 	// Finalization queue key (must match what event monitor uses)
 	queueKey := fmt.Sprintf("%s:%s:finalizationQueue", protocolState, dataMarket)
+	log.Debugf("Worker %d listening on finalization queue: %s", workerID, queueKey)
 	
 	for {
 		select {
@@ -882,6 +883,9 @@ func (s *UnifiedSequencer) runFinalizationWorker(workerID int) {
 				log.Errorf("Worker %d: Invalid projects format in batch", workerID)
 				continue
 			}
+			
+			log.Infof("Worker %d: Processing batch %d/%d for epoch %d with %d projects", 
+				workerID, batchID+1, totalBatches, epochID, len(projects))
 			
 			// Update monitoring
 			batchInfo := fmt.Sprintf("epoch:%d:batch:%d/%d", epochID, batchID, totalBatches)
