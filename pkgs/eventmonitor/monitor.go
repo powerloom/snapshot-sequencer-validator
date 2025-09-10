@@ -601,29 +601,22 @@ func (wm *WindowManager) collectEpochSubmissions(dataMarket string, epochID *big
 		}
 	}
 	
-	// Select winning CID for each project (highest vote count)
+	// Pass ALL CIDs with vote counts to finalizer (no pre-selection)
 	projectSubmissions := make(map[string]interface{})
 	for projectID, cidVotes := range projectVotes {
-		var winningCID string
-		maxVotes := 0
-		
-		for cid, votes := range cidVotes {
-			if votes > maxVotes {
-				maxVotes = votes
-				winningCID = cid
-			}
+		// Store ALL CIDs with their vote counts for finalizer to decide
+		projectSubmissions[projectID] = map[string]interface{}{
+			"cid_votes": cidVotes, // Full vote data for consensus
+			"total_submissions": len(cidVotes),
 		}
 		
-		if winningCID != "" {
-			// Store winning CID with vote metadata
-			projectSubmissions[projectID] = map[string]interface{}{
-				"cid": winningCID,
-				"votes": maxVotes,
-				"totalSubmissions": len(cidVotes),
-			}
-			log.Debugf("Project %s: Winner CID %s with %d votes (out of %d unique CIDs)", 
-				projectID, winningCID, maxVotes, len(cidVotes))
+		// Debug logging to show all CIDs collected
+		totalVotes := 0
+		for _, votes := range cidVotes {
+			totalVotes += votes
 		}
+		log.Debugf("Project %s: Collected %d unique CIDs with %d total submissions", 
+			projectID, len(cidVotes), totalVotes)
 	}
 	
 	// Store the collected batch in Redis for finalizer (namespaced)

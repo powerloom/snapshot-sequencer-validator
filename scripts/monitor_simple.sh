@@ -56,14 +56,27 @@ QUEUE_DEPTH=$(redis_cmd LLEN "submissionQueue")
 echo "  Pending: ${QUEUE_DEPTH:-0} submissions"
 
 # Ready Batches (Updated format: protocol:market:batch:ready:epochID)
-echo -e "\n${BLUE}📦 Ready Batches:${NC}"
+echo -e "\n${BLUE}📦 Ready Batches (with vote data):${NC}"
 READY=$(redis_cmd KEYS "*:*:batch:ready:*")
 if [ ! -z "$READY" ]; then
     for batch in $READY; do
         # Extract protocol:market and epoch from protocol:market:batch:ready:epochID
         PROTOCOL_MARKET=$(echo "$batch" | sed "s/:batch:ready:.*//")
         EPOCH=$(echo "$batch" | grep -oE "[0-9]+$")
-        echo "  ✓ $PROTOCOL_MARKET - Epoch $EPOCH"
+        
+        # Get batch data to check format
+        DATA=$(redis_cmd GET "$batch")
+        if [ ! -z "$DATA" ]; then
+            # Count projects and check for new vote format
+            PROJECT_COUNT=$(echo "$DATA" | grep -o '"[^"]*":' | wc -l)
+            if echo "$DATA" | grep -q '"cid_votes"'; then
+                echo -e "  ${GREEN}✓ $PROTOCOL_MARKET - Epoch $EPOCH (${PROJECT_COUNT} projects with FULL vote data)${NC}"
+            else
+                echo -e "  ${YELLOW}⚠ $PROTOCOL_MARKET - Epoch $EPOCH (${PROJECT_COUNT} projects - OLD pre-selected format)${NC}"
+            fi
+        else
+            echo "  ✓ $PROTOCOL_MARKET - Epoch $EPOCH"
+        fi
     done
 else
     echo "  None"
@@ -105,6 +118,27 @@ echo -e "\n${BLUE}📈 Quick Stats:${NC}"
 echo "  Queue Depth: ${QUEUE_DEPTH:-0}"
 WINDOWS_COUNT=$(echo "$WINDOWS" | grep -c "window" 2>/dev/null || echo "0")
 echo "  Active Windows: $WINDOWS_COUNT"
+
+# Vote Distribution Debug (shows if collector is passing all votes)
+echo -e "\n${BLUE}🗳️ Vote Distribution Check:${NC}"
+SAMPLE_BATCH=$(redis_cmd KEYS "*:*:batch:ready:*" | head -1)
+if [ ! -z "$SAMPLE_BATCH" ]; then
+    DATA=$(redis_cmd GET "$SAMPLE_BATCH")
+    if echo "$DATA" | grep -q '"cid_votes"'; then
+        echo -e "  ${GREEN}✓ NEW FORMAT DETECTED: Passing all CIDs with vote counts${NC}"
+        # Try to extract a sample project to show vote distribution
+        SAMPLE_PROJECT=$(echo "$DATA" | grep -o '"[^"]*":{"cid_votes"' | head -1 | cut -d'"' -f2)
+        if [ ! -z "$SAMPLE_PROJECT" ]; then
+            echo "  Sample Project: $SAMPLE_PROJECT has multiple CIDs with votes"
+        fi
+    elif echo "$DATA" | grep -q '"cid"'; then
+        echo -e "  ${YELLOW}⚠ OLD FORMAT: Pre-selected winners only (needs update)${NC}"
+    else
+        echo "  No vote data found"
+    fi
+else
+    echo "  No batches available to check"
+fi
 
 echo ""
 echo -e "${CYAN}═══════════════════════════════════${NC}"

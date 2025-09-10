@@ -828,8 +828,8 @@ func (s *UnifiedSequencer) runFinalizationWorker(workerID int) {
 		dataMarket = s.config.DataMarketAddresses[0]
 	}
 	
-	// Batch parts queue key
-	queueKey := fmt.Sprintf("%s:%s:batchPartsQueue", protocolState, dataMarket)
+	// Finalization queue key (must match what event monitor uses)
+	queueKey := fmt.Sprintf("%s:%s:finalizationQueue", protocolState, dataMarket)
 	
 	for {
 		select {
@@ -859,17 +859,35 @@ func (s *UnifiedSequencer) runFinalizationWorker(workerID int) {
 				continue
 			}
 			
-			epochID := uint64(batchPart["epoch_id"].(float64))
+			// Parse epoch ID (comes as string from event monitor)
+			epochIDStr, ok := batchPart["epoch_id"].(string)
+			if !ok {
+				// Fallback for float format
+				if epochFloat, ok := batchPart["epoch_id"].(float64); ok {
+					epochIDStr = fmt.Sprintf("%.0f", epochFloat)
+				} else {
+					log.Errorf("Worker %d: Invalid epoch_id format", workerID)
+					continue
+				}
+			}
+			epochID, _ := strconv.ParseUint(epochIDStr, 10, 64)
+			
 			batchID := int(batchPart["batch_id"].(float64))
 			totalBatches := int(batchPart["total_batches"].(float64))
-			projectIDs := batchPart["project_ids"].([]interface{})
+			
+			// Extract projects map (not project_ids array)
+			projects, ok := batchPart["projects"].(map[string]interface{})
+			if !ok {
+				log.Errorf("Worker %d: Invalid projects format in batch", workerID)
+				continue
+			}
 			
 			// Update monitoring
 			batchInfo := fmt.Sprintf("epoch:%d:batch:%d/%d", epochID, batchID, totalBatches)
 			monitor.ProcessingStarted(batchInfo)
 			
-			// Process this batch part
-			if err := s.processBatchPart(epochID, batchID, totalBatches, projectIDs, monitor); err != nil {
+			// Process this batch part with projects map
+			if err := s.processBatchPart(epochID, batchID, totalBatches, projects, monitor); err != nil {
 				log.Errorf("Worker %d: Failed to process batch part %d for epoch %d: %v", 
 					workerID, batchID, epochID, err)
 				monitor.ProcessingFailed(err)
@@ -882,7 +900,7 @@ func (s *UnifiedSequencer) runFinalizationWorker(workerID int) {
 	}
 }
 
-func (s *UnifiedSequencer) processBatchPart(epochID uint64, batchID int, totalBatches int, projectIDs []interface{}, monitor *workers.WorkerMonitor) error {
+func (s *UnifiedSequencer) processBatchPart(epochID uint64, batchID int, totalBatches int, projects map[string]interface{}, monitor *workers.WorkerMonitor) error {
 	ctx := context.Background()
 	
 	// Get protocol state and data market from config
@@ -897,53 +915,52 @@ func (s *UnifiedSequencer) processBatchPart(epochID uint64, batchID int, totalBa
 	workers.TrackBatchPart(s.redisClient, epochStr, batchID, "processing")
 	
 	// Process each project in this batch part
+	// Projects now contain ALL CIDs with vote counts, we need to select winners
 	partResults := make(map[string]interface{})
 	
-	for _, projectIDRaw := range projectIDs {
-		projectID := projectIDRaw.(string)
+	// Process each project's vote data and select consensus CID
+	for projectID, submissionData := range projects {
+		projectData, ok := submissionData.(map[string]interface{})
+		if !ok {
+			log.Errorf("Invalid project data format for project %s", projectID)
+			continue
+		}
 		
-		// Get all submissions for this project in this epoch
-		submissionPattern := fmt.Sprintf("%s:%s:epoch:%d:project:%s:*", protocolState, dataMarket, epochID, projectID)
+		// Extract the CID votes map
+		cidVotesRaw, exists := projectData["cid_votes"]
+		if !exists {
+			log.Errorf("No cid_votes found for project %s", projectID)
+			continue
+		}
 		
-		// Use SCAN to find all submission keys for this project
-		iter := s.redisClient.Scan(ctx, 0, submissionPattern, 100).Iterator()
-		
-		// Track CID votes
-		cidVotes := make(map[string]int)
-		
-		for iter.Next(ctx) {
-			key := iter.Val()
-			
-			// Get the submission data
-			submissionData, err := s.redisClient.Get(ctx, key).Result()
-			if err != nil {
-				log.Errorf("Failed to get submission from %s: %v", key, err)
+		// Convert to proper type
+		cidVotes, ok := cidVotesRaw.(map[string]int)
+		if !ok {
+			// Try to convert from map[string]interface{}
+			cidVotesInterface, ok := cidVotesRaw.(map[string]interface{})
+			if !ok {
+				log.Errorf("Invalid cid_votes format for project %s", projectID)
 				continue
 			}
 			
-			// Parse to get CID
-			var submission map[string]interface{}
-			if err := json.Unmarshal([]byte(submissionData), &submission); err != nil {
-				log.Errorf("Failed to parse submission: %v", err)
-				continue
-			}
-			
-			// Extract CID and count vote
-			if request, ok := submission["request"].(map[string]interface{}); ok {
-				if cid, ok := request["snapshot_cid"].(string); ok {
-					cidVotes[cid]++
+			// Convert to map[string]int
+			cidVotes = make(map[string]int)
+			for cid, votesRaw := range cidVotesInterface {
+				if votesFloat, ok := votesRaw.(float64); ok {
+					cidVotes[cid] = int(votesFloat)
+				} else if votesInt, ok := votesRaw.(int); ok {
+					cidVotes[cid] = votesInt
 				}
 			}
 		}
 		
-		if err := iter.Err(); err != nil {
-			log.Errorf("Error scanning submissions: %v", err)
-		}
-		
-		// Select winning CID (majority vote)
+		// Select winning CID based on consensus (highest vote count)
 		var winningCID string
 		maxVotes := 0
+		totalVotes := 0
+		
 		for cid, votes := range cidVotes {
+			totalVotes += votes
 			if votes > maxVotes {
 				winningCID = cid
 				maxVotes = votes
@@ -954,7 +971,11 @@ func (s *UnifiedSequencer) processBatchPart(epochID uint64, batchID int, totalBa
 			partResults[projectID] = map[string]interface{}{
 				"cid":   winningCID,
 				"votes": maxVotes,
+				"total_votes": totalVotes,
+				"unique_cids": len(cidVotes),
 			}
+			log.Debugf("Project %s: Selected CID %s with %d/%d votes (from %d unique CIDs)",
+				projectID, winningCID, maxVotes, totalVotes, len(cidVotes))
 		}
 	}
 	
