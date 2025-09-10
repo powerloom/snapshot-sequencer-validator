@@ -582,37 +582,41 @@ func (wm *WindowManager) collectEpochSubmissions(dataMarket string, epochID *big
 			
 			var submission map[string]interface{}
 			if err := json.Unmarshal([]byte(data), &submission); err != nil {
+				log.Errorf("Failed to unmarshal submission: %v", err)
 				continue
 			}
 			
-			// Extract project ID and CID
-			if subData, ok := submission["submission"].(map[string]interface{}); ok {
+			if subData, ok := submission["Submission"].(map[string]interface{}); ok {
 				if request, ok := subData["request"].(map[string]interface{}); ok {
 					if projectID, ok := request["projectId"].(string); ok {
 						if snapshotCID, ok := request["snapshotCid"].(string); ok {
-							// Initialize project votes map if needed
 							if projectVotes[projectID] == nil {
 								projectVotes[projectID] = make(map[string]int)
 							}
-							// Increment vote count for this CID
 							projectVotes[projectID][snapshotCID]++
+							log.Debugf("Found submission: project=%s, CID=%s", projectID, snapshotCID)
+						} else {
+							log.Warnf("No snapshotCid in request: %+v", request)
 						}
+					} else {
+						log.Warnf("No projectId in request: %+v", request)
 					}
+				} else {
+					log.Warnf("No request field in submission: %+v", subData)
 				}
+			} else {
+				log.Warnf("No Submission field in data: %+v", submission)
 			}
 		}
 	}
 	
-	// Pass ALL CIDs with vote counts to finalizer (no pre-selection)
 	projectSubmissions := make(map[string]interface{})
 	for projectID, cidVotes := range projectVotes {
-		// Store ALL CIDs with their vote counts for finalizer to decide
 		projectSubmissions[projectID] = map[string]interface{}{
-			"cid_votes": cidVotes, // Full vote data for consensus
+			"cid_votes": cidVotes,
 			"total_submissions": len(cidVotes),
 		}
 		
-		// Debug logging to show all CIDs collected
 		totalVotes := 0
 		for _, votes := range cidVotes {
 			totalVotes += votes
@@ -628,7 +632,7 @@ func (wm *WindowManager) collectEpochSubmissions(dataMarket string, epochID *big
 	batchData, _ := json.Marshal(projectSubmissions)
 	wm.redisClient.Set(ctx, batchKey, batchData, 1*time.Hour)
 	
-	log.Infof("📦 Collected %d unique projects for epoch %s (after consensus)", 
+	log.Infof("📦 Collected %d unique projects for epoch %s", 
 		len(projectSubmissions), epochID)
 	
 	return projectSubmissions
