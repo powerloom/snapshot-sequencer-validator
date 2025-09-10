@@ -661,6 +661,57 @@ case $COMMAND in
         
         ./scripts/monitor_pipeline.sh "$CONTAINER_NAME"
         ;;
+    
+    collection-logs)
+        # View collection pipeline logs (dequeuer + event-monitor)
+        print_color "$BLUE" "📦 Viewing collection pipeline logs (dequeuer + event-monitor)..."
+        LINES="${2:-100}"
+        if is_distributed_mode; then
+            $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml logs -f --tail="$LINES" snapshot-sequencer-validator-dequeuer snapshot-sequencer-validator-event-monitor
+        else
+            COMPOSE_FILE=$(detect_running_mode)
+            if [ ! -z "$COMPOSE_FILE" ]; then
+                $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" logs -f --tail="$LINES" snapshot-sequencer-validator-dequeuer snapshot-sequencer-validator-event-monitor
+            else
+                print_color "$YELLOW" "No services appear to be running"
+                exit 1
+            fi
+        fi
+        ;;
+    
+    finalization-logs)
+        # View finalization pipeline logs (event-monitor + finalizer)
+        print_color "$BLUE" "🎯 Viewing finalization pipeline logs (event-monitor + finalizer)..."
+        LINES="${2:-100}"
+        if is_distributed_mode; then
+            $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml logs -f --tail="$LINES" snapshot-sequencer-validator-event-monitor snapshot-sequencer-validator-finalizer
+        else
+            COMPOSE_FILE=$(detect_running_mode)
+            if [ ! -z "$COMPOSE_FILE" ]; then
+                $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" logs -f --tail="$LINES" snapshot-sequencer-validator-event-monitor snapshot-sequencer-validator-finalizer
+            else
+                print_color "$YELLOW" "No services appear to be running"
+                exit 1
+            fi
+        fi
+        ;;
+    
+    pipeline-logs)
+        # View full pipeline logs (dequeuer + event-monitor + finalizer)
+        print_color "$BLUE" "🔄 Viewing full pipeline logs (dequeuer + event-monitor + finalizer)..."
+        LINES="${2:-100}"
+        if is_distributed_mode; then
+            $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml logs -f --tail="$LINES" snapshot-sequencer-validator-dequeuer snapshot-sequencer-validator-event-monitor snapshot-sequencer-validator-finalizer
+        else
+            COMPOSE_FILE=$(detect_running_mode)
+            if [ ! -z "$COMPOSE_FILE" ]; then
+                $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" logs -f --tail="$LINES" snapshot-sequencer-validator-dequeuer snapshot-sequencer-validator-event-monitor snapshot-sequencer-validator-finalizer
+            else
+                print_color "$YELLOW" "No services appear to be running"
+                exit 1
+            fi
+        fi
+        ;;
     debug)
         launch_debug
         ;;

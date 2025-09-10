@@ -56,11 +56,22 @@ The monitoring system tracks 5 distinct stages:
 | `monitor` | Basic batch preparation status |
 | `pipeline` | Comprehensive pipeline monitoring |
 | `status` | Service status overview |
+| **Individual Logs** | |
 | `listener-logs` | P2P listener activity |
 | `dqr-logs` | Submission processing logs |
 | `finalizer-logs` | Batch finalization logs |
 | `event-monitor-logs` | Epoch release events |
 | `redis-logs` | Redis operation logs |
+| **Combined Logs (NEW)** | |
+| `collection-logs` | Dequeuer + Event Monitor logs |
+| `finalization-logs` | Event Monitor + Finalizer logs |
+| `pipeline-logs` | All three: Dequeuer + Event Monitor + Finalizer |
+
+All log commands support optional line count (default: 100):
+```bash
+./launch.sh collection-logs 200    # Last 200 lines
+./launch.sh pipeline-logs          # Default 100 lines
+```
 
 ### Direct Script Usage
 
@@ -288,6 +299,36 @@ docker exec sequencer-container redis-cli KEYS "batch:123:*"
 # Check specific batch part status
 docker exec sequencer-container redis-cli GET "batch:123:part:5:status"
 ```
+
+## Debugging Tips
+
+### Using Combined Logs
+
+The combined log commands are particularly useful for debugging cross-component issues:
+
+1. **Collection Issues** (`collection-logs`):
+   - Track submissions from P2P receipt through window collection
+   - Verify dequeuer is storing submissions with correct keys
+   - Confirm event monitor is finding stored submissions
+
+2. **Finalization Issues** (`finalization-logs`):
+   - Verify batches are pushed to finalization queue
+   - Check if finalizers are picking up batches
+   - Track consensus selection and batch creation
+
+3. **Full Pipeline Issues** (`pipeline-logs`):
+   - End-to-end submission tracking
+   - Identify where submissions get stuck
+   - Correlate timing between components
+
+### Common Issues and Solutions
+
+| Issue | Check With | Solution |
+|-------|------------|----------|
+| Submissions not collected | `collection-logs` | Verify protocolState matches between components |
+| Finalizers idle | `finalization-logs` | Check finalization queue has batches |
+| Missing projects | `pipeline-logs` | Ensure JSON parsing matches data structure |
+| Queue buildup | `monitor` | Increase worker count or check for errors |
 
 ## Future Enhancements
 

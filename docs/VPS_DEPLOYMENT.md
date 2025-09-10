@@ -199,8 +199,15 @@ The `launch.sh` script is the primary tool for managing your sequencer deploymen
 ./launch.sh clean --force
 
 # Monitor batch preparation status
-# Comprehensive pipeline monitoringn./launch.sh pipeline
 ./launch.sh monitor
+
+# Comprehensive pipeline monitoring
+./launch.sh pipeline
+
+# View combined logs (NEW)
+./launch.sh collection-logs    # Dequeuer + Event Monitor
+./launch.sh finalization-logs  # Event Monitor + Finalizer  
+./launch.sh pipeline-logs      # All three components
 
 # View usage help
 ./launch.sh help
@@ -369,12 +376,23 @@ New dedicated log commands for each component support optional line count for in
 
 # View all logs
 ./launch.sh logs
+
+# Combined pipeline logs for debugging (NEW)
+./launch.sh collection-logs      # Dequeuer + Event Monitor together
+./launch.sh collection-logs 200  # Show last 200 lines
+
+./launch.sh finalization-logs    # Event Monitor + Finalizer together
+./launch.sh finalization-logs 50 # Show last 50 lines
+
+./launch.sh pipeline-logs        # All three: Dequeuer + Event Monitor + Finalizer
+./launch.sh pipeline-logs 150    # Show last 150 lines
 ```
 
 **Log Command Usage Notes:**
-- Without a number, the command follows logs in real-time
+- Without a number, the command follows logs in real-time (default: 100 lines)
 - Providing a number shows the last N lines, then continues following
 - Useful for quickly checking recent log history before monitoring live output
+- Combined log commands help debug issues across component boundaries
 
 **Enhanced Dequeuer Logging:**
 The dequeuer now logs detailed submission information:
