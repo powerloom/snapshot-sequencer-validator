@@ -67,8 +67,8 @@ if [ ! -z "$READY" ]; then
         # Get batch data to check format
         DATA=$(redis_cmd GET "$batch")
         if [ ! -z "$DATA" ]; then
-            # Count projects and check for new vote format
-            PROJECT_COUNT=$(echo "$DATA" | grep -o '"[^"]*":' | wc -l)
+            # Count actual project IDs (top-level keys only, excluding cid_votes and total_submissions)
+            PROJECT_COUNT=$(echo "$DATA" | jq 'keys | map(select(. != "cid_votes" and . != "total_submissions")) | length' 2>/dev/null || echo "0")
             if echo "$DATA" | grep -q '"cid_votes"'; then
                 echo -e "  ${GREEN}✓ $PROTOCOL_MARKET - Epoch $EPOCH (${PROJECT_COUNT} projects with FULL vote data)${NC}"
             else

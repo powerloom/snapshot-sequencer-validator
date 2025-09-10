@@ -110,28 +110,29 @@ docker exec -it $CONTAINER /bin/sh -c '
     echo "🔀 STAGE 2: BATCH SPLITTING (Window Close → Parallel Batches)"
     echo "─────────────────────────────────────"
     
-    # Batch metadata (shows how epochs were split)
-    echo "📦 Split Batch Metadata:"
-    BATCH_META_KEYS=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT KEYS "*:epoch:*:batch:meta" 2>/dev/null | head -5)
+    # Ready batches instead of batch metadata (actual data structure)
+    echo "📦 Ready Batches (collected submissions):"
+    BATCH_META_KEYS=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT KEYS "*:*:batch:ready:*" 2>/dev/null | head -5)
     if [ ! -z "$BATCH_META_KEYS" ]; then
         echo "$BATCH_META_KEYS" | while read meta_key; do
             if [ ! -z "$meta_key" ]; then
+                # Extract epoch from key format: protocol:market:batch:ready:epochID
+                EPOCH_ID=$(echo "$meta_key" | grep -oE "[0-9]+$")
                 META_DATA=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT GET "$meta_key" 2>/dev/null)
                 if [ ! -z "$META_DATA" ]; then
-                    # Parse JSON manually (basic extraction)
-                    EPOCH_ID=$(echo "$META_DATA" | grep -o "\"epoch_id\":\"[^\"]*" | cut -d"\"" -f4)
-                    TOTAL_BATCHES=$(echo "$META_DATA" | grep -o "\"total_batches\":[0-9]*" | cut -d: -f2)
-                    TOTAL_PROJECTS=$(echo "$META_DATA" | grep -o "\"total_projects\":[0-9]*" | cut -d: -f2)
+                    # Count actual projects
+                    PROJECT_COUNT=$(echo "$META_DATA" | jq 'keys | length' 2>/dev/null || echo "0")
+                    HAS_VOTES=$(echo "$META_DATA" | grep -q '"cid_votes"' && echo "with vote data" || echo "pre-selected")
                     
                     echo "  📋 Epoch $EPOCH_ID:"
-                    echo "     Split into: $TOTAL_BATCHES batches"
-                    echo "     Total projects: $TOTAL_PROJECTS"
+                    echo "     Projects collected: $PROJECT_COUNT"
+                    echo "     Format: $HAS_VOTES"
                     echo "     Status: READY FOR FINALIZATION"
                 fi
             fi
         done
     else
-        echo "  ⚫ No batches split yet"
+        echo "  ⚫ No ready batches found"
     fi
     
     # Finalization queue status (Updated format: protocol:market:finalizationQueue)
@@ -366,18 +367,18 @@ docker exec -it $CONTAINER /bin/sh -c '
     # Pipeline bottlenecks
     echo ""
     echo "⚠️ Potential Bottlenecks:"
-    if [ "$QUEUE_DEPTH" -gt 100 ]; then
+    if [ "${QUEUE_DEPTH:-0}" -gt 100 ]; then
         echo "  🔴 Submission queue backlog ($QUEUE_DEPTH pending)"
     fi
-    if [ "$FIN_QUEUE_DEPTH" -gt 10 ]; then
+    if [ "${FIN_QUEUE_DEPTH:-0}" -gt 10 ]; then
         echo "  🔴 Finalization queue backlog ($FIN_QUEUE_DEPTH batches)"
     fi
-    if [ "$AGG_QUEUE_DEPTH" -gt 5 ]; then
+    if [ "${AGG_QUEUE_DEPTH:-0}" -gt 5 ]; then
         echo "  🔴 Aggregation queue backlog ($AGG_QUEUE_DEPTH epochs)"
     fi
     
     # All clear message
-    if [ "$QUEUE_DEPTH" -le 10 ] && [ "$FIN_QUEUE_DEPTH" -le 5 ] && [ "$AGG_QUEUE_DEPTH" -le 2 ]; then
+    if [ "${QUEUE_DEPTH:-0}" -le 10 ] && [ "${FIN_QUEUE_DEPTH:-0}" -le 5 ] && [ "${AGG_QUEUE_DEPTH:-0}" -le 2 ]; then
         echo "  ✅ Pipeline flowing smoothly"
     fi
 '
