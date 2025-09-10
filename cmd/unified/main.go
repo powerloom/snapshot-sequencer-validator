@@ -325,6 +325,7 @@ func main() {
 			PollInterval:    cfg.EventPollInterval,
 			DataMarkets:     cfg.DataMarketAddresses,
 			MaxWindows:      cfg.MaxConcurrentWindows,
+			FinalizationBatchSize: cfg.FinalizationBatchSize,
 		}
 		
 		var err error
