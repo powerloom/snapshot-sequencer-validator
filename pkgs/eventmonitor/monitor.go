@@ -554,12 +554,14 @@ func (wm *WindowManager) collectEpochSubmissions(dataMarket string, epochID *big
 	// Format: {protocol}:{market}:epoch:{epochID}:processed
 	epochKey := fmt.Sprintf("%s:%s:epoch:%s:processed", 
 		protocolState, dataMarket, epochID.String())
+	log.Debugf("Looking for submissions with key: %s (protocolState=%s)", epochKey, protocolState)
 	submissionIDs, err := wm.redisClient.SMembers(ctx, epochKey).Result()
 	if err != nil {
 		log.Errorf("Failed to get submission IDs for epoch %s in market %s: %v", 
 			epochID, dataMarket, err)
 		return make(map[string]interface{})
 	}
+	log.Debugf("Found %d submission IDs for epoch %s", len(submissionIDs), epochID)
 	
 	// Track CIDs per project with vote counts
 	// Structure: map[projectID]map[CID]count

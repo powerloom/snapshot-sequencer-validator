@@ -139,8 +139,8 @@ func (d *Dequeuer) storeProcessingResult(submissionID string, processed *Process
 	d.redisClient.SAdd(ctx, epochKey, submissionID)
 	d.redisClient.Expire(ctx, epochKey, 1*time.Hour)
 	
-	log.Debugf("Stored submission %s for market %s, epoch %d", 
-		submissionID, dataMarket, processed.Submission.Request.EpochId)
+	log.Debugf("Stored submission %s with epochKey: %s (protocolState=%s, market=%s, epoch=%d)", 
+		submissionID, epochKey, protocolState, dataMarket, processed.Submission.Request.EpochId)
 }
 
 func (d *Dequeuer) cleanupOldSubmissions() {
