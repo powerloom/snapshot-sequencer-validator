@@ -57,7 +57,7 @@ The monitoring system tracks 5 distinct stages:
 | `pipeline` | Comprehensive pipeline monitoring |
 | `status` | Service status overview |
 | `listener-logs` | P2P listener activity |
-| `dequeuer-logs` | Submission processing logs |
+| `dqr-logs` | Submission processing logs |
 | `finalizer-logs` | Batch finalization logs |
 | `event-monitor-logs` | Epoch release events |
 | `redis-logs` | Redis operation logs |
@@ -212,7 +212,7 @@ Workers only appear when implemented. Current status:
 ### Queue Backlog
 ```bash
 # Check dequeuer performance
-./launch.sh dequeuer-logs | grep "Processing submission"
+./launch.sh dqr-logs | grep "Processing submission"
 
 # Monitor queue depth trends
 watch -n 5 "./launch.sh monitor | grep 'Pending'"
@@ -222,10 +222,10 @@ watch -n 5 "./launch.sh monitor | grep 'Pending'"
 The system now handles both batch and single submission formats with advanced conversion strategies:
 ```bash
 # Check for batch format submissions
-./launch.sh dequeuer-logs | grep "P2PSnapshotSubmission"
+./launch.sh dqr-logs | grep "P2PSnapshotSubmission"
 
 # Check field name changes (snake_case → camelCase)
-./launch.sh dequeuer-logs | grep "epochId\|projectId"
+./launch.sh dqr-logs | grep "epochId\|projectId"
 
 # Verify conversion strategy
 docker exec powerloom-sequencer-validator-dequeuer-1 \

@@ -344,10 +344,10 @@ New dedicated log commands for each component support optional line count for in
 ./launch.sh listener-logs 50
 
 # View dequeuer worker logs (now with enhanced details)
-./launch.sh dequeuer-logs
+./launch.sh dqr-logs
 
 # View last 100 lines of dequeuer logs and continue following
-./launch.sh dequeuer-logs 100
+./launch.sh dqr-logs 100
 
 # View finalizer logs
 ./launch.sh finalizer-logs
@@ -640,7 +640,7 @@ cat .env | grep SUBMISSION_FORMAT_STRATEGY
 SUBMISSION_FORMAT_STRATEGY=single  # or 'batch'
 
 # Debug submission processing logs
-./launch.sh dequeuer-logs | grep -E 'Processing|P2PSnapshotSubmission|epochId'
+./launch.sh dqr-logs | grep -E 'Processing|P2PSnapshotSubmission|epochId'
 
 # Check for field name conversions (snake_case → camelCase)
 grep -R 'epoch_id' .  # Should return no results if converted
@@ -801,7 +801,7 @@ screen -S sequencer
 - ✅ New configurations for worker parallelism: `FINALIZER_WORKERS`, `FINALIZATION_BATCH_SIZE`
 - ✅ Enhanced batch processing with concurrent worker support
 - ✅ Improved worker monitoring and status tracking
-- ✅ Individual component log shortcuts (`listener-logs`, `dequeuer-logs`, `finalizer-logs`, `event-monitor-logs`, `redis-logs`)
+- ✅ Individual component log shortcuts (`listener-logs`, `dqr-logs`, `finalizer-logs`, `event-monitor-logs`, `redis-logs`)
 - ✅ Enhanced dequeuer logging with detailed submission information (Epoch, Project, Slot, Market, Submitter)
 - ✅ Fixed monitor script to prioritize containers with Redis access
 - ✅ SUBMISSION_WINDOW_DURATION now properly overrides contract values for testing flexibility

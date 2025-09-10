@@ -39,7 +39,7 @@ show_usage() {
     echo "  clean         - Stop and remove all containers/volumes"
     echo "  logs          - Show logs for all services"
     echo "  listener-logs [N] - Show P2P listener logs (last N lines if specified)"
-    echo "  dequeuer-logs [N] - Show dequeuer worker logs (last N lines if specified)"
+    echo "  dqr-logs [N]  - Show dequeuer worker logs (last N lines if specified)"
     echo "  finalizer-logs [N] - Show finalizer logs (last N lines if specified)"
     echo "  event-monitor-logs [N] - Show event monitor logs (last N lines if specified)"
     echo "  redis-logs [N]    - Show Redis logs (last N lines if specified)"
@@ -574,9 +574,9 @@ case $COMMAND in
             print_color "$YELLOW" "Listener only runs in distributed mode. Use: ./launch.sh distributed"
         fi
         ;;
-    dequeuer-logs)
+    dqr-logs|dequeuer-logs)
         # Shortcut for viewing dequeuer worker logs
-        # Usage: ./launch.sh dequeuer-logs [number_of_lines]
+        # Usage: ./launch.sh dqr-logs [number_of_lines]
         if is_distributed_mode; then
             LINES="${2:-}"
             if [ ! -z "$LINES" ] && [ "$LINES" -eq "$LINES" ] 2>/dev/null; then
@@ -646,11 +646,11 @@ case $COMMAND in
         
         # Detect the correct container name based on running mode
         if is_distributed_mode; then
-            # For distributed mode, use one of the service containers (e.g., listener)
-            CONTAINER_NAME=$($DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml ps --format "table {{.Names}}" 2>/dev/null | grep -E "listener|dequeuer|finalizer" | head -1)
+            # For distributed mode, use docker ps to find running containers
+            CONTAINER_NAME=$(docker ps --format "{{.Names}}" | grep -E "listener|dequeuer|finalizer|event-monitor" | head -1)
         else
             # For sequencer mode
-            CONTAINER_NAME=$($DOCKER_COMPOSE_CMD -f docker-compose.snapshot-sequencer.yml ps --format "table {{.Names}}" 2>/dev/null | grep sequencer | head -1)
+            CONTAINER_NAME=$(docker ps --format "{{.Names}}" | grep sequencer | head -1)
         fi
         
         if [ -z "$CONTAINER_NAME" ]; then
