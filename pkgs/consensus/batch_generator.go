@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"math/rand"
 	"time"
+	
+	"github.com/powerloom/snapshot-sequencer-validator/pkgs/submissions"
 )
 
 // DummyBatchGenerator creates test finalized batches for Phase 3 testing
@@ -121,12 +123,14 @@ func (g *DummyBatchGenerator) generateDummySignature(epochID uint64, merkleRoot 
 
 // FinalizedBatch struct (will be generated from protobuf in production)
 type FinalizedBatch struct {
-	EpochId      uint64
-	ProjectIds   []string
-	SnapshotCids []string
-	MerkleRoot   []byte
-	BlsSignature []byte
-	SequencerId  string
-	Timestamp    uint64
-	ProjectVotes map[string]uint32
+	EpochId           uint64
+	ProjectIds        []string
+	SnapshotCids      []string
+	MerkleRoot        []byte
+	BlsSignature      []byte
+	SequencerId       string
+	Timestamp         uint64
+	ProjectVotes      map[string]uint32
+	SubmissionDetails map[string][]submissions.SubmissionMetadata `json:"submission_details"` // project→submissions for challenges
+	BatchIPFSCID      string                                       `json:"batch_ipfs_cid"`      // IPFS CID of this batch
 }

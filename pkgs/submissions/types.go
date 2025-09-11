@@ -41,3 +41,13 @@ type ProcessedSubmission struct {
 	ProcessedAt      time.Time
 	ValidatorID      string
 }
+
+// SubmissionMetadata tracks WHO submitted WHAT for challenges/proofs
+type SubmissionMetadata struct {
+	SubmitterID   string    `json:"submitter_id"`   // Peer/slot ID who submitted
+	SnapshotCID   string    `json:"snapshot_cid"`   // What they submitted
+	Timestamp     uint64    `json:"timestamp"`      // When submitted
+	Signature     []byte    `json:"signature"`      // Proof of submission
+	SlotID        uint64    `json:"slot_id"`        // Slot ID of submitter
+	VoteCount     int       `json:"vote_count"`     // How many voted for this CID
+}

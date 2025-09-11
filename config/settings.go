@@ -92,6 +92,9 @@ type Settings struct {
 	FinalizerWorkers      int
 	FinalizationBatchSize int
 	
+	// IPFS Configuration
+	IPFSAPI string // IPFS API endpoint (e.g., "/ip4/127.0.0.1/tcp/5001")
+	
 	// API Configuration
 	APIHost      string
 	APIPort      int
@@ -197,6 +200,9 @@ func LoadConfig() error {
 		// Performance Tuning
 		BatchProcessingTimeout: 5 * time.Minute,
 		ContractQueryTimeout:   30 * time.Second,
+		
+		// IPFS Configuration
+		IPFSAPI: getEnv("IPFS_API", ""), // Default empty, will use localhost:5001 if not set
 		
 		// Contract Addresses
 		ProtocolStateContract:    getEnv("PROTOCOL_STATE_CONTRACT", ""),

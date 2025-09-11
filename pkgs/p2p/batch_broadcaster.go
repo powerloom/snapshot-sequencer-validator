@@ -110,17 +110,35 @@ func (bb *BatchBroadcaster) SendPresenceMessage() error {
 }
 
 // BroadcastBatch broadcasts a finalized batch to the network
+// Per Phase 2-3 spec: Exchange IPFS CID, not full batch data
 func (bb *BatchBroadcaster) BroadcastBatch(batch interface{}, epochID uint64) error {
-	// Marshal batch to JSON (in production, use protobuf)
-	data, err := json.Marshal(map[string]interface{}{
-		"type":                "finalized_batch",
-		"batch":               batch,
-		"peer_id":            bb.host.ID().String(),
+	// Extract IPFS CID from batch if available
+	var batchIPFSCID string
+	if batchMap, ok := batch.(map[string]interface{}); ok {
+		if cid, ok := batchMap["batch_ipfs_cid"].(string); ok {
+			batchIPFSCID = cid
+		}
+	}
+	
+	// If no IPFS CID, we can't broadcast per Phase 2-3 requirements
+	if batchIPFSCID == "" {
+		return fmt.Errorf("cannot broadcast batch without IPFS CID (Phase 2-3 requirement)")
+	}
+	
+	// Create vote message with IPFS CID only
+	voteMessage := map[string]interface{}{
+		"type":                "finalized_batch_vote",
+		"batch_ipfs_cid":      batchIPFSCID,  // Send CID, not full batch
+		"epoch_id":            epochID,
+		"sequencer_id":        bb.sequencerID,
+		"peer_id":             bb.host.ID().String(),
 		"broadcast_timestamp": time.Now().Unix(),
-		"epoch_id":           epochID,  // Include epoch ID in message
-	})
+	}
+	
+	// Marshal vote message
+	data, err := json.Marshal(voteMessage)
 	if err != nil {
-		return fmt.Errorf("failed to marshal batch: %w", err)
+		return fmt.Errorf("failed to marshal vote message: %w", err)
 	}
 	
 	// Broadcast ONLY to "all" topic (no dynamic epoch topics)
@@ -128,7 +146,7 @@ func (bb *BatchBroadcaster) BroadcastBatch(batch interface{}, epochID uint64) er
 		return fmt.Errorf("failed to publish to all topic: %w", err)
 	}
 	
-	log.Printf("Broadcasted finalized batch for epoch %d", epochID)
+	log.Printf("Broadcasted finalized batch vote for epoch %d (IPFS CID: %s)", epochID, batchIPFSCID)
 	return nil
 }
 
@@ -178,25 +196,34 @@ func (bb *BatchBroadcaster) processMessage(msg *pubsub.Message) {
 		return
 	}
 	
-	// Check message type
+	// Check message type (vote messages with IPFS CIDs)
 	msgType, _ := data["type"].(string)
-	if msgType != "finalized_batch" {
-		return // Ignore non-batch messages
+	if msgType != "finalized_batch_vote" {
+		return // Ignore non-vote messages
 	}
 	
-	// Extract batch and metadata
-	batch := data["batch"]
+	// Extract IPFS CID and metadata
+	batchIPFSCID, _ := data["batch_ipfs_cid"].(string)
+	sequencerID, _ := data["sequencer_id"].(string)
 	peerID, _ := data["peer_id"].(string)
 	epochID, _ := data["epoch_id"].(float64) // JSON numbers are float64
 	
+	// Create vote message with IPFS CID reference
+	voteMessage := map[string]interface{}{
+		"batch_ipfs_cid": batchIPFSCID,
+		"sequencer_id":   sequencerID,
+		"epoch_id":       epochID,
+	}
+	
 	// Send to channel for processing
 	bb.IncomingBatches <- &FinalizedBatchMessage{
-		Batch:    batch,
+		Batch:    voteMessage,  // Now contains CID, not full batch
 		PeerID:   peerID,
 		Received: time.Now(),
 	}
 	
-	log.Printf("Received finalized batch from peer %s for epoch %.0f", peerID, epochID)
+	log.Printf("Received finalized batch vote from sequencer %s for epoch %.0f (IPFS CID: %s)", 
+		sequencerID, epochID, batchIPFSCID)
 }
 
 // GetConnectedPeers returns the list of connected peers on the finalized batch topics

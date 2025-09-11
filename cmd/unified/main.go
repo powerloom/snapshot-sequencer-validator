@@ -18,6 +18,7 @@ import (
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/deduplication"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/eventmonitor"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/gossipconfig"
+	"github.com/powerloom/snapshot-sequencer-validator/pkgs/ipfs"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/submissions"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/workers"
 	"github.com/go-redis/redis/v8"
@@ -43,6 +44,7 @@ type UnifiedSequencer struct {
 	ps          *pubsub.PubSub
 	redisClient *redis.Client
 	dedup       *deduplication.Deduplicator
+	ipfsClient  *ipfs.Client
 	
 	// Component flags
 	enableListener     bool
@@ -268,6 +270,29 @@ func main() {
 		log.Info("Initialized gossipsub with standardized snapshot submissions mesh parameters")
 	}
 	
+	// Initialize IPFS client if finalizer is enabled
+	var ipfsClient *ipfs.Client
+	if enableFinalizer {
+		ipfsURL := cfg.IPFSAPI // Assuming we have IPFS API URL in config
+		if ipfsURL == "" {
+			ipfsURL = "/ip4/127.0.0.1/tcp/5001" // Default
+		}
+		
+		var err error
+		ipfsClient, err = ipfs.NewClient(ipfsURL)
+		if err != nil {
+			log.Warnf("Failed to create IPFS client: %v (batches will not be stored in IPFS)", err)
+			// Don't fail completely, just disable IPFS storage
+		} else {
+			if ipfsClient.IsAvailable(ctx) {
+				log.Infof("✅ IPFS client connected to %s", ipfsURL)
+			} else {
+				log.Warnf("⚠️ IPFS node not available at %s", ipfsURL)
+				ipfsClient = nil
+			}
+		}
+	}
+	
 	// Create unified sequencer
 	sequencer := &UnifiedSequencer{
 		host:               h,
@@ -276,6 +301,7 @@ func main() {
 		ps:                 ps,
 		redisClient:        redisClient,
 		dedup:              dedup,
+		ipfsClient:         ipfsClient,
 		enableListener:     enableListener,
 		enableDequeuer:     enableDequeuer,
 		enableFinalizer:    enableFinalizer,
@@ -1197,9 +1223,10 @@ func (s *UnifiedSequencer) createFinalizedBatch(epochID uint64, projectSubmissio
 	projectIDs := make([]string, 0)
 	snapshotCIDs := make([]string, 0) 
 	projectVotes := make(map[string]uint32)
+	submissionDetails := make(map[string][]submissions.SubmissionMetadata)
 	
 	for projectID, submissionData := range projectSubmissions {
-		// Handle the new structure with vote metadata
+		// Handle the new structure with vote metadata and submission details
 		if dataMap, ok := submissionData.(map[string]interface{}); ok {
 			if cid, ok := dataMap["cid"].(string); ok {
 				projectIDs = append(projectIDs, projectID)
@@ -1208,6 +1235,22 @@ func (s *UnifiedSequencer) createFinalizedBatch(epochID uint64, projectSubmissio
 				// Extract vote count
 				if votes, ok := dataMap["votes"].(float64); ok {
 					projectVotes[projectID] = uint32(votes)
+				}
+				
+				// Extract submission metadata for challenges/proofs
+				if metadata, ok := dataMap["submission_metadata"].([]map[string]interface{}); ok {
+					for _, meta := range metadata {
+						subMeta := submissions.SubmissionMetadata{
+							SubmitterID: meta["submitter_id"].(string),
+							SnapshotCID: meta["snapshot_cid"].(string),
+							SlotID:      uint64(meta["slot_id"].(float64)),
+							Timestamp:   uint64(meta["timestamp"].(float64)),
+						}
+						if sig, ok := meta["signature"].(string); ok {
+							subMeta.Signature = []byte(sig)
+						}
+						submissionDetails[projectID] = append(submissionDetails[projectID], subMeta)
+					}
 				}
 			}
 		} else if cid, ok := submissionData.(string); ok {
@@ -1238,14 +1281,26 @@ func (s *UnifiedSequencer) createFinalizedBatch(epochID uint64, projectSubmissio
 	blsSignature := sigHash[:]
 	
 	finalizedBatch := &consensus.FinalizedBatch{
-		EpochId:      epochID,
-		ProjectIds:   projectIDs,
-		SnapshotCids: snapshotCIDs,
-		MerkleRoot:   merkleRoot,
-		BlsSignature: blsSignature,
-		SequencerId:  s.sequencerID,
-		Timestamp:    uint64(time.Now().Unix()),
-		ProjectVotes: projectVotes,
+		EpochId:           epochID,
+		ProjectIds:        projectIDs,
+		SnapshotCids:      snapshotCIDs,
+		MerkleRoot:        merkleRoot,
+		BlsSignature:      blsSignature,
+		SequencerId:       s.sequencerID,
+		Timestamp:         uint64(time.Now().Unix()),
+		ProjectVotes:      projectVotes,
+		SubmissionDetails: submissionDetails, // Include WHO submitted WHAT
+	}
+	
+	// Store finalized batch in IPFS if available
+	if s.ipfsClient != nil {
+		batchCID, err := s.ipfsClient.StoreFinalizedBatch(ctx, finalizedBatch)
+		if err != nil {
+			log.Errorf("Failed to store batch in IPFS: %v", err)
+		} else {
+			finalizedBatch.BatchIPFSCID = batchCID
+			log.Infof("📦 Stored finalized batch in IPFS: %s", batchCID)
+		}
 	}
 	
 	// Store finalized batch in Redis

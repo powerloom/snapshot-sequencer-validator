@@ -565,9 +565,11 @@ func (wm *WindowManager) collectEpochSubmissions(dataMarket string, epochID *big
 	}
 	log.Debugf("Found %d submission IDs for epoch %s", len(submissionIDs), epochID)
 	
-	// Track CIDs per project with vote counts
+	// Track CIDs per project with vote counts AND submitter details
 	// Structure: map[projectID]map[CID]count
 	projectVotes := make(map[string]map[string]int)
+	// Track WHO submitted WHAT for challenges/proofs
+	submissionMetadata := make(map[string][]map[string]interface{}) // projectID -> list of submissions
 	
 	for _, submissionID := range submissionIDs {
 		// Get the processed submission data
@@ -592,11 +594,38 @@ func (wm *WindowManager) collectEpochSubmissions(dataMarket string, epochID *big
 				if request, ok := subData["request"].(map[string]interface{}); ok {
 					if projectID, ok := request["projectId"].(string); ok {
 						if snapshotCID, ok := request["snapshotCid"].(string); ok {
+							// Track vote counts
 							if projectVotes[projectID] == nil {
 								projectVotes[projectID] = make(map[string]int)
 							}
 							projectVotes[projectID][snapshotCID]++
-							log.Debugf("Found submission: project=%s, CID=%s", projectID, snapshotCID)
+							
+							// Track submission metadata for challenges/proofs
+							slotID := uint64(0)
+							if slot, ok := request["slotId"].(float64); ok {
+								slotID = uint64(slot)
+							}
+							
+							// Extract submitter info from submission
+							submitterID := ""
+							if snapshotterId, ok := submission["SnapshotterID"].(string); ok {
+								submitterID = snapshotterId
+							}
+							signature := ""
+							if sig, ok := subData["signature"].(string); ok {
+								signature = sig
+							}
+							
+							metadata := map[string]interface{}{
+								"submitter_id": submitterID,
+								"snapshot_cid": snapshotCID,
+								"slot_id":      slotID,
+								"signature":    signature,
+								"timestamp":    time.Now().Unix(),
+							}
+							
+							submissionMetadata[projectID] = append(submissionMetadata[projectID], metadata)
+							log.Debugf("Found submission: project=%s, CID=%s, submitter=%s", projectID, snapshotCID, submitterID)
 						} else {
 							log.Warnf("No snapshotCid in request: %+v", request)
 						}
@@ -617,14 +646,15 @@ func (wm *WindowManager) collectEpochSubmissions(dataMarket string, epochID *big
 		projectSubmissions[projectID] = map[string]interface{}{
 			"cid_votes": cidVotes,
 			"total_submissions": len(cidVotes),
+			"submission_metadata": submissionMetadata[projectID], // Add WHO submitted WHAT
 		}
 		
 		totalVotes := 0
 		for _, votes := range cidVotes {
 			totalVotes += votes
 		}
-		log.Debugf("Project %s: Collected %d unique CIDs with %d total submissions", 
-			projectID, len(cidVotes), totalVotes)
+		log.Debugf("Project %s: Collected %d unique CIDs with %d total submissions from %d submitters", 
+			projectID, len(cidVotes), totalVotes, len(submissionMetadata[projectID]))
 	}
 	
 	// Store the collected batch in Redis for finalizer (namespaced)
