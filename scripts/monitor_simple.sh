@@ -35,6 +35,8 @@ redis_cmd() {
 # Active Windows (Updated format: epoch:market:epochID:window)
 echo -e "${BLUE}🔷 Active Submission Windows:${NC}"
 WINDOWS=$(redis_cmd KEYS "epoch:*:*:window")
+ACTIVE_COUNT=0
+CLOSED_COUNT=0
 if [ ! -z "$WINDOWS" ]; then
     for window in $WINDOWS; do
         STATUS=$(redis_cmd GET "$window")
@@ -44,8 +46,17 @@ if [ ! -z "$WINDOWS" ]; then
             EPOCH=$(echo "$window" | sed 's/^epoch:[^:]*://;s/:window$//')
             TTL=$(redis_cmd TTL "$window")
             echo "  ✓ Market: $MARKET, Epoch: $EPOCH (TTL: ${TTL}s)"
+            ACTIVE_COUNT=$((ACTIVE_COUNT + 1))
+        elif [ "$STATUS" = "closed" ]; then
+            CLOSED_COUNT=$((CLOSED_COUNT + 1))
         fi
     done
+    if [ $ACTIVE_COUNT -eq 0 ]; then
+        echo "  None actively open"
+    fi
+    if [ $CLOSED_COUNT -gt 0 ]; then
+        echo "  ℹ️  Note: $CLOSED_COUNT closed windows in Redis (will expire in ~1hr)"
+    fi
 else
     echo "  None active"
 fi
@@ -89,13 +100,30 @@ fi
 
 # Finalized Batches (Updated to look for batch:finalized:epochID keys)
 echo -e "\n${BLUE}✅ Recent Finalized Batches:${NC}"
-FINALIZED=$(redis_cmd KEYS "batch:finalized:*" | head -5)
+FINALIZED=$(redis_cmd KEYS "batch:finalized:*" | head -10)
 if [ ! -z "$FINALIZED" ]; then
     for batch in $FINALIZED; do
         EPOCH=$(echo "$batch" | grep -oE "[0-9]+$")
-        # Try to get additional metadata if available
+        # Get all metadata: IPFS CID, merkle root, finalization time
+        IPFS_CID=$(redis_cmd HGET "$batch" "ipfs_cid")
         MERKLE=$(redis_cmd HGET "$batch" "merkle_root")
-        if [ ! -z "$MERKLE" ]; then
+        FINALIZED_AT=$(redis_cmd HGET "$batch" "finalized_at")
+
+        # Format output based on available data
+        if [ ! -z "$IPFS_CID" ]; then
+            echo -e "  ${GREEN}✓ Epoch $EPOCH${NC}"
+            echo "    📦 IPFS CID: $IPFS_CID"
+            if [ ! -z "$MERKLE" ]; then
+                echo "    🌳 Merkle: ${MERKLE:0:16}..."
+            fi
+            if [ ! -z "$FINALIZED_AT" ]; then
+                # Convert timestamp to readable format if date command available
+                if command -v date >/dev/null 2>&1; then
+                    FORMATTED_TIME=$(date -d "@$FINALIZED_AT" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "timestamp: $FINALIZED_AT")
+                    echo "    ⏰ Finalized: $FORMATTED_TIME"
+                fi
+            fi
+        elif [ ! -z "$MERKLE" ]; then
             echo "  ✓ Epoch $EPOCH (Merkle: ${MERKLE:0:12}...)"
         else
             echo "  ✓ Epoch $EPOCH"
@@ -133,8 +161,7 @@ fi
 # Quick Stats
 echo -e "\n${BLUE}📈 Quick Stats:${NC}"
 echo "  Queue Depth: ${QUEUE_DEPTH:-0}"
-WINDOWS_COUNT=$(echo "$WINDOWS" | grep -c "window" 2>/dev/null || echo "0")
-echo "  Active Windows: $WINDOWS_COUNT"
+echo "  Open Windows: $ACTIVE_COUNT (Total in Redis: $((ACTIVE_COUNT + CLOSED_COUNT)))"
 
 # Vote Distribution Debug (shows if collector is passing all votes)
 echo -e "\n${BLUE}🗳️ Vote Distribution Check:${NC}"
