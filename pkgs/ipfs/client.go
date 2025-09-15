@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	
+	"net/http"
+	"time"
+
 	ipfsApi "github.com/ipfs/kubo/client/rpc"
 	"github.com/ipfs/go-cid"
 	files "github.com/ipfs/boxo/files"
@@ -23,12 +25,22 @@ func NewClient(apiURL string) (*Client, error) {
 	if apiURL == "" {
 		apiURL = "/ip4/127.0.0.1/tcp/5001" // Default IPFS API endpoint
 	}
-	
-	api, err := ipfsApi.NewURLApiWithClient(apiURL, nil)
+
+	// Create HTTP client with reasonable timeouts
+	httpClient := &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			MaxIdleConns:        10,
+			IdleConnTimeout:     90 * time.Second,
+			DisableCompression:  true,
+		},
+	}
+
+	api, err := ipfsApi.NewURLApiWithClient(apiURL, httpClient)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create IPFS client: %w", err)
 	}
-	
+
 	return &Client{
 		api: api,
 	}, nil
