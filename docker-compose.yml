@@ -32,6 +32,7 @@ services:
       - DEBUG_MODE=${DEBUG_MODE:-false}
     networks:
       - snapshot-sequencer
+      - dsv-internal-network
     volumes:
       - ./logs:/app/logs
       - ./logs/archive:/app/logs/archive
@@ -46,6 +47,8 @@ services:
 networks:
   snapshot-sequencer:
     driver: bridge
+  dsv-internal-network:
+    external: true
 
 volumes:
   validator-data:

@@ -13,6 +13,7 @@ services:
       retries: 5
     networks:
       - sequencer-net
+      - dsv-internal-network
 
   # P2P Listener - Receives submissions from network
   listener:
@@ -51,6 +52,7 @@ services:
       - "${P2P_PORT:-9001}:${P2P_PORT:-9001}"
     networks:
       - sequencer-net
+      - dsv-internal-network
     restart: unless-stopped
     logging:
       driver: "json-file"
@@ -91,6 +93,7 @@ services:
         condition: service_healthy
     networks:
       - sequencer-net
+      - dsv-internal-network
     restart: unless-stopped
     deploy:
       replicas: ${DEQUEUER_REPLICAS:-2}  # Can scale horizontally
@@ -137,6 +140,7 @@ services:
         condition: service_healthy
     networks:
       - sequencer-net
+      - dsv-internal-network
     restart: unless-stopped
     logging:
       driver: "json-file"
@@ -175,6 +179,7 @@ services:
         condition: service_healthy
     networks:
       - sequencer-net
+      - dsv-internal-network
     restart: unless-stopped
     deploy:
       replicas: ${FINALIZER_REPLICAS:-2}  # Redundancy
@@ -213,6 +218,7 @@ services:
       - "9002:9002"  # Consensus P2P port
     networks:
       - sequencer-net
+      - dsv-internal-network
     restart: unless-stopped
     profiles:
       - consensus  # Only start if consensus profile is active
@@ -235,6 +241,7 @@ services:
       - "9090:9090"
     networks:
       - sequencer-net
+      - dsv-internal-network
     profiles:
       - monitoring
 
@@ -250,6 +257,7 @@ services:
       - GF_USERS_ALLOW_SIGN_UP=false
     networks:
       - sequencer-net
+      - dsv-internal-network
     profiles:
       - monitoring
 
@@ -261,3 +269,5 @@ volumes:
 networks:
   sequencer-net:
     driver: bridge
+  dsv-internal-network:
+    external: true

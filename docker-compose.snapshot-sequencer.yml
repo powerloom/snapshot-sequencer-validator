@@ -14,6 +14,7 @@ services:
       retries: 5
     networks:
       - snapshot-sequencer
+      - dsv-internal-network
 
   # Flexible snapshot sequencer (reads from .env)
   sequencer-custom:
@@ -46,6 +47,7 @@ services:
       - "${P2P_PORT:-9001}:${P2P_PORT:-9001}"
     networks:
       - snapshot-sequencer
+      - dsv-internal-network
     # No profile - run directly
 
   # All-in-one snapshot sequencer (all components enabled)
@@ -79,6 +81,7 @@ services:
       - "9001:9001"
     networks:
       - snapshot-sequencer
+      - dsv-internal-network
     profiles:
       - all
       - sequencer
@@ -110,6 +113,7 @@ services:
       - "9100:9100"
     networks:
       - snapshot-sequencer
+      - dsv-internal-network
     profiles:
       - distributed
       - listener
@@ -137,6 +141,7 @@ services:
         condition: service_healthy
     networks:
       - snapshot-sequencer
+      - dsv-internal-network
     profiles:
       - distributed
       - dequeuer
@@ -170,6 +175,7 @@ services:
         condition: service_healthy
     networks:
       - snapshot-sequencer
+      - dsv-internal-network
     profiles:
       - distributed
       - finalizer
@@ -186,6 +192,7 @@ services:
       - ipfs-data:/data/ipfs
     networks:
       - snapshot-sequencer
+      - dsv-internal-network
     profiles:
       - storage
       - distributed
@@ -200,6 +207,7 @@ services:
       - prometheus-data:/prometheus
     networks:
       - snapshot-sequencer
+      - dsv-internal-network
     profiles:
       - monitoring
 
@@ -211,6 +219,7 @@ services:
       - grafana-data:/var/lib/grafana
     networks:
       - snapshot-sequencer
+      - dsv-internal-network
     profiles:
       - monitoring
 
@@ -222,4 +231,6 @@ volumes:
 
 networks:
   snapshot-sequencer:
+  dsv-internal-network:
+    external: true
     driver: bridge
