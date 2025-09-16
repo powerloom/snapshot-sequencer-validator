@@ -20,8 +20,8 @@ docker network connect dsv-internal-network root-ipfs-1 2>/dev/null || {
 echo "✓ IPFS container connected"
 
 # Get IPFS container's IP in the shared network
-# Note: Docker converts hyphens to underscores in network names for inspect
-IPFS_IP=$(docker inspect root-ipfs-1 -f '{{.NetworkSettings.Networks.dsv_internal_network.IPAddress}}' 2>/dev/null || echo "")
+# Network name with hyphens needs to be accessed with index notation
+IPFS_IP=$(docker inspect root-ipfs-1 -f '{{index .NetworkSettings.Networks "dsv-internal-network" "IPAddress"}}' 2>/dev/null || echo "")
 
 echo ""
 echo "========================================="
