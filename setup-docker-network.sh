@@ -20,10 +20,7 @@ docker network connect dsv-internal-network root-ipfs-1 2>/dev/null || {
 echo "✓ IPFS container connected"
 
 # Get IPFS container's IP in the shared network
-IPFS_IP=$(docker inspect root-ipfs-1 --format='{{range .NetworkSettings.Networks}}{{if eq .NetworkMode ""}}{{.IPAddress}}{{end}}{{end}}' | head -1)
-if [ -z "$IPFS_IP" ]; then
-    IPFS_IP=$(docker inspect root-ipfs-1 --format='{{.NetworkSettings.Networks.dsv_internal_network.IPAddress}}' 2>/dev/null || echo "")
-fi
+IPFS_IP=$(docker inspect root-ipfs-1 --format='{{.NetworkSettings.Networks.dsv_internal_network.IPAddress}}' 2>/dev/null || echo "")
 
 echo ""
 echo "========================================="
