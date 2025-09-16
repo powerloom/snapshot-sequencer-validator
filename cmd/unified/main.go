@@ -273,11 +273,11 @@ func main() {
 	// Initialize IPFS client if finalizer is enabled
 	var ipfsClient *ipfs.Client
 	if enableFinalizer {
-		ipfsURL := cfg.IPFSAPI // Assuming we have IPFS API URL in config
+		ipfsURL := cfg.IPFSAPI // Expecting multiaddr format
 		if ipfsURL == "" {
 			ipfsURL = "/ip4/127.0.0.1/tcp/5001" // Default
 		}
-		
+
 		var err error
 		ipfsClient, err = ipfs.NewClient(ipfsURL)
 		if err != nil {
