@@ -20,7 +20,8 @@ docker network connect dsv-internal-network root-ipfs-1 2>/dev/null || {
 echo "✓ IPFS container connected"
 
 # Get IPFS container's IP in the shared network
-IPFS_IP=$(docker inspect root-ipfs-1 --format='{{.NetworkSettings.Networks.dsv_internal_network.IPAddress}}' 2>/dev/null || echo "")
+# Note: Docker converts hyphens to underscores in network names for inspect
+IPFS_IP=$(docker inspect root-ipfs-1 -f '{{.NetworkSettings.Networks.dsv_internal_network.IPAddress}}' 2>/dev/null || echo "")
 
 echo ""
 echo "========================================="
@@ -32,7 +33,7 @@ echo ""
 echo "Update your .env file with ONE of these options:"
 echo ""
 echo "Option 1 - Use container name (recommended):"
-echo "  IPFS_HOST=/ip4/root-ipfs-1/tcp/5001"
+echo "  IPFS_HOST=/dns/root-ipfs-1/tcp/5001"
 echo ""
 if [ ! -z "$IPFS_IP" ]; then
     echo "Option 2 - Use container IP in shared network:"
