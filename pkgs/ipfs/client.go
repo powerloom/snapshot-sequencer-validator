@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	ipfsApi "github.com/ipfs/kubo/client/rpc"
@@ -23,7 +24,21 @@ type Client struct {
 // NewClient creates a new IPFS client
 func NewClient(apiURL string) (*Client, error) {
 	if apiURL == "" {
-		apiURL = "/ip4/127.0.0.1/tcp/5001" // Default IPFS API endpoint
+		apiURL = "127.0.0.1:5001" // Default IPFS API endpoint
+	}
+
+	// Handle different input formats
+	if strings.HasPrefix(apiURL, "/ip4/") || strings.HasPrefix(apiURL, "/dns/") {
+		// Convert multiaddr: /ip4/172.29.0.2/tcp/5001 -> http://172.29.0.2:5001
+		parts := strings.Split(apiURL, "/")
+		if len(parts) >= 5 {
+			host := parts[2]
+			port := parts[4]
+			apiURL = fmt.Sprintf("http://%s:%s", host, port)
+		}
+	} else if !strings.HasPrefix(apiURL, "http://") && !strings.HasPrefix(apiURL, "https://") {
+		// Simple host:port format -> add http://
+		apiURL = "http://" + apiURL
 	}
 
 	// Create HTTP client with reasonable timeouts
