@@ -399,7 +399,7 @@ func validateConfig() error {
 
 	if SettingsObj.EnableDequeuer {
 		if SettingsObj.RedisHost == "" {
-			return fmt.Errorf("Redis configuration required when dequeuer is enabled")
+			return fmt.Errorf("redis configuration required when dequeuer is enabled")
 		}
 	}
 
