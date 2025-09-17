@@ -26,12 +26,13 @@ The Powerloom Decentralized Sequencer Validator provides two deployment systems:
 - **Purpose**: Tests consensus with real P2P listener, dequeuer, but dummy batch generation
 - **Status**: Tested and stable for consensus testing
 
-### System 2: Full Decentralized Sequencer (EXPERIMENTAL)  
+### System 2: Full Decentralized Sequencer (EXPERIMENTAL)
 - **Binary**: `cmd/unified/main.go`
-- **Docker**: `docker-compose.snapshot-sequencer.yml` or `docker-compose.distributed.yml`
-- **Launcher**: `launch.sh`
+- **Docker**: `docker-compose.snapshot-sequencer.yml`, `docker-compose.distributed.yml`, or `docker-compose.validator.yml`
+- **Launcher**: `dsv.sh` (Decentralized Sequencer Validator control script)
 - **Purpose**: Production-ready snapshot sequencer with component toggles
 - **Status**: Experimental, actively developed
+- **New Features**: Added P2P consensus implementation, enhanced batch validation
 
 ## Prerequisites
 
@@ -80,11 +81,19 @@ DATA_MARKET_ADDRESSES=0x0C2E22fe7526fAeF28E7A58c84f8723dEFcE200c
 ### 3. Launch Sequencer
 ```bash
 # Quick start with default settings
-./launch.sh unified
+./dsv.sh unified
 
 # Or distributed mode for production
-./launch.sh distributed
+./dsv.sh distributed
+
+# Full validator mode with consensus
+./dsv.sh validator
 ```
+
+#### New Launch Options
+- `validator`: Deploys full validator with P2P consensus support
+- Added comprehensive P2P consensus deployment mode
+- Supports batch details and consensus tracking
 
 ## Configuration
 
@@ -113,7 +122,17 @@ ENABLE_DEQUEUER=true      # Redis queue processor
 ENABLE_FINALIZER=false    # Batch finalizer
 ENABLE_CONSENSUS=false    # Consensus voting
 ENABLE_EVENT_MONITOR=false # EpochReleased event monitoring
+
+# Consensus-specific toggles
+VOTING_THRESHOLD=0.67    # Percentage of validators required for consensus
+MIN_VALIDATORS=3         # Minimum number of validators for valid consensus
+CONSENSUS_TIMEOUT=300    # Timeout for consensus voting in seconds
 ```
+
+#### Consensus Configuration
+- `VOTING_THRESHOLD`: Controls the percentage of validators needed to approve a batch (default: 0.67 or 67%)
+- `MIN_VALIDATORS`: Minimum number of validators required to start consensus
+- `CONSENSUS_TIMEOUT`: Maximum time allowed for consensus voting before timeout
 
 #### RPC Configuration
 ```bash
@@ -170,48 +189,63 @@ DEDUP_TTL_SECONDS=7200
 
 ## Launch Scripts Reference
 
-### launch.sh - Main Deployment Script
+### dsv.sh - Decentralized Sequencer Validator Control Script
 
-The `launch.sh` script is the primary tool for managing your sequencer deployment.
+The `dsv.sh` script is the primary tool for managing your sequencer deployment.
 
 #### Available Commands
 
 ```bash
 # Start unified sequencer (all components in one container)
-./launch.sh unified
+./dsv.sh unified
 
 # Start distributed mode (separate containers per component)
-./launch.sh distributed
+./dsv.sh distributed
 
 # Start distributed mode with Redis exposed for debugging
-./launch.sh distributed-debug
+./dsv.sh distributed-debug
+
+# Start validator mode with consensus
+./dsv.sh validator
 
 # Start with custom .env settings
-./launch.sh sequencer-custom
+./dsv.sh sequencer-custom
 
 # Stop all running services
-./launch.sh stop
+./dsv.sh stop
 
 # Clean all containers and volumes (with confirmation)
-./launch.sh clean
+./dsv.sh clean
 
 # Force clean without confirmation
-./launch.sh clean --force
+./dsv.sh clean --force
+
+# View batch details for a specific epoch
+./dsv.sh batch-details [epoch_id]
 
 # Monitor batch preparation status
-./launch.sh monitor
+./dsv.sh monitor
 
 # Comprehensive pipeline monitoring
-./launch.sh pipeline
+./dsv.sh pipeline
 
-# View combined logs (NEW)
-./launch.sh collection-logs    # Dequeuer + Event Monitor
-./launch.sh finalization-logs  # Event Monitor + Finalizer  
-./launch.sh pipeline-logs      # All three components
+# View consensus voting status
+./dsv.sh consensus
+
+# View combined logs
+./dsv.sh collection-logs    # Dequeuer + Event Monitor
+./dsv.sh finalization-logs  # Event Monitor + Finalizer
+./dsv.sh pipeline-logs      # All three components
+./dsv.sh consensus-logs     # Consensus component logs
 
 # View usage help
-./launch.sh help
+./dsv.sh help
 ```
+
+#### New Commands
+- `batch-details`: Shows detailed batch metadata with IPFS CIDs
+- `consensus`: View consensus voting status and tracking
+- `consensus-logs`: View logs for the consensus component
 
 #### Command Details
 

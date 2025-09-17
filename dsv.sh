@@ -1,7 +1,8 @@
 #!/bin/bash
 
-# Unified Sequencer Launch Script
-# This script provides easy launching of different sequencer configurations
+# DSV - Decentralized Sequencer Validator Control Script
+# The main control interface for launching, monitoring, and managing DSV components
+# Usage: ./dsv.sh [command] [options]
 
 set -e
 
@@ -432,26 +433,31 @@ launch_debug() {
 show_status() {
     print_color "$BLUE" "Checking Service Status..."
     echo ""
-    
-    # Check distributed services
+
+    # Check which mode is running to avoid duplication
+    DISTRIBUTED_RUNNING=false
+    SEQUENCER_RUNNING=false
+
     if $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml ps 2>/dev/null | grep -q "Up"; then
+        DISTRIBUTED_RUNNING=true
+    fi
+
+    if $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" ps 2>/dev/null | grep -q "Up"; then
+        SEQUENCER_RUNNING=true
+    fi
+
+    # Show appropriate status based on what's running
+    if [ "$DISTRIBUTED_RUNNING" = true ]; then
         print_color "$GREEN" "Distributed Mode Services:"
         $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml ps
         echo ""
-    fi
-    
-    # Check regular services
-    if $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" ps 2>/dev/null | grep -q "Up"; then
+    elif [ "$SEQUENCER_RUNNING" = true ]; then
         print_color "$GREEN" "Sequencer Services:"
         $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" ps
         echo ""
-    fi
-    
-    # If no services found
-    if ! $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml ps 2>/dev/null | grep -q "Up" && \
-       ! $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" ps 2>/dev/null | grep -q "Up"; then
+    else
         print_color "$YELLOW" "No services are currently running"
-        echo "Use './launch.sh sequencer-custom' or './launch.sh distributed' to start"
+        echo "Use './dsv.sh sequencer-custom' or './dsv.sh distributed' to start"
     fi
     
     echo ""
@@ -560,9 +566,19 @@ case $COMMAND in
             monitor_batches
         fi
         ;;
+    batch-details)
+        # Show detailed batch metadata including IPFS CIDs
+        # Usage: ./dsv.sh batch-details [epoch_id]
+        if [ -f "./scripts/batch_details.sh" ]; then
+            ./scripts/batch_details.sh "$2"
+        else
+            print_color "$RED" "Error: batch_details.sh script not found"
+            exit 1
+        fi
+        ;;
     listener-logs)
         # Shortcut for viewing P2P listener logs
-        # Usage: ./launch.sh listener-logs [number_of_lines]
+        # Usage: ./dsv.sh listener-logs [number_of_lines]
         if is_distributed_mode; then
             LINES="${2:-}"
             if [ ! -z "$LINES" ] && [ "$LINES" -eq "$LINES" ] 2>/dev/null; then
@@ -571,12 +587,12 @@ case $COMMAND in
                 $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml logs -f listener
             fi
         else
-            print_color "$YELLOW" "Listener only runs in distributed mode. Use: ./launch.sh distributed"
+            print_color "$YELLOW" "Listener only runs in distributed mode. Use: ./dsv.sh distributed"
         fi
         ;;
     dqr-logs|dequeuer-logs)
         # Shortcut for viewing dequeuer worker logs
-        # Usage: ./launch.sh dqr-logs [number_of_lines]
+        # Usage: ./dsv.sh dqr-logs [number_of_lines]
         if is_distributed_mode; then
             LINES="${2:-}"
             if [ ! -z "$LINES" ] && [ "$LINES" -eq "$LINES" ] 2>/dev/null; then
@@ -585,12 +601,12 @@ case $COMMAND in
                 $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml logs -f dequeuer
             fi
         else
-            print_color "$YELLOW" "Dequeuer only runs in distributed mode. Use: ./launch.sh distributed"
+            print_color "$YELLOW" "Dequeuer only runs in distributed mode. Use: ./dsv.sh distributed"
         fi
         ;;
     finalizer-logs)
         # Shortcut for viewing finalizer logs
-        # Usage: ./launch.sh finalizer-logs [number_of_lines]
+        # Usage: ./dsv.sh finalizer-logs [number_of_lines]
         if is_distributed_mode; then
             LINES="${2:-}"
             if [ ! -z "$LINES" ] && [ "$LINES" -eq "$LINES" ] 2>/dev/null; then
@@ -599,12 +615,12 @@ case $COMMAND in
                 $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml logs -f finalizer
             fi
         else
-            print_color "$YELLOW" "Finalizer only runs in distributed mode. Use: ./launch.sh distributed"
+            print_color "$YELLOW" "Finalizer only runs in distributed mode. Use: ./dsv.sh distributed"
         fi
         ;;
     event-monitor-logs)
         # Shortcut for viewing event monitor logs
-        # Usage: ./launch.sh event-monitor-logs [number_of_lines]
+        # Usage: ./dsv.sh event-monitor-logs [number_of_lines]
         if is_distributed_mode; then
             LINES="${2:-}"
             if [ ! -z "$LINES" ] && [ "$LINES" -eq "$LINES" ] 2>/dev/null; then
@@ -613,12 +629,12 @@ case $COMMAND in
                 $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml logs -f event-monitor
             fi
         else
-            print_color "$YELLOW" "Event monitor only runs in distributed mode. Use: ./launch.sh distributed"
+            print_color "$YELLOW" "Event monitor only runs in distributed mode. Use: ./dsv.sh distributed"
         fi
         ;;
     redis-logs)
         # Shortcut for viewing Redis logs
-        # Usage: ./launch.sh redis-logs [number_of_lines]
+        # Usage: ./dsv.sh redis-logs [number_of_lines]
         LINES="${2:-}"
         if is_distributed_mode; then
             if [ ! -z "$LINES" ] && [ "$LINES" -eq "$LINES" ] 2>/dev/null; then
@@ -655,7 +671,7 @@ case $COMMAND in
         
         if [ -z "$CONTAINER_NAME" ]; then
             print_color "$RED" "Error: No running sequencer containers found"
-            print_color "$YELLOW" "Start the sequencer first with: ./launch.sh sequencer or ./launch.sh distributed"
+            print_color "$YELLOW" "Start the sequencer first with: ./dsv.sh sequencer or ./dsv.sh distributed"
             exit 1
         fi
         

@@ -19,7 +19,7 @@ if [ -z "$CONTAINER" ]; then
     if [ -z "$CONTAINER" ]; then
         echo "Error: No running sequencer containers found"
         echo "Usage: $0 [container_name]"
-        echo "Or start the sequencer first with: ./launch.sh sequencer or ./launch.sh distributed"
+        echo "Or start the sequencer first with: ./dsv.sh sequencer or ./dsv.sh distributed"
         exit 1
     fi
 fi
@@ -37,8 +37,8 @@ echo -e "${CYAN}🔍 Comprehensive Pipeline Monitor${NC}"
 echo -e "${CYAN}══════════════════════════════════════════════════${NC}"
 echo ""
 
-# Execute comprehensive monitoring inside the container
-docker exec -it $CONTAINER /bin/sh -c '
+# Execute comprehensive monitoring inside the container (no -it for script usage)
+docker exec $CONTAINER /bin/sh -c '
     REDIS_HOST="${REDIS_HOST:-redis}"
     REDIS_PORT="${REDIS_PORT:-6379}"
     

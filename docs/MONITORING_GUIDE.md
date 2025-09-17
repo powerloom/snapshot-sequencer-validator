@@ -19,7 +19,7 @@ The system now supports both P2PSnapshotSubmission batch format (multiple submis
 
 ## Pipeline Stages
 
-The monitoring system tracks 5 distinct stages:
+The monitoring system tracks 6 distinct stages:
 
 ### Stage 1: Submission Collection
 - **Active Windows**: Open submission windows accepting data (format: `epoch:market:epochID:window`)
@@ -47,6 +47,12 @@ The monitoring system tracks 5 distinct stages:
 - **Merkle Roots**: Cryptographic proofs of batch contents
 - **Validator Broadcasts**: Vote dissemination status
 
+### Stage 6: Consensus Validation (NEW)
+- **Voting Status**: Real-time tracking of validator consensus
+- **Voting Threshold**: Percentage of validators who have approved a batch
+- **Consensus Details**: Per-project and overall batch voting progress
+- **Timeout Tracking**: Monitor consensus voting window
+
 ## Monitoring Commands
 
 ### launch.sh Commands
@@ -56,16 +62,19 @@ The monitoring system tracks 5 distinct stages:
 | `monitor` | Basic batch preparation status |
 | `pipeline` | Comprehensive pipeline monitoring |
 | `status` | Service status overview |
+| `consensus` | Consensus voting details |
 | **Individual Logs** | |
 | `listener-logs` | P2P listener activity |
 | `dqr-logs` | Submission processing logs |
 | `finalizer-logs` | Batch finalization logs |
 | `event-monitor-logs` | Epoch release events |
 | `redis-logs` | Redis operation logs |
+| `consensus-logs` | Consensus validator vote tracking |
 | **Combined Logs (NEW)** | |
 | `collection-logs` | Dequeuer + Event Monitor logs |
 | `finalization-logs` | Event Monitor + Finalizer logs |
 | `pipeline-logs` | All three: Dequeuer + Event Monitor + Finalizer |
+| `consensus-logs` | Consensus component logs
 
 All log commands support optional line count (default: 100):
 ```bash
@@ -91,6 +100,13 @@ submissionQueue                                     # Raw P2P submissions
 {protocol}:{market}:processed:{sequencerID}:{id}    # Individual processed submissions (10min TTL)
 {protocol}:{market}:epoch:{epochId}:processed       # Set of submission IDs per epoch (1hr TTL)
 {protocol}:{market}:epoch:{epochId}:project:{pid}:votes # Vote counts per CID
+
+# New consensus tracking keys
+consensus:{epochId}:total_validators                # Total validators for epoch
+consensus:{epochId}:voting_progress                 # Overall consensus voting status
+consensus:{epochId}:project:{pid}:votes             # Per-project validator votes
+consensus:{epochId}:project:{pid}:cid               # Winning CID for project
+consensus:{epochId}:status                          # Epoch consensus status (pending/complete/failed)
 ```
 
 ### Window Management (Updated Format)
@@ -134,6 +150,17 @@ metrics:avg_latency                       # Average processing time
 | `processing` | Actively processing batch |
 | `failed` | Error state requiring attention |
 
+## Consensus Status Values (NEW)
+
+| Status | Description |
+|--------|-------------|
+| `initializing` | Consensus process starting |
+| `voting` | Collecting validator votes |
+| `threshold_reached` | Consensus vote threshold achieved |
+| `timeout` | Consensus voting window expired |
+| `finalized` | Batch approved and ready |
+| `rejected` | Batch did not meet consensus requirements
+
 ## Health Indicators
 
 ### Healthy Pipeline
@@ -141,16 +168,21 @@ metrics:avg_latency                       # Average processing time
 - ✅ Finalization queue < 10 batches
 - ✅ Worker heartbeats < 60s old
 - ✅ Aggregation queue < 5 epochs
+- ✅ Consensus voting progress > 50%
 
 ### Warning Signs
 - ⚠️ Queue depth > 100 (backlog forming)
 - ⚠️ Worker heartbeat > 60s (stale worker)
 - ⚠️ Finalization queue > 10 (workers overwhelmed)
+- ⚠️ Consensus voting < 50% (might not reach threshold)
+- ⚠️ High vote divergence (multiple CIDs competing)
 
 ### Critical Issues
 - 🔴 Queue depth > 1000 (severe backlog)
 - 🔴 No worker heartbeats (workers down)
 - 🔴 Aggregation blocked (parts incomplete)
+- 🔴 Consensus timeout reached without resolution
+- 🔴 Insufficient unique validators participating
 
 ## Integration with Workers
 
@@ -338,6 +370,13 @@ Planned monitoring improvements:
 - Grafana dashboards
 - WebSocket real-time updates
 - Historical trend analysis
+
+### Consensus Monitoring Roadmap
+- Detailed validator performance tracking
+- Stake-weighted voting visualization
+- Cross-epoch validator reputation system
+- Advanced consensus game theory modeling
+- Automated validator onboarding/offboarding tools
 
 ## Related Documentation
 

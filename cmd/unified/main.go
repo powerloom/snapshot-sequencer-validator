@@ -45,19 +45,20 @@ type UnifiedSequencer struct {
 	redisClient *redis.Client
 	dedup       *deduplication.Deduplicator
 	ipfsClient  *ipfs.Client
-	
+
 	// Component flags
 	enableListener     bool
 	enableDequeuer     bool
 	enableFinalizer    bool
 	enableConsensus    bool
 	enableEventMonitor bool
-	
+
 	// Component instances
-	dequeuer     *submissions.Dequeuer
-	batchGen     *consensus.DummyBatchGenerator
-	eventMonitor *eventmonitor.EventMonitor
-	
+	dequeuer      *submissions.Dequeuer
+	batchGen      *consensus.DummyBatchGenerator
+	eventMonitor  *eventmonitor.EventMonitor
+	p2pConsensus  *consensus.P2PConsensus // P2P consensus handler
+
 	// Configuration
 	config      *config.Settings
 	sequencerID string
@@ -318,6 +319,19 @@ func main() {
 	
 	if enableConsensus {
 		sequencer.batchGen = consensus.NewDummyBatchGenerator(sequencerID)
+
+		// Initialize P2P consensus if we have P2P and IPFS
+		if ps != nil && ipfsClient != nil {
+			var err error
+			sequencer.p2pConsensus, err = consensus.NewP2PConsensus(
+				ctx, h, ps, redisClient, ipfsClient, sequencerID,
+			)
+			if err != nil {
+				log.Errorf("Failed to initialize P2P consensus: %v", err)
+				// Continue without P2P consensus
+				sequencer.p2pConsensus = nil
+			}
+		}
 	}
 	
 	if enableEventMonitor && redisClient != nil {
@@ -1300,6 +1314,15 @@ func (s *UnifiedSequencer) createFinalizedBatch(epochID uint64, projectSubmissio
 		} else {
 			finalizedBatch.BatchIPFSCID = batchCID
 			log.Infof("📦 Stored finalized batch in IPFS: %s", batchCID)
+
+			// Broadcast to P2P consensus network if enabled
+			if s.p2pConsensus != nil {
+				if err := s.p2pConsensus.BroadcastFinalizedBatch(finalizedBatch); err != nil {
+					log.Errorf("Failed to broadcast batch to P2P consensus: %v", err)
+				} else {
+					log.Infof("📡 Broadcasted batch to validator consensus network")
+				}
+			}
 		}
 	}
 	
@@ -1346,18 +1369,49 @@ func (s *UnifiedSequencer) createFinalizedBatch(epochID uint64, projectSubmissio
 }
 
 func (s *UnifiedSequencer) runConsensus() {
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-	
-	for {
-		select {
-		case <-ticker.C:
-			epoch := uint64(time.Now().Unix() / 30)
-			log.Infof("Consensus: Processing epoch %d", epoch)
-			// Consensus logic here
-		case <-s.ctx.Done():
-			log.Info("Consensus component shutting down")
-			return
+	// If P2P consensus is enabled, it handles its own monitoring
+	if s.p2pConsensus != nil {
+		log.Info("P2P Consensus component is running and handling validator coordination")
+
+		// Monitor consensus status periodically
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				// Check recent epochs for consensus
+				currentEpoch := uint64(time.Now().Unix() / 30)
+				for i := uint64(0); i < 3; i++ {
+					epochID := currentEpoch - i
+					status := s.p2pConsensus.GetConsensusStatus(epochID)
+					if status != nil && status.ConsensusReached {
+						log.Infof("✅ Consensus status for epoch %d: REACHED (%d validators agreed)",
+							epochID, status.ReceivedBatches)
+					}
+				}
+			case <-s.ctx.Done():
+				log.Info("Consensus component shutting down")
+				if s.p2pConsensus != nil {
+					s.p2pConsensus.Close()
+				}
+				return
+			}
+		}
+	} else {
+		// Fallback to simple consensus monitoring
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				epoch := uint64(time.Now().Unix() / 30)
+				log.Infof("Consensus: Processing epoch %d (P2P consensus not enabled)", epoch)
+			case <-s.ctx.Done():
+				log.Info("Consensus component shutting down")
+				return
+			}
 		}
 	}
 }

@@ -20,7 +20,7 @@ REDIS_CONTAINER=$(docker ps --filter "name=redis" --format "{{.Names}}" | head -
 
 if [ -z "$REDIS_CONTAINER" ]; then
     echo -e "${RED}Error: No Redis container found${NC}"
-    echo "Start the sequencer first with: ./launch.sh distributed"
+    echo "Start the sequencer first with: ./dsv.sh distributed"
     exit 1
 fi
 
