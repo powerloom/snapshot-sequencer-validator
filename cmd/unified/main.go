@@ -50,7 +50,7 @@ type UnifiedSequencer struct {
 	enableListener     bool
 	enableDequeuer     bool
 	enableFinalizer    bool
-	enableConsensus    bool
+	enableBatchAggregation bool  // P2P exchange and aggregation of finalized batches
 	enableEventMonitor bool
 
 	// Component instances
@@ -85,14 +85,14 @@ func main() {
 	enableListener := cfg.EnableListener
 	enableDequeuer := cfg.EnableDequeuer
 	enableFinalizer := cfg.EnableFinalizer
-	enableConsensus := cfg.EnableConsensus
+	enableBatchAggregation := cfg.EnableBatchAggregation
 	enableEventMonitor := cfg.EnableEventMonitor
 	
 	log.Infof("Starting Unified Sequencer with components:")
 	log.Infof("  - Listener: %v", enableListener)
 	log.Infof("  - Dequeuer: %v", enableDequeuer)
 	log.Infof("  - Finalizer: %v", enableFinalizer)
-	log.Infof("  - Consensus: %v", enableConsensus)
+	log.Infof("  - Batch Aggregation: %v", enableBatchAggregation)
 	log.Infof("  - Event Monitor: %v", enableEventMonitor)
 	
 	// Get sequencer ID from configuration
@@ -134,7 +134,7 @@ func main() {
 	// Initialize P2P if listener or consensus is enabled
 	var h host.Host
 	var ps *pubsub.PubSub
-	if enableListener || enableConsensus {
+	if enableListener || enableBatchAggregation {
 		p2pPort := strconv.Itoa(cfg.P2PPort)
 		
 		// Create or load private key
@@ -306,7 +306,7 @@ func main() {
 		enableListener:     enableListener,
 		enableDequeuer:     enableDequeuer,
 		enableFinalizer:    enableFinalizer,
-		enableConsensus:    enableConsensus,
+		enableBatchAggregation: enableBatchAggregation,
 		enableEventMonitor: enableEventMonitor,
 		config:             cfg,
 		sequencerID:        sequencerID,
@@ -317,7 +317,7 @@ func main() {
 		sequencer.dequeuer = submissions.NewDequeuer(redisClient, sequencerID)
 	}
 	
-	if enableConsensus {
+	if enableBatchAggregation {
 		sequencer.batchGen = consensus.NewDummyBatchGenerator(sequencerID)
 
 		// Initialize P2P consensus if we have P2P and IPFS
@@ -435,12 +435,12 @@ func (s *UnifiedSequencer) Start() {
 	}
 	
 	// Start consensus component
-	if s.enableConsensus && s.ps != nil {
-		log.Info("Starting Consensus component...")
+	if s.enableBatchAggregation && s.ps != nil {
+		log.Info("Starting Batch Aggregation component (P2P finalization exchange)...")
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
-			s.runConsensus()
+			s.runBatchAggregation()
 		}()
 	}
 	
@@ -1368,10 +1368,10 @@ func (s *UnifiedSequencer) createFinalizedBatch(epochID uint64, projectSubmissio
 	return nil
 }
 
-func (s *UnifiedSequencer) runConsensus() {
-	// If P2P consensus is enabled, it handles its own monitoring
+func (s *UnifiedSequencer) runBatchAggregation() {
+	// If P2P batch aggregation is enabled, it handles collection of finalized batches from peers
 	if s.p2pConsensus != nil {
-		log.Info("P2P Consensus component is running and handling validator coordination")
+		log.Info("P2P Batch Aggregation is running - collecting finalized batches from validators")
 
 		// Monitor consensus status periodically
 		ticker := time.NewTicker(60 * time.Second)
@@ -1384,14 +1384,14 @@ func (s *UnifiedSequencer) runConsensus() {
 				currentEpoch := uint64(time.Now().Unix() / 30)
 				for i := uint64(0); i < 3; i++ {
 					epochID := currentEpoch - i
-					status := s.p2pConsensus.GetConsensusStatus(epochID)
-					if status != nil && status.ConsensusReached {
-						log.Infof("✅ Consensus status for epoch %d: REACHED (%d validators agreed)",
-							epochID, status.ReceivedBatches)
+					status := s.p2pConsensus.GetAggregationStatus(epochID)
+					if status != nil && len(status.AggregatedProjects) > 0 {
+						log.Infof("✅ Aggregation for epoch %d: %d projects aggregated from %d validators",
+							epochID, len(status.AggregatedProjects), status.ReceivedBatches)
 					}
 				}
 			case <-s.ctx.Done():
-				log.Info("Consensus component shutting down")
+				log.Info("Batch aggregation component shutting down")
 				if s.p2pConsensus != nil {
 					s.p2pConsensus.Close()
 				}
@@ -1409,7 +1409,7 @@ func (s *UnifiedSequencer) runConsensus() {
 				epoch := uint64(time.Now().Unix() / 30)
 				log.Infof("Consensus: Processing epoch %d (P2P consensus not enabled)", epoch)
 			case <-s.ctx.Done():
-				log.Info("Consensus component shutting down")
+				log.Info("Batch aggregation component shutting down")
 				return
 			}
 		}

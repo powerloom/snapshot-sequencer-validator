@@ -82,11 +82,11 @@ type Settings struct {
 	DedupTTL            time.Duration
 
 	// Component Toggles
-	EnableListener     bool
-	EnableDequeuer     bool
-	EnableFinalizer    bool
-	EnableConsensus    bool
-	EnableEventMonitor bool
+	EnableListener        bool
+	EnableDequeuer        bool
+	EnableFinalizer       bool
+	EnableBatchAggregation bool  // P2P exchange of finalized batches for aggregation
+	EnableEventMonitor    bool
 
 	// Finalizer Configuration
 	FinalizerWorkers      int
@@ -175,11 +175,11 @@ func LoadConfig() error {
 		DedupTTL:            time.Duration(getEnvAsInt("DEDUP_TTL_SECONDS", 7200)) * time.Second,
 
 		// Component Toggles
-		EnableListener:     getBoolEnv("ENABLE_LISTENER", true),
-		EnableDequeuer:     getBoolEnv("ENABLE_DEQUEUER", true),
-		EnableFinalizer:    getBoolEnv("ENABLE_FINALIZER", true),
-		EnableConsensus:    getBoolEnv("ENABLE_CONSENSUS", true),
-		EnableEventMonitor: getBoolEnv("ENABLE_EVENT_MONITOR", false),
+		EnableListener:        getBoolEnv("ENABLE_LISTENER", true),
+		EnableDequeuer:        getBoolEnv("ENABLE_DEQUEUER", true),
+		EnableFinalizer:       getBoolEnv("ENABLE_FINALIZER", true),
+		EnableBatchAggregation: getBoolEnv("ENABLE_BATCH_AGGREGATION", getBoolEnv("ENABLE_CONSENSUS", true)), // Fallback to old name for compatibility
+		EnableEventMonitor:    getBoolEnv("ENABLE_EVENT_MONITOR", false),
 
 		// Finalizer Configuration
 		FinalizerWorkers:      getEnvAsInt("FINALIZER_WORKERS", 5),
@@ -379,7 +379,7 @@ func configureLogging() {
 // validateConfig validates the loaded configuration
 func validateConfig() error {
 	// Check required fields for enabled components
-	if SettingsObj.EnableListener || SettingsObj.EnableConsensus {
+	if SettingsObj.EnableListener || SettingsObj.EnableBatchAggregation {
 		if len(SettingsObj.BootstrapPeers) == 0 {
 			log.Warn("No bootstrap peers configured - P2P networking may not work")
 		}
@@ -410,9 +410,9 @@ func validateConfig() error {
 func logConfigSummary() {
 	log.Info("=== Configuration Loaded ===")
 	log.Infof("Sequencer ID: %s", SettingsObj.SequencerID)
-	log.Infof("Components: Listener=%v, Dequeuer=%v, Finalizer=%v, Consensus=%v, EventMonitor=%v",
+	log.Infof("Components: Listener=%v, Dequeuer=%v, Finalizer=%v, BatchAggregation=%v, EventMonitor=%v",
 		SettingsObj.EnableListener, SettingsObj.EnableDequeuer, SettingsObj.EnableFinalizer,
-		SettingsObj.EnableConsensus, SettingsObj.EnableEventMonitor)
+		SettingsObj.EnableBatchAggregation, SettingsObj.EnableEventMonitor)
 
 	if len(SettingsObj.RPCNodes) > 0 {
 		log.Infof("RPC Nodes: %d configured", len(SettingsObj.RPCNodes))

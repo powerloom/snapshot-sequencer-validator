@@ -18,9 +18,9 @@ import (
 )
 
 const (
-	// Consensus topics for batch broadcasting
-	ConsensusDiscoveryTopic = "/powerloom/consensus/discovery"
-	ConsensusBatchTopic     = "/powerloom/consensus/batch"
+	// Gossipsub topics for batch aggregation
+	ValidatorPresenceTopic   = "/powerloom/validator/presence"     // For validator heartbeat/discovery
+	FinalizedBatchesTopic    = "/powerloom/finalized-batches/all"  // For exchanging finalized batches
 
 	// Consensus parameters
 	MinValidatorsForConsensus = 2  // Minimum validators needed for consensus
@@ -46,13 +46,13 @@ type P2PConsensus struct {
 
 	// Consensus tracking
 	validatorBatches map[uint64]map[string]*ValidatorBatch // epochID -> validatorID -> batch
-	consensusStatus  map[uint64]*ConsensusStatus           // epochID -> consensus status
+	aggregationStatus map[uint64]*AggregationStatus        // epochID -> aggregation status
 	mu               sync.RWMutex
 
 	// Metrics
 	receivedBatches  uint64
 	broadcastBatches uint64
-	consensusReached uint64
+	epochsAggregated uint64
 }
 
 // ValidatorBatch represents a batch from a specific validator
@@ -70,16 +70,15 @@ type ValidatorBatch struct {
 	Metadata      map[string]interface{} `json:"metadata,omitempty"`
 }
 
-// ConsensusStatus tracks consensus state for an epoch
-type ConsensusStatus struct {
-	EpochID             uint64            `json:"epoch_id"`
-	TotalValidators     int               `json:"total_validators"`
-	ReceivedBatches     int               `json:"received_batches"`
-	ConsensusReached    bool              `json:"consensus_reached"`
-	ConsensusCID        string            `json:"consensus_cid"`
-	ConsensusMerkleRoot string            `json:"consensus_merkle_root"`
-	DissentingValidators []string         `json:"dissenting_validators,omitempty"`
-	UpdatedAt           time.Time         `json:"updated_at"`
+// AggregationStatus tracks the aggregated state of all validator batches for an epoch
+type AggregationStatus struct {
+	EpochID               uint64                       `json:"epoch_id"`
+	TotalValidators       int                          `json:"total_validators"`
+	ReceivedBatches       int                          `json:"received_batches"`
+	ProjectVotes          map[string]map[string]int    `json:"project_votes"`      // projectID -> CID -> vote count
+	AggregatedProjects    map[string]string            `json:"aggregated_projects"` // projectID -> winning CID
+	ValidatorContributions map[string][]string         `json:"validator_contributions"` // validatorID -> list of projects they voted on
+	UpdatedAt             time.Time                    `json:"updated_at"`
 }
 
 // NewP2PConsensus creates a new P2P consensus handler
@@ -94,8 +93,8 @@ func NewP2PConsensus(ctx context.Context, h host.Host, ps *pubsub.PubSub, redisC
 		redisClient:      redisClient,
 		ipfsClient:       ipfsClient,
 		sequencerID:      sequencerID,
-		validatorBatches: make(map[uint64]map[string]*ValidatorBatch),
-		consensusStatus:  make(map[uint64]*ConsensusStatus),
+		validatorBatches:  make(map[uint64]map[string]*ValidatorBatch),
+		aggregationStatus: make(map[uint64]*AggregationStatus),
 	}
 
 	// Join topics
@@ -116,15 +115,15 @@ func NewP2PConsensus(ctx context.Context, h host.Host, ps *pubsub.PubSub, redisC
 
 // setupTopics initializes P2P topics and subscriptions
 func (pc *P2PConsensus) setupTopics() error {
-	// Join discovery topic
-	discoveryTopic, err := pc.pubsub.Join(ConsensusDiscoveryTopic)
+	// Join validator presence topic for discovery
+	discoveryTopic, err := pc.pubsub.Join(ValidatorPresenceTopic)
 	if err != nil {
 		return fmt.Errorf("failed to join discovery topic: %w", err)
 	}
 	pc.discoveryTopic = discoveryTopic
 
 	// Join batch topic
-	batchTopic, err := pc.pubsub.Join(ConsensusBatchTopic)
+	batchTopic, err := pc.pubsub.Join(FinalizedBatchesTopic)
 	if err != nil {
 		return fmt.Errorf("failed to join batch topic: %w", err)
 	}
@@ -143,7 +142,7 @@ func (pc *P2PConsensus) setupTopics() error {
 	}
 	pc.batchSub = batchSub
 
-	log.Infof("Joined consensus topics: %s, %s", ConsensusDiscoveryTopic, ConsensusBatchTopic)
+	log.Infof("Joined aggregation topics: %s, %s", ValidatorPresenceTopic, FinalizedBatchesTopic)
 	return nil
 }
 
@@ -248,8 +247,8 @@ func (pc *P2PConsensus) processBatchMessage(msg *pubsub.Message) {
 
 	pc.receivedBatches++
 
-	// Check for consensus
-	pc.checkEpochConsensus(vBatch.EpochID)
+	// Aggregate votes for this epoch
+	pc.aggregateEpochVotes(vBatch.EpochID)
 }
 
 // validateBatch performs validation on received batch
@@ -362,8 +361,8 @@ func (pc *P2PConsensus) storeBatchInRedis(vBatch *ValidatorBatch) error {
 	return nil
 }
 
-// checkEpochConsensus checks if consensus has been reached for an epoch
-func (pc *P2PConsensus) checkEpochConsensus(epochID uint64) {
+// aggregateEpochVotes aggregates project votes from all validators for an epoch
+func (pc *P2PConsensus) aggregateEpochVotes(epochID uint64) {
 	pc.mu.RLock()
 	epochBatches := pc.validatorBatches[epochID]
 	pc.mu.RUnlock()
@@ -373,88 +372,106 @@ func (pc *P2PConsensus) checkEpochConsensus(epochID uint64) {
 		return
 	}
 
-	// Count agreements on merkle roots and CIDs
-	merkleRootCounts := make(map[string]int)
-	cidCounts := make(map[string]int)
+	// Aggregate project votes from all validators
+	// projectID -> CID -> vote count
+	projectVotes := make(map[string]map[string]int)
+	validatorContributions := make(map[string][]string)
 	totalValidators := len(epochBatches)
 
-	for _, vBatch := range epochBatches {
-		merkleRootCounts[vBatch.MerkleRoot]++
-		cidCounts[vBatch.BatchIPFSCID]++
-	}
+	for validatorID, vBatch := range epochBatches {
+		// Extract project votes from metadata
+		if votes, ok := vBatch.Metadata["votes"].(map[string]interface{}); ok {
+			for projectID, cidData := range votes {
+				if projectVotes[projectID] == nil {
+					projectVotes[projectID] = make(map[string]int)
+				}
 
-	// Find majority merkle root
-	var consensusMerkle string
-	var consensusCID string
-	maxMerkleCount := 0
-	maxCIDCount := 0
-
-	for merkle, count := range merkleRootCounts {
-		if count > maxMerkleCount {
-			maxMerkleCount = count
-			consensusMerkle = merkle
+				// Count this validator's vote for this project->CID mapping
+				if cidMap, ok := cidData.(map[string]interface{}); ok {
+					if cid, ok := cidMap["cid"].(string); ok {
+						projectVotes[projectID][cid]++
+						validatorContributions[validatorID] = append(validatorContributions[validatorID], projectID)
+					}
+				} else if cid, ok := cidData.(string); ok {
+					// Direct CID string
+					projectVotes[projectID][cid]++
+					validatorContributions[validatorID] = append(validatorContributions[validatorID], projectID)
+				}
+			}
 		}
-	}
 
-	for cid, count := range cidCounts {
-		if count > maxCIDCount {
-			maxCIDCount = count
-			consensusCID = cid
-		}
-	}
+		// If BatchData is loaded from IPFS, use ProjectIds and SnapshotCids
+		if vBatch.BatchData != nil && len(vBatch.BatchData.ProjectIds) > 0 {
+			for i, projectID := range vBatch.BatchData.ProjectIds {
+				if i < len(vBatch.BatchData.SnapshotCids) {
+					cid := vBatch.BatchData.SnapshotCids[i]
 
-	// Check if consensus threshold is met
-	consensusReached := float64(maxMerkleCount)/float64(totalValidators) >= ConsensusThreshold
-
-	// Find dissenting validators
-	var dissentingValidators []string
-	if consensusReached {
-		for validatorID, vBatch := range epochBatches {
-			if vBatch.MerkleRoot != consensusMerkle {
-				dissentingValidators = append(dissentingValidators, validatorID)
+					if projectVotes[projectID] == nil {
+						projectVotes[projectID] = make(map[string]int)
+					}
+					projectVotes[projectID][cid]++
+					validatorContributions[validatorID] = append(validatorContributions[validatorID], projectID)
+				}
 			}
 		}
 	}
 
-	// Update consensus status
-	status := &ConsensusStatus{
-		EpochID:              epochID,
-		TotalValidators:      totalValidators,
-		ReceivedBatches:      len(epochBatches),
-		ConsensusReached:     consensusReached,
-		ConsensusCID:         consensusCID,
-		ConsensusMerkleRoot:  consensusMerkle,
-		DissentingValidators: dissentingValidators,
-		UpdatedAt:            time.Now(),
+	// Determine winning CID for each project (highest vote count)
+	aggregatedProjects := make(map[string]string)
+	for projectID, cidVotes := range projectVotes {
+		var winningCID string
+		maxVotes := 0
+
+		for cid, votes := range cidVotes {
+			if votes > maxVotes {
+				maxVotes = votes
+				winningCID = cid
+			}
+		}
+
+		// Only include if it has sufficient votes (could be configurable threshold)
+		if float64(maxVotes)/float64(totalValidators) >= 0.5 { // 50% threshold for now
+			aggregatedProjects[projectID] = winningCID
+		}
+	}
+
+	// Update aggregation status
+	status := &AggregationStatus{
+		EpochID:               epochID,
+		TotalValidators:       totalValidators,
+		ReceivedBatches:       len(epochBatches),
+		ProjectVotes:          projectVotes,
+		AggregatedProjects:    aggregatedProjects,
+		ValidatorContributions: validatorContributions,
+		UpdatedAt:             time.Now(),
 	}
 
 	pc.mu.Lock()
-	pc.consensusStatus[epochID] = status
+	pc.aggregationStatus[epochID] = status
 	pc.mu.Unlock()
 
-	// Store consensus status in Redis
-	pc.storeConsensusStatus(status)
+	// Store aggregation status in Redis
+	pc.storeAggregationStatus(status)
 
-	if consensusReached {
-		pc.consensusReached++
-		log.Infof("✅ CONSENSUS REACHED for epoch %d: %d/%d validators agree on merkle root %s...",
-			epochID, maxMerkleCount, totalValidators, consensusMerkle[:16])
+	pc.epochsAggregated++
 
-		if len(dissentingValidators) > 0 {
-			log.Warnf("  ⚠️ Dissenting validators: %v", dissentingValidators)
+	log.Infof("📊 AGGREGATION for epoch %d: %d validators contributed, %d projects aggregated",
+		epochID, len(epochBatches), len(aggregatedProjects))
+
+	// Log project details
+	for projectID, winningCID := range aggregatedProjects {
+		if votes := projectVotes[projectID][winningCID]; votes > 0 {
+			log.Debugf("  Project %s: CID %s (%d/%d votes)",
+				projectID, winningCID[:12]+"...", votes, len(epochBatches))
 		}
-
-		// Trigger any consensus-reached actions
-		pc.onConsensusReached(epochID, consensusCID, consensusMerkle)
-	} else {
-		log.Infof("⏳ Epoch %d: %d/%d validators reported, %d agree on leading merkle root (%.1f%%, need %.1f%%)",
-			epochID, len(epochBatches), totalValidators, maxMerkleCount,
-			float64(maxMerkleCount)/float64(totalValidators)*100, ConsensusThreshold*100)
 	}
+
+	// Trigger aggregation complete actions (e.g., proposer election and submission)
+	pc.onAggregationComplete(epochID, aggregatedProjects)
 }
 
-// storeConsensusStatus saves consensus status to Redis
-func (pc *P2PConsensus) storeConsensusStatus(status *ConsensusStatus) error {
+// storeAggregationStatus saves aggregation status to Redis
+func (pc *P2PConsensus) storeAggregationStatus(status *AggregationStatus) error {
 	key := fmt.Sprintf("consensus:epoch:%d:status", status.EpochID)
 
 	data, err := json.Marshal(status)
@@ -469,8 +486,8 @@ func (pc *P2PConsensus) storeConsensusStatus(status *ConsensusStatus) error {
 	return nil
 }
 
-// onConsensusReached handles actions when consensus is achieved
-func (pc *P2PConsensus) onConsensusReached(epochID uint64, consensusCID, consensusMerkle string) {
+// onAggregationComplete handles actions when aggregation is complete
+func (pc *P2PConsensus) onAggregationComplete(epochID uint64, aggregatedProjects map[string]string) {
 	// Store consensus result
 	key := fmt.Sprintf("consensus:epoch:%d:result", epochID)
 	result := map[string]interface{}{
@@ -499,7 +516,7 @@ func (pc *P2PConsensus) periodicConsensusCheck() {
 			return
 		case <-ticker.C:
 			pc.checkRecentEpochs()
-			pc.logConsensusStats()
+			pc.logAggregationStats()
 		}
 	}
 }
@@ -511,28 +528,31 @@ func (pc *P2PConsensus) checkRecentEpochs() {
 	// Check last 5 epochs
 	for i := uint64(0); i < 5; i++ {
 		epochID := currentEpoch - i
-		pc.checkEpochConsensus(epochID)
+		pc.aggregateEpochVotes(epochID)
 	}
 }
 
-// logConsensusStats logs consensus statistics
-func (pc *P2PConsensus) logConsensusStats() {
+// logAggregationStats logs aggregation statistics
+func (pc *P2PConsensus) logAggregationStats() {
 	pc.mu.RLock()
 	activeEpochs := len(pc.validatorBatches)
-	consensusCount := 0
-	for _, status := range pc.consensusStatus {
-		if status.ConsensusReached {
-			consensusCount++
+	aggregatedCount := 0
+	totalProjects := 0
+	for _, status := range pc.aggregationStatus {
+		if len(status.AggregatedProjects) > 0 {
+			aggregatedCount++
+			totalProjects += len(status.AggregatedProjects)
 		}
 	}
 	pc.mu.RUnlock()
 
 	peers := pc.getConnectedValidators()
 
-	log.Infof("====== CONSENSUS STATUS ======")
+	log.Infof("====== BATCH AGGREGATION STATUS ======")
 	log.Infof("Connected Validators: %d", len(peers))
 	log.Infof("Active Epochs: %d", activeEpochs)
-	log.Infof("Consensus Reached: %d epochs", consensusCount)
+	log.Infof("Epochs Aggregated: %d", aggregatedCount)
+	log.Infof("Total Projects: %d", totalProjects)
 	log.Infof("Batches Received: %d", pc.receivedBatches)
 	log.Infof("Batches Broadcast: %d", pc.broadcastBatches)
 	log.Infof("==============================")
@@ -630,11 +650,11 @@ func (pc *P2PConsensus) getConnectedValidators() []peer.ID {
 	return peerList
 }
 
-// GetConsensusStatus returns the consensus status for an epoch
-func (pc *P2PConsensus) GetConsensusStatus(epochID uint64) *ConsensusStatus {
+// GetAggregationStatus returns the aggregation status for an epoch
+func (pc *P2PConsensus) GetAggregationStatus(epochID uint64) *AggregationStatus {
 	pc.mu.RLock()
 	defer pc.mu.RUnlock()
-	return pc.consensusStatus[epochID]
+	return pc.aggregationStatus[epochID]
 }
 
 // GetValidatorBatches returns all validator batches for an epoch
