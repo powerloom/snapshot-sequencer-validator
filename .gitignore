@@ -1,7 +1,7 @@
 .DS_Store
 # Environment files
-.env
-.env.*
+.localenvs/
+
 
 # Binary output directory
 bin/
