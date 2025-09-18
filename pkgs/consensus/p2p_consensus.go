@@ -488,21 +488,39 @@ func (pc *P2PConsensus) storeAggregationStatus(status *AggregationStatus) error 
 
 // onAggregationComplete handles actions when aggregation is complete
 func (pc *P2PConsensus) onAggregationComplete(epochID uint64, aggregatedProjects map[string]string) {
+	// Calculate merkle root from aggregated projects
+	projectIDs := make([]string, 0, len(aggregatedProjects))
+	snapshotCIDs := make([]string, 0, len(aggregatedProjects))
+
+	for projectID, cid := range aggregatedProjects {
+		projectIDs = append(projectIDs, projectID)
+		snapshotCIDs = append(snapshotCIDs, cid)
+	}
+
+	merkleRoot := pc.calculateMerkleRoot(projectIDs, snapshotCIDs)
+	merkleRootHex := fmt.Sprintf("%x", merkleRoot)
+
+	// Create a combined CID representation (for now, use merkle root as placeholder)
+	// In production, this would be the IPFS CID of the aggregated batch
+	consensusCID := merkleRootHex[:16] + "..."
+
 	// Store consensus result
 	key := fmt.Sprintf("consensus:epoch:%d:result", epochID)
 	result := map[string]interface{}{
 		"epoch_id":     epochID,
 		"cid":          consensusCID,
-		"merkle_root":  consensusMerkle,
+		"merkle_root":  merkleRootHex,
 		"validator_id": pc.sequencerID,
 		"timestamp":    time.Now().Unix(),
+		"projects":     len(aggregatedProjects),
 	}
 
 	data, _ := json.Marshal(result)
 	pc.redisClient.Set(pc.ctx, key, data, BatchValidityDuration)
 
 	// TODO: Trigger on-chain submission when contracts are ready
-	log.Infof("🎯 Ready to submit consensus batch for epoch %d to chain (CID: %s)", epochID, consensusCID)
+	log.Infof("🎯 Ready to submit consensus batch for epoch %d to chain (CID: %s, %d projects)",
+		epochID, consensusCID, len(aggregatedProjects))
 }
 
 // periodicConsensusCheck periodically checks consensus status for recent epochs
