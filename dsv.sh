@@ -47,6 +47,10 @@ show_usage() {
     echo "  status        - Show status of all services"
     echo "  monitor       - Monitor batch preparation status"
     echo "  pipeline      - Comprehensive pipeline monitoring (all stages)"
+    echo "  consensus     - Show consensus/aggregation status"
+    echo "  consensus-logs [N] - Show consensus-related logs (last N lines)"
+    echo "  aggregated-batch [epoch] - Show complete local aggregation view"
+    echo "  validator-details <id> [epoch] - Show specific validator's proposals"
     echo "  debug         - Launch with Redis port exposed for debugging"
     echo ""
     echo "Options:"
@@ -728,6 +732,363 @@ case $COMMAND in
             fi
         fi
         ;;
+    consensus)
+        # Show consensus/aggregation status
+        print_color "$BLUE" "🤝 Consensus/Aggregation Status"
+        print_color "$BLUE" "================================"
+
+        # Auto-detect container
+        CONTAINER="${2:-}"
+        if [ -z "$CONTAINER" ]; then
+            CONTAINER=$(docker ps --filter "name=sequencer" --format "{{.Names}}" | head -1)
+            if [ -z "$CONTAINER" ]; then
+                CONTAINER=$(docker ps --filter "name=listener" --format "{{.Names}}" | head -1)
+            fi
+            if [ -z "$CONTAINER" ]; then
+                print_color "$RED" "Error: No running sequencer containers found"
+                print_color "$YELLOW" "Start the sequencer first with: ./dsv.sh sequencer or ./dsv.sh distributed"
+                exit 1
+            fi
+        fi
+
+        docker exec $CONTAINER /bin/sh -c '
+            REDIS_HOST="${REDIS_HOST:-redis}"
+            REDIS_PORT="${REDIS_PORT:-6379}"
+
+            echo "📊 Batch Aggregation Status"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+            # Check for aggregation status keys
+            echo -e "\n🔄 Recent Aggregation Status:"
+            AGG_KEYS=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT KEYS "consensus:epoch:*:status" 2>/dev/null | head -10)
+            if [ ! -z "$AGG_KEYS" ]; then
+                echo "$AGG_KEYS" | while read key; do
+                    if [ ! -z "$key" ]; then
+                        EPOCH=$(echo "$key" | grep -oE "[0-9]+" | head -1)
+                        STATUS=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT GET "$key" 2>/dev/null)
+                        if [ ! -z "$STATUS" ] && command -v jq >/dev/null 2>&1; then
+                            VALIDATORS=$(echo "$STATUS" | jq -r ".ReceivedBatches" 2>/dev/null)
+                            PROJECTS=$(echo "$STATUS" | jq -r ".AggregatedProjects | length" 2>/dev/null)
+                            echo "  📦 Epoch $EPOCH: $VALIDATORS validators, $PROJECTS projects aggregated"
+                        else
+                            echo "  📦 Epoch $EPOCH: Status stored"
+                        fi
+                    fi
+                done
+            else
+                echo "  ⚫ No aggregation status found"
+            fi
+
+            # Check for consensus results
+            echo -e "\n🎯 Consensus Results:"
+            RESULT_KEYS=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT KEYS "consensus:epoch:*:result" 2>/dev/null | head -10)
+            if [ ! -z "$RESULT_KEYS" ]; then
+                echo "$RESULT_KEYS" | while read key; do
+                    if [ ! -z "$key" ]; then
+                        EPOCH=$(echo "$key" | grep -oE "[0-9]+" | head -1)
+                        RESULT=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT GET "$key" 2>/dev/null)
+                        if [ ! -z "$RESULT" ] && command -v jq >/dev/null 2>&1; then
+                            CID=$(echo "$RESULT" | jq -r ".cid" 2>/dev/null)
+                            MERKLE=$(echo "$RESULT" | jq -r ".merkle_root" 2>/dev/null | cut -c1-16)
+                            PROJECTS=$(echo "$RESULT" | jq -r ".projects" 2>/dev/null)
+                            echo "  ✅ Epoch $EPOCH: CID=$CID, Merkle=${MERKLE}..., Projects=$PROJECTS"
+                        else
+                            echo "  ✅ Epoch $EPOCH: Result ready"
+                        fi
+                    fi
+                done
+            else
+                echo "  ⚫ No consensus results yet"
+            fi
+
+            # Check validator batches
+            echo -e "\n📨 Validator Batches Received:"
+            VAL_KEYS=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT KEYS "validator:*:epoch:*:batch" 2>/dev/null | head -10)
+            if [ ! -z "$VAL_KEYS" ]; then
+                VALIDATOR_COUNT=$(echo "$VAL_KEYS" | cut -d: -f2 | sort -u | wc -l)
+                EPOCH_COUNT=$(echo "$VAL_KEYS" | grep -oE "epoch:[0-9]+" | cut -d: -f2 | sort -u | wc -l)
+                echo "  📊 $VALIDATOR_COUNT validators across $EPOCH_COUNT epochs"
+            else
+                echo "  ⚫ No validator batches received"
+            fi
+        '
+        ;;
+
+    consensus-logs)
+        # Show consensus-related logs
+        print_color "$BLUE" "📜 Consensus/Aggregation Logs"
+        LINES="${2:-100}"
+
+        if is_distributed_mode; then
+            # In distributed mode, check listener for consensus logs
+            print_color "$YELLOW" "Showing consensus activity from listener..."
+            $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml logs --tail="$LINES" listener | grep -E "consensus|aggregat|AGGREGATION|Consensus|validators|batch exchange" || echo "No consensus logs found"
+        else
+            # In unified mode
+            COMPOSE_FILE=$(detect_running_mode)
+            if [ ! -z "$COMPOSE_FILE" ]; then
+                print_color "$YELLOW" "Showing consensus activity..."
+                $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" logs --tail="$LINES" | grep -E "consensus|aggregat|AGGREGATION|Consensus|validators|batch exchange" || echo "No consensus logs found"
+            else
+                print_color "$YELLOW" "No services appear to be running"
+                exit 1
+            fi
+        fi
+        ;;
+
+    validator-details)
+        # Show details for a specific validator's proposals
+        VALIDATOR_ID="${2:-}"
+        EPOCH_ID="${3:-}"
+
+        if [ -z "$VALIDATOR_ID" ]; then
+            print_color "$RED" "Error: Validator ID required"
+            print_color "$YELLOW" "Usage: ./dsv.sh validator-details <validator_id> [epoch_id]"
+            exit 1
+        fi
+
+        print_color "$BLUE" "👤 Validator Details: $VALIDATOR_ID"
+        print_color "$BLUE" "===================================="
+
+        # Auto-detect container
+        CONTAINER=$(docker ps --filter "name=sequencer" --format "{{.Names}}" | head -1)
+        if [ -z "$CONTAINER" ]; then
+            CONTAINER=$(docker ps --filter "name=listener" --format "{{.Names}}" | head -1)
+        fi
+        if [ -z "$CONTAINER" ]; then
+            print_color "$RED" "Error: No running sequencer containers found"
+            exit 1
+        fi
+
+        docker exec $CONTAINER /bin/sh -c "
+            REDIS_HOST=\"\${REDIS_HOST:-redis}\"
+            REDIS_PORT=\"\${REDIS_PORT:-6379}\"
+            VALIDATOR_ID=\"$VALIDATOR_ID\"
+            EPOCH_ID=\"$EPOCH_ID\"
+
+            if [ -z \"\$EPOCH_ID\" ]; then
+                # Show all epochs for this validator
+                echo \"📦 All Batches from Validator \$VALIDATOR_ID:\"
+                echo \"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\"
+
+                BATCH_KEYS=\$(redis-cli -h \$REDIS_HOST -p \$REDIS_PORT KEYS \"validator:\$VALIDATOR_ID:batch:*\" 2>/dev/null | sort -rn)
+                if [ -z \"\$BATCH_KEYS\" ]; then
+                    echo \"⚫ No batches found for validator \$VALIDATOR_ID\"
+                    exit 0
+                fi
+
+                echo \"\$BATCH_KEYS\" | while read key; do
+                    if [ ! -z \"\$key\" ]; then
+                        EPOCH=\$(echo \"\$key\" | grep -oE '[0-9]+$')
+                        BATCH_DATA=\$(redis-cli -h \$REDIS_HOST -p \$REDIS_PORT GET \"\$key\" 2>/dev/null)
+
+                        if [ ! -z \"\$BATCH_DATA\" ] && command -v jq >/dev/null 2>&1; then
+                            echo -e \"\\n🔹 Epoch \$EPOCH:\"
+                            echo \"  IPFS CID: \$(echo \"\$BATCH_DATA\" | jq -r '.batch_ipfs_cid')\"
+                            echo \"  Merkle Root: \$(echo \"\$BATCH_DATA\" | jq -r '.merkle_root' | cut -c1-32)...\"
+                            echo \"  Projects: \$(echo \"\$BATCH_DATA\" | jq -r '.project_count')\"
+                            echo \"  Timestamp: \$(echo \"\$BATCH_DATA\" | jq -r '.timestamp')\"
+
+                            # Show project proposals
+                            VOTES=\$(echo \"\$BATCH_DATA\" | jq -r '.metadata.votes // empty' 2>/dev/null)
+                            if [ ! -z \"\$VOTES\" ] && [ \"\$VOTES\" != \"null\" ]; then
+                                echo \"  Project Proposals:\"
+                                echo \"\$VOTES\" | jq -r 'to_entries[] | \"    - \" + .key + \": \" + (.value.cid // .value // \"unknown\")' 2>/dev/null | head -10
+                            fi
+                        fi
+                    fi
+                done
+            else
+                # Show specific epoch for this validator
+                echo \"📦 Validator \$VALIDATOR_ID - Epoch \$EPOCH_ID Details:\"
+                echo \"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\"
+
+                BATCH_DATA=\$(redis-cli -h \$REDIS_HOST -p \$REDIS_PORT GET \"validator:\$VALIDATOR_ID:batch:\$EPOCH_ID\" 2>/dev/null)
+
+                if [ -z \"\$BATCH_DATA\" ]; then
+                    echo \"⚫ No batch found for validator \$VALIDATOR_ID in epoch \$EPOCH_ID\"
+                    exit 0
+                fi
+
+                if command -v jq >/dev/null 2>&1; then
+                    echo -e \"\\n📋 BATCH METADATA:\"
+                    echo \"  IPFS CID: \$(echo \"\$BATCH_DATA\" | jq -r '.batch_ipfs_cid')\"
+                    echo \"  Merkle Root: \$(echo \"\$BATCH_DATA\" | jq -r '.merkle_root')\"
+                    echo \"  Project Count: \$(echo \"\$BATCH_DATA\" | jq -r '.project_count')\"
+                    echo \"  Peer ID: \$(echo \"\$BATCH_DATA\" | jq -r '.peer_id')\"
+                    echo \"  Timestamp: \$(echo \"\$BATCH_DATA\" | jq -r '.timestamp')\"
+                    echo \"  Signature: \$(echo \"\$BATCH_DATA\" | jq -r '.signature' | cut -c1-32)...\"
+
+                    echo -e \"\\n🗳️ PROJECT PROPOSALS:\"
+                    VOTES=\$(echo \"\$BATCH_DATA\" | jq -r '.metadata.votes // empty' 2>/dev/null)
+                    if [ ! -z \"\$VOTES\" ] && [ \"\$VOTES\" != \"null\" ]; then
+                        echo \"\$VOTES\" | jq -r 'to_entries[] | \"  \" + .key + \": \" + (.value.cid // .value // \"unknown\")' 2>/dev/null
+                    else
+                        echo \"  ⚫ No project proposals in metadata\"
+                    fi
+
+                    # Check if this validator's proposals made it to consensus
+                    echo -e \"\\n✅ CONSENSUS COMPARISON:\"
+                    STATUS=\$(redis-cli -h \$REDIS_HOST -p \$REDIS_PORT GET \"consensus:epoch:\$EPOCH_ID:status\" 2>/dev/null)
+                    if [ ! -z \"\$STATUS\" ]; then
+                        AGGREGATED=\$(echo \"\$STATUS\" | jq -r '.AggregatedProjects // empty' 2>/dev/null)
+                        if [ ! -z \"\$AGGREGATED\" ] && [ \"\$AGGREGATED\" != \"null\" ]; then
+                            echo \"  Projects that reached consensus:\"
+                            if [ ! -z \"\$VOTES\" ] && [ \"\$VOTES\" != \"null\" ]; then
+                                echo \"\$VOTES\" | jq -r --argjson agg \"\$AGGREGATED\" '
+                                    to_entries[] |
+                                    . as \$vote |
+                                    if \$agg[.key] == (.value.cid // .value) then
+                                        \"    ✅ \" + .key + \" - ACCEPTED\"
+                                    else
+                                        \"    ❌ \" + .key + \" - Different CID won\"
+                                    end' 2>/dev/null | head -20
+                            fi
+                        fi
+                    else
+                        echo \"  ⚫ No consensus data available for comparison\"
+                    fi
+                else
+                    echo \"Batch data exists but cannot parse (jq not available)\"
+                fi
+            fi
+        "
+        ;;
+
+    aggregated-batch)
+        # Show details of the most recent aggregated batch
+        EPOCH_ID="${2:-}"
+        print_color "$BLUE" "📊 Complete Local Aggregation View"
+        print_color "$BLUE" "==================================="
+
+        # Auto-detect container
+        CONTAINER=$(docker ps --filter "name=sequencer" --format "{{.Names}}" | head -1)
+        if [ -z "$CONTAINER" ]; then
+            CONTAINER=$(docker ps --filter "name=listener" --format "{{.Names}}" | head -1)
+        fi
+        if [ -z "$CONTAINER" ]; then
+            print_color "$RED" "Error: No running sequencer containers found"
+            exit 1
+        fi
+
+        docker exec $CONTAINER /bin/sh -c "
+            REDIS_HOST=\"\${REDIS_HOST:-redis}\"
+            REDIS_PORT=\"\${REDIS_PORT:-6379}\"
+            EPOCH_ID=\"$EPOCH_ID\"
+
+            if [ -z \"\$EPOCH_ID\" ]; then
+                # Find the most recent aggregated epoch
+                LATEST_KEY=\$(redis-cli -h \$REDIS_HOST -p \$REDIS_PORT KEYS 'consensus:epoch:*:status' 2>/dev/null | sort -rn | head -1)
+                if [ ! -z \"\$LATEST_KEY\" ]; then
+                    EPOCH_ID=\$(echo \"\$LATEST_KEY\" | grep -oE '[0-9]+' | head -1)
+                fi
+            fi
+
+            if [ -z \"\$EPOCH_ID\" ]; then
+                echo '⚫ No aggregated batches found'
+                exit 0
+            fi
+
+            echo \"📦 Epoch \$EPOCH_ID - Complete Aggregation View\"
+            echo \"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\"
+
+            # Get all validator batches for this epoch
+            echo -e \"\\n🔍 INDIVIDUAL VALIDATOR BATCHES:\"
+            echo \"─────────────────────────────────\"
+            VALIDATOR_KEYS=\$(redis-cli -h \$REDIS_HOST -p \$REDIS_PORT KEYS \"validator:*:batch:\$EPOCH_ID\" 2>/dev/null)
+            if [ ! -z \"\$VALIDATOR_KEYS\" ]; then
+                echo \"\$VALIDATOR_KEYS\" | while read key; do
+                    if [ ! -z \"\$key\" ]; then
+                        VALIDATOR=\$(echo \"\$key\" | cut -d: -f2)
+                        BATCH_DATA=\$(redis-cli -h \$REDIS_HOST -p \$REDIS_PORT GET \"\$key\" 2>/dev/null)
+                        if [ ! -z \"\$BATCH_DATA\" ] && command -v jq >/dev/null 2>&1; then
+                            IPFS_CID=\$(echo \"\$BATCH_DATA\" | jq -r '.batch_ipfs_cid' 2>/dev/null)
+                            MERKLE=\$(echo \"\$BATCH_DATA\" | jq -r '.merkle_root' 2>/dev/null | cut -c1-12)
+                            PROJECT_COUNT=\$(echo \"\$BATCH_DATA\" | jq -r '.project_count' 2>/dev/null)
+                            TIMESTAMP=\$(echo \"\$BATCH_DATA\" | jq -r '.timestamp' 2>/dev/null)
+                            PEER_ID=\$(echo \"\$BATCH_DATA\" | jq -r '.peer_id' 2>/dev/null | cut -c1-8)
+
+                            echo \"\\n📨 Validator: \$VALIDATOR\"
+                            echo \"   IPFS CID: \$IPFS_CID\"
+                            echo \"   Merkle: \${MERKLE}...\"
+                            echo \"   Projects: \$PROJECT_COUNT\"
+                            echo \"   PeerID: \${PEER_ID}...\"
+                            echo \"   Timestamp: \$TIMESTAMP\"
+
+                            # Show what projects this validator voted for
+                            VOTES=\$(echo \"\$BATCH_DATA\" | jq -r '.metadata.votes // empty' 2>/dev/null)
+                            if [ ! -z \"\$VOTES\" ] && [ \"\$VOTES\" != \"null\" ]; then
+                                echo \"   Project Proposals:\"
+                                echo \"\$VOTES\" | jq -r 'to_entries | .[:5][] | \"     - \" + .key + \": \" + (.value.cid // .value)[0:12] + \"...\"' 2>/dev/null
+                            fi
+                        else
+                            echo \"  Validator \$VALIDATOR: Data stored (parse failed)\"
+                        fi
+                    fi
+                done
+            else
+                echo \"  ⚫ No validator batches received for this epoch\"
+            fi
+
+            # Get aggregation status
+            echo -e \"\\n📊 LOCAL AGGREGATION RESULTS:\"
+            echo \"─────────────────────────────\"
+            STATUS=\$(redis-cli -h \$REDIS_HOST -p \$REDIS_PORT GET \"consensus:epoch:\$EPOCH_ID:status\" 2>/dev/null)
+            if [ ! -z \"\$STATUS\" ] && command -v jq >/dev/null 2>&1; then
+                echo \"  Total Validators Participated: \$(echo \"\$STATUS\" | jq -r '.ReceivedBatches')\"
+                echo \"  Projects with Consensus: \$(echo \"\$STATUS\" | jq -r '.AggregatedProjects | length')\"
+                echo \"  Last Updated: \$(echo \"\$STATUS\" | jq -r '.UpdatedAt')\"
+
+                echo -e \"\\n🗳️ DETAILED VOTE DISTRIBUTION:\"
+                echo \"─────────────────────────────\"
+                # Show vote details per project
+                echo \"\$STATUS\" | jq -r '
+                    .ProjectVotes | to_entries[:10][] |
+                    \"\\n  Project: \" + .key +
+                    \"\\n\" + (.value | to_entries |
+                    map(\"    CID \" + .key[0:12] + \"...: \" + (.value | tostring) + \" validator(s)\") |
+                    join(\"\\n\"))' 2>/dev/null
+
+                echo -e \"\\n✅ CONSENSUS WINNERS:\"
+                echo \"─────────────────────\"
+                echo \"\$STATUS\" | jq -r '.AggregatedProjects | to_entries[:10][] | \"  \" + .key + \": \" + .value[0:16] + \"...\"' 2>/dev/null
+
+                echo -e \"\\n👥 VALIDATOR CONTRIBUTIONS:\"
+                echo \"───────────────────────────\"
+                echo \"\$STATUS\" | jq -r '
+                    .ValidatorContributions | to_entries[] |
+                    \"  \" + .key + \": \" + (.value | length | tostring) + \" projects contributed\"' 2>/dev/null
+            else
+                echo '  Unable to parse aggregation status (jq not available or no data)'
+            fi
+
+            # Get consensus result
+            RESULT=\$(redis-cli -h \$REDIS_HOST -p \$REDIS_PORT GET \"consensus:epoch:\$EPOCH_ID:result\" 2>/dev/null)
+            if [ ! -z \"\$RESULT\" ] && command -v jq >/dev/null 2>&1; then
+                echo -e \"\\n🎯 LOCAL CONSENSUS DETERMINATION:\"
+                echo \"──────────────────────────────────\"
+                echo \"  Aggregated by: \$(echo \"\$RESULT\" | jq -r '.validator_id')\"
+                echo \"  Consensus Merkle Root: \$(echo \"\$RESULT\" | jq -r '.merkle_root' | cut -c1-32)...\"
+                echo \"  Projects in Consensus: \$(echo \"\$RESULT\" | jq -r '.projects')\"
+                echo \"  Determined at: \$(echo \"\$RESULT\" | jq -r '.timestamp')\"
+            fi
+
+            # Check which validators are in the epoch set
+            echo -e \"\\n📋 EPOCH VALIDATOR SET:\"
+            echo \"───────────────────────\"
+            VALIDATORS=\$(redis-cli -h \$REDIS_HOST -p \$REDIS_PORT SMEMBERS \"epoch:\$EPOCH_ID:validators\" 2>/dev/null)
+            if [ ! -z \"\$VALIDATORS\" ]; then
+                echo \"\$VALIDATORS\" | tr ' ' '\\n' | while read validator; do
+                    if [ ! -z \"\$validator\" ]; then
+                        echo \"  ✓ \$validator\"
+                    fi
+                done
+            else
+                echo \"  ⚫ No validator set tracked\"
+            fi
+        "
+        ;;
+
     debug)
         launch_debug
         ;;
