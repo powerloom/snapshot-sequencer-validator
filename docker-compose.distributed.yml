@@ -3,11 +3,13 @@ version: '3.8'
 services:
   redis:
     image: redis:8-alpine
+    environment:
+      - REDIS_PORT=${REDIS_PORT:-6379}
     volumes:
       - redis-data:/data
-    command: redis-server --appendonly yes --maxmemory 2gb
+    command: sh -c 'redis-server --port $${REDIS_PORT} --appendonly yes --maxmemory 2gb'
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "sh", "-c", "redis-cli -p $${REDIS_PORT} ping"]
       interval: 5s
       timeout: 3s
       retries: 5
