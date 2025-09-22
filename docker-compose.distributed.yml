@@ -24,7 +24,7 @@ services:
       - SEQUENCER_ID=listener-${SEQUENCER_ID:-1}
       - P2P_PORT=${P2P_PORT:-9001}
       - REDIS_HOST=redis
-      - REDIS_PORT=6379
+      - REDIS_PORT=${REDIS_PORT:-6379}
       - REDIS_DB=${REDIS_DB:-0}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - BOOTSTRAP_MULTIADDR=${BOOTSTRAP_MULTIADDR}
@@ -68,7 +68,7 @@ services:
     environment:
       - SEQUENCER_ID=dequeuer-${SEQUENCER_ID:-1}
       - REDIS_HOST=redis
-      - REDIS_PORT=6379
+      - REDIS_PORT=${REDIS_PORT:-6379}
       - REDIS_DB=${REDIS_DB:-0}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - DEBUG_MODE=${DEBUG_MODE:-false}
@@ -111,7 +111,7 @@ services:
     environment:
       - SEQUENCER_ID=event-monitor-${SEQUENCER_ID:-1}
       - REDIS_HOST=redis
-      - REDIS_PORT=6379
+      - REDIS_PORT=${REDIS_PORT:-6379}
       - REDIS_DB=${REDIS_DB:-0}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - DEBUG_MODE=${DEBUG_MODE:-false}
@@ -156,7 +156,7 @@ services:
     environment:
       - SEQUENCER_ID=finalizer-${SEQUENCER_ID:-1}
       - REDIS_HOST=redis
-      - REDIS_PORT=6379
+      - REDIS_PORT=${REDIS_PORT:-6379}
       - REDIS_DB=${REDIS_DB:-0}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - DEBUG_MODE=${DEBUG_MODE:-false}
@@ -198,7 +198,7 @@ services:
       - SEQUENCER_ID=consensus-${SEQUENCER_ID:-1}
       - P2P_PORT=9002  # Different port for consensus P2P
       - REDIS_HOST=redis
-      - REDIS_PORT=6379
+      - REDIS_PORT=${REDIS_PORT:-6379}
       - REDIS_DB=${REDIS_DB:-0}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - DEBUG_MODE=${DEBUG_MODE:-false}
