@@ -37,7 +37,7 @@ show_usage() {
     echo "  full          - Launch full stack with monitoring"
     echo "  custom        - Launch with custom profile"
     echo "  stop          - Stop all services"
-    echo "  clean         - Stop and remove all containers/volumes"
+    echo "  clean [-y]    - Stop and remove all containers/volumes (use -y to skip prompt)"
     echo "  logs          - Show logs for all services"
     echo "  listener-logs [N] - Show P2P listener logs (last N lines if specified)"
     echo "  dqr-logs [N]  - Show dequeuer worker logs (last N lines if specified)"
@@ -62,6 +62,8 @@ show_usage() {
     echo "Examples:"
     echo "  $0 sequencer                  # Run all-in-one sequencer"
     echo "  $0 distributed --debug        # Run distributed with debug"
+    echo "  $0 clean -y                   # Clean everything without prompt"
+    echo "  $0 validator-details validator1 123  # Show validator1's proposals for epoch 123"
     echo ""
     echo "Note: All commands automatically build Docker images before starting."
     echo "      No need to run build scripts separately."
@@ -253,26 +255,33 @@ stop_services() {
 
 # Function to clean everything
 clean_all() {
-    print_color "$RED" "WARNING: This will remove all containers and volumes!"
-    read -p "Are you sure? (y/N) " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        # Check and clean distributed services
-        if $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml ps --quiet 2>/dev/null | grep -q .; then
-            print_color "$BLUE" "Cleaning distributed services..."
-            $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml down -v
+    SKIP_PROMPT="$1"
+
+    if [ "$SKIP_PROMPT" != "-y" ] && [ "$SKIP_PROMPT" != "--yes" ]; then
+        print_color "$RED" "WARNING: This will remove all containers and volumes!"
+        read -p "Are you sure? (y/N) " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            print_color "$YELLOW" "Cancelled"
+            return
         fi
-        
-        # Check and clean regular services
-        if $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" ps --quiet 2>/dev/null | grep -q .; then
-            print_color "$BLUE" "Cleaning sequencer services..."
-            $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" down -v
-        fi
-        
-        print_color "$GREEN" "✓ Cleaned all containers and volumes"
     else
-        print_color "$YELLOW" "Cancelled"
+        print_color "$YELLOW" "Cleaning all containers and volumes (auto-confirmed)..."
     fi
+
+    # Check and clean distributed services
+    if $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml ps --quiet 2>/dev/null | grep -q .; then
+        print_color "$BLUE" "Cleaning distributed services..."
+        $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml down -v
+    fi
+
+    # Check and clean regular services
+    if $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" ps --quiet 2>/dev/null | grep -q .; then
+        print_color "$BLUE" "Cleaning sequencer services..."
+        $DOCKER_COMPOSE_CMD -f "$COMPOSE_FILE" down -v
+    fi
+
+    print_color "$GREEN" "✓ Cleaned all containers and volumes"
 }
 
 # Function to show logs
@@ -553,7 +562,7 @@ case $COMMAND in
         stop_services
         ;;
     clean)
-        clean_all
+        clean_all "$2"
         ;;
     logs)
         show_logs "$EXTRA_ARGS"
