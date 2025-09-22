@@ -562,8 +562,7 @@ case $COMMAND in
         stop_services
         ;;
     clean)
-        shift  # Remove 'clean' from arguments
-        clean_all "$@"  # Pass all remaining arguments
+        clean_all "$2"  # Pass the second argument (-y if provided)
         ;;
     logs)
         show_logs "$EXTRA_ARGS"
