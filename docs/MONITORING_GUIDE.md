@@ -10,11 +10,14 @@ The system now supports both P2PSnapshotSubmission batch format (multiple submis
 
 ### Basic Monitoring
 ```bash
-# Simple batch status monitoring
+# Check service status
+./dsv.sh status
+
+# Monitor pipeline
 ./dsv.sh monitor
 
-# Comprehensive pipeline monitoring (recommended)
-./dsv.sh pipeline
+# View all logs
+./dsv.sh logs
 ```
 
 ## Pipeline Stages
@@ -60,30 +63,21 @@ The monitoring system tracks 6 distinct stages:
 
 | Command | Description |
 |---------|-------------|
-| `monitor` | Basic batch preparation status |
-| `pipeline` | Comprehensive pipeline monitoring |
+| `monitor` | Basic pipeline status |
 | `status` | Service status overview |
-| **Consensus Monitoring (NEW)** | |
-| `consensus` | Comprehensive consensus/aggregation status |
-| `consensus-logs [N]` | Filtered consensus-related logs |
-| `aggregated-batch [epoch]` | Complete local aggregation view |
-| `validator-details <id> [epoch]` | Specific validator's proposals |
-| **Individual Logs** | |
-| `listener-logs [N]` | P2P listener activity |
-| `dqr-logs [N]` | Submission processing logs |
-| `finalizer-logs [N]` | Batch finalization logs |
-| `event-monitor-logs [N]` | Epoch release events |
+| `logs [N]` | All service logs |
+| **Component Logs** | |
+| `p2p-logs [N]` | P2P Gateway activity |
+| `aggregator-logs [N]` | Consensus/aggregation logs |
+| `finalizer-logs [N]` | Batch creation logs |
+| `dequeuer-logs [N]` | Submission processing logs |
+| `event-logs [N]` | Epoch release events |
 | `redis-logs [N]` | Redis operation logs |
-| **Combined Logs** | |
-| `collection-logs [N]` | Dequeuer + Event Monitor logs |
-| `finalization-logs [N]` | Event Monitor + Finalizer logs |
-| `pipeline-logs [N]` | All three: Dequeuer + Event Monitor + Finalizer |
 
 All log commands support optional line count (default: 100):
 ```bash
-./dsv.sh collection-logs 200    # Last 200 lines
-./dsv.sh pipeline-logs          # Default 100 lines
-./dsv.sh consensus-logs 50      # Last 50 consensus logs
+./dsv.sh p2p-logs 200       # Last 200 lines
+./dsv.sh aggregator-logs    # Default 100 lines
 ```
 
 ### Direct Script Usage

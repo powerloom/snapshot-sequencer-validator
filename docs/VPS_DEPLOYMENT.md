@@ -239,38 +239,20 @@ The `dsv.sh` script is the primary tool for managing your sequencer deployment.
 #### Available Commands
 
 ```bash
-# Start unified sequencer (all components in one container)
-./dsv.sh sequencer
+# Start production separated architecture
+./dsv.sh start
 
-# Start sequencer with custom .env settings
-./dsv.sh sequencer-custom
-
-# Start separated mode (RECOMMENDED - separate binaries with clean architecture)
-./dsv.sh separated
-
-# Start separated mode with custom .env settings
-./dsv.sh separated-custom
-
-# Legacy distributed mode (DEPRECATED - has port conflicts)
-# ./dsv.sh distributed  # DO NOT USE - all containers try to bind port 9001
-
-# Start minimal setup (redis + unified)
-./dsv.sh minimal
-
-# Start full stack with monitoring
-./dsv.sh full
-
-# Start with custom profile
-./dsv.sh custom
-
-# Stop all running services
+# Stop all services
 ./dsv.sh stop
 
-# Clean all containers and volumes (with confirmation)
-./dsv.sh clean
+# Restart services
+./dsv.sh restart
 
-# Force clean without confirmation (supports -y or --yes)
-./dsv.sh clean -y
+# Show service status
+./dsv.sh status
+
+# Clean all containers and volumes
+./dsv.sh clean
 
 # Monitor batch preparation status
 ./dsv.sh monitor
