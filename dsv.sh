@@ -21,12 +21,12 @@ print_color() {
 }
 
 # Detect docker compose command
-if command -v "docker compose" &> /dev/null; then
+if docker compose version &> /dev/null; then
     DOCKER_COMPOSE_CMD="docker compose"
 elif command -v docker-compose &> /dev/null; then
     DOCKER_COMPOSE_CMD="docker-compose"
 else
-    print_color "$RED" "Error: docker compose not found"
+    print_color "$RED" "Error: Neither 'docker compose' nor 'docker-compose' found"
     exit 1
 fi
 

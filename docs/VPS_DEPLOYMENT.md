@@ -112,14 +112,11 @@ DATA_MARKET_ADDRESSES=0x0C2E22fe7526fAeF28E7A58c84f8723dEFcE200c
 
 ### 3. Launch Sequencer
 ```bash
-# Quick start with default settings (development)
-./dsv.sh unified
+# Start production services
+./dsv.sh start
 
-# RECOMMENDED: Separated mode for production
-./dsv.sh separated
-
-# Full validator mode with comprehensive consensus
-./dsv.sh validator
+# For development/testing only
+./dsv.sh dev
 ```
 
 #### Launch Options
