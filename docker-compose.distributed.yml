@@ -38,7 +38,7 @@ services:
       - ENABLE_LISTENER=true
       - ENABLE_DEQUEUER=false
       - ENABLE_FINALIZER=false
-      - ENABLE_CONSENSUS=false
+      - ENABLE_CONSENSUS=${ENABLE_BATCH_AGGREGATION:-false}
       - ENABLE_EVENT_MONITOR=false
       # Protocol/Market config
       - PROTOCOL_STATE_CONTRACT=${PROTOCOL_STATE_CONTRACT}
@@ -78,7 +78,7 @@ services:
       - ENABLE_LISTENER=false
       - ENABLE_DEQUEUER=true
       - ENABLE_FINALIZER=false
-      - ENABLE_CONSENSUS=false
+      - ENABLE_CONSENSUS=${ENABLE_BATCH_AGGREGATION:-false}
       - ENABLE_EVENT_MONITOR=false
       # Dequeuer specific
       - DEQUEUER_WORKERS=${DEQUEUER_WORKERS:-5}
@@ -121,7 +121,7 @@ services:
       - ENABLE_LISTENER=false
       - ENABLE_DEQUEUER=false
       - ENABLE_FINALIZER=false
-      - ENABLE_CONSENSUS=false
+      - ENABLE_CONSENSUS=${ENABLE_BATCH_AGGREGATION:-false}
       - ENABLE_EVENT_MONITOR=true
       # RPC Configuration
       - POWERLOOM_RPC_NODES=${POWERLOOM_RPC_NODES}
@@ -166,7 +166,7 @@ services:
       - ENABLE_LISTENER=false
       - ENABLE_DEQUEUER=false
       - ENABLE_FINALIZER=true
-      - ENABLE_CONSENSUS=false
+      - ENABLE_CONSENSUS=${ENABLE_BATCH_AGGREGATION:-false}
       - ENABLE_EVENT_MONITOR=false
       # Storage configuration
       - STORAGE_PROVIDER=${STORAGE_PROVIDER:-ipfs}
@@ -208,7 +208,7 @@ services:
       - ENABLE_LISTENER=false
       - ENABLE_DEQUEUER=false
       - ENABLE_FINALIZER=false
-      - ENABLE_CONSENSUS=true
+      - ENABLE_CONSENSUS=${ENABLE_BATCH_AGGREGATION:-true}
       - ENABLE_EVENT_MONITOR=false
       # Consensus specific
       - PRIVATE_KEY=${CONSENSUS_PRIVATE_KEY:-}
