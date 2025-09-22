@@ -120,19 +120,19 @@ REDIS_PASSWORD=          # Leave empty if no auth
 ENABLE_LISTENER=true      # P2P gossipsub listener
 ENABLE_DEQUEUER=true      # Redis queue processor
 ENABLE_FINALIZER=false    # Batch finalizer
-ENABLE_CONSENSUS=false    # Consensus voting
+ENABLE_BATCH_AGGREGATION=false    # Batch aggregation
 ENABLE_EVENT_MONITOR=false # EpochReleased event monitoring
 
-# Consensus-specific toggles
-VOTING_THRESHOLD=0.67    # Percentage of validators required for consensus
-MIN_VALIDATORS=3         # Minimum number of validators for valid consensus
-CONSENSUS_TIMEOUT=300    # Timeout for consensus voting in seconds
+# Batch Aggregation Toggles
+VOTING_THRESHOLD=0.67    # Percentage of validators required for batch aggregation
+MIN_VALIDATORS=3         # Minimum number of validators for valid batch aggregation
+BATCH_AGGREGATION_TIMEOUT=300    # Timeout for batch aggregation voting in seconds
 ```
 
-#### Consensus Configuration
+#### Batch Aggregation Configuration
 - `VOTING_THRESHOLD`: Controls the percentage of validators needed to approve a batch (default: 0.67 or 67%)
-- `MIN_VALIDATORS`: Minimum number of validators required to start consensus
-- `CONSENSUS_TIMEOUT`: Maximum time allowed for consensus voting before timeout
+- `MIN_VALIDATORS`: Minimum number of validators required to start batch aggregation
+- `BATCH_AGGREGATION_TIMEOUT`: Maximum time allowed for batch aggregation voting before timeout
 
 #### RPC Configuration
 ```bash
@@ -584,7 +584,7 @@ cat > .env << EOF
 ENABLE_LISTENER=true
 ENABLE_DEQUEUER=true
 ENABLE_FINALIZER=false
-ENABLE_CONSENSUS=false
+ENABLE_BATCH_AGGREGATION=false
 ENABLE_EVENT_MONITOR=false
 BOOTSTRAP_MULTIADDR=/ip4/159.203.190.22/tcp/9100/p2p/...
 PRIVATE_KEY=<your-key>
@@ -636,7 +636,7 @@ Configure exactly what you need:
 ENABLE_LISTENER=true
 ENABLE_DEQUEUER=false
 ENABLE_FINALIZER=false
-ENABLE_CONSENSUS=false
+ENABLE_BATCH_AGGREGATION=false
 ENABLE_EVENT_MONITOR=false
 
 ./dsv.sh sequencer-custom

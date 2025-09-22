@@ -178,7 +178,7 @@ func LoadConfig() error {
 		EnableListener:        getBoolEnv("ENABLE_LISTENER", true),
 		EnableDequeuer:        getBoolEnv("ENABLE_DEQUEUER", true),
 		EnableFinalizer:       getBoolEnv("ENABLE_FINALIZER", true),
-		EnableBatchAggregation: getBoolEnv("ENABLE_BATCH_AGGREGATION", getBoolEnv("ENABLE_CONSENSUS", true)), // Fallback to old name for compatibility
+		EnableBatchAggregation: getBoolEnv("ENABLE_BATCH_AGGREGATION", true),
 		EnableEventMonitor:    getBoolEnv("ENABLE_EVENT_MONITOR", false),
 
 		// Finalizer Configuration
