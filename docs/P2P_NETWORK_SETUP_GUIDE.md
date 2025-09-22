@@ -134,8 +134,8 @@ Use `sudo` if needed.
 
 ```bash
 docker compose build --no-cache
-./start.sh
-./stop.sh
+./dsv.sh
+./dsv.sh stop
 ```
 
 Expected behavior:
@@ -182,13 +182,13 @@ LOG_LEVEL=info
 ./build-snapshot-sequencer.sh
 
 # Launch with custom settings
-./launch.sh sequencer-custom
+./dsv.sh sequencer-custom
 
 # Check logs
 docker logs powerloom-sequencer-validator-sequencer-001
 
 # Stop services
-./launch.sh stop
+./dsv.sh stop
 ```
 
 #### Monitoring
@@ -235,8 +235,8 @@ Use `sudo` if needed.
 
 ```bash
 docker compose build --no-cache
-./start.sh
-./stop.sh
+./dsv.sh
+./dsv.sh stop
 ```
 
 Expected behavior:

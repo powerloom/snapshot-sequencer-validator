@@ -312,14 +312,14 @@ The `dsv.sh` script is the primary tool for managing your sequencer deployment.
 
 **unified**: Launches single container with all components enabled based on .env toggles
 ```bash
-./launch.sh unified
+./dsv.sh unified
 # Uses: docker-compose.snapshot-sequencer.yml
 # Service: sequencer-all
 ```
 
 **distributed**: Production mode with separate containers for each component
 ```bash
-./launch.sh distributed
+./dsv.sh distributed
 # Uses: docker-compose.distributed.yml
 # Services: listener, dequeuer, event-monitor, finalizer, consensus
 # Components scale based on REPLICAS variables
@@ -327,14 +327,14 @@ The `dsv.sh` script is the primary tool for managing your sequencer deployment.
 
 **distributed-debug**: Like distributed but with Redis port exposed
 ```bash
-./launch.sh distributed-debug
+./dsv.sh distributed-debug
 # Uses: docker-compose.distributed.yml + docker-compose.debug.yml
 # Exposes Redis on port 6379 for external monitoring
 ```
 
 **sequencer-custom**: Uses your .env settings exactly as configured
 ```bash
-./launch.sh sequencer-custom
+./dsv.sh sequencer-custom
 # Uses: docker-compose.snapshot-sequencer.yml
 # Service: sequencer-custom
 # Reads all settings from .env
@@ -342,7 +342,7 @@ The `dsv.sh` script is the primary tool for managing your sequencer deployment.
 
 **monitor**: Checks batch preparation status
 ```bash
-./launch.sh monitor [container-name]
+./dsv.sh monitor [container-name]
 # Executes monitoring script inside specified or auto-detected container
 # Shows: submission windows, ready batches, queue depth, statistics
 ```
@@ -368,7 +368,7 @@ For running the consensus test system:
 
 ```bash
 # Start consensus test
-./start.sh
+./dsv.sh
 
 # Uses: docker-compose.yml
 # Launches: sequencer-consensus-test binary
@@ -383,10 +383,10 @@ Monitor batch preparation and submission windows:
 
 ```bash
 # Quick monitoring via launch.sh
-./launch.sh monitor
+./dsv.sh monitor
 
 # Comprehensive pipeline monitoring
-./launch.sh pipeline
+./dsv.sh pipeline
 ```
 
 The monitor now correctly:
@@ -474,47 +474,47 @@ New dedicated log commands for each component support optional line count for in
 
 ```bash
 # View P2P listener logs (default: follow)
-./launch.sh listener-logs
+./dsv.sh listener-logs
 
 # View last 50 lines of listener logs and continue following
-./launch.sh listener-logs 50
+./dsv.sh listener-logs 50
 
 # View dequeuer worker logs (now with enhanced details)
-./launch.sh dqr-logs
+./dsv.sh dqr-logs
 
 # View last 100 lines of dequeuer logs and continue following
-./launch.sh dqr-logs 100
+./dsv.sh dqr-logs 100
 
 # View finalizer logs
-./launch.sh finalizer-logs
+./dsv.sh finalizer-logs
 
 # View last 75 lines of finalizer logs and continue following
-./launch.sh finalizer-logs 75
+./dsv.sh finalizer-logs 75
 
 # View event monitor logs
-./launch.sh event-monitor-logs
+./dsv.sh event-monitor-logs
 
 # View last 25 lines of event monitor logs and continue following
-./launch.sh event-monitor-logs 25
+./dsv.sh event-monitor-logs 25
 
 # View Redis logs
-./launch.sh redis-logs
+./dsv.sh redis-logs
 
 # View last 50 lines of Redis logs and continue following
-./launch.sh redis-logs 50
+./dsv.sh redis-logs 50
 
 # View all logs
-./launch.sh logs
+./dsv.sh logs
 
 # Combined pipeline logs for debugging (NEW)
-./launch.sh collection-logs      # Dequeuer + Event Monitor together
-./launch.sh collection-logs 200  # Show last 200 lines
+./dsv.sh collection-logs      # Dequeuer + Event Monitor together
+./dsv.sh collection-logs 200  # Show last 200 lines
 
-./launch.sh finalization-logs    # Event Monitor + Finalizer together
-./launch.sh finalization-logs 50 # Show last 50 lines
+./dsv.sh finalization-logs    # Event Monitor + Finalizer together
+./dsv.sh finalization-logs 50 # Show last 50 lines
 
-./launch.sh pipeline-logs        # All three: Dequeuer + Event Monitor + Finalizer
-./launch.sh pipeline-logs 150    # Show last 150 lines
+./dsv.sh pipeline-logs        # All three: Dequeuer + Event Monitor + Finalizer
+./dsv.sh pipeline-logs 150    # Show last 150 lines
 ```
 
 **Log Command Usage Notes:**
@@ -591,7 +591,7 @@ PRIVATE_KEY=<your-key>
 EOF
 
 # Launch
-./launch.sh unified
+./dsv.sh unified
 ```
 
 ### Distributed Mode (Production)
@@ -617,7 +617,7 @@ DATA_MARKET_ADDRESSES=0x0C2E22fe7526fAeF28E7A58c84f8723dEFcE200c
 EOF
 
 # Launch
-./launch.sh distributed
+./dsv.sh distributed
 ```
 
 **Components in distributed mode:**
@@ -639,7 +639,7 @@ ENABLE_FINALIZER=false
 ENABLE_CONSENSUS=false
 ENABLE_EVENT_MONITOR=false
 
-./launch.sh sequencer-custom
+./dsv.sh sequencer-custom
 ```
 
 ## Multi-VPS Setup
@@ -655,7 +655,7 @@ ENABLE_DEQUEUER=false
 # No BOOTSTRAP_MULTIADDR (it IS the bootstrap)
 
 # Launch
-./launch.sh sequencer-custom
+./dsv.sh sequencer-custom
 
 # Get multiaddr for other nodes
 docker logs powerloom-sequencer-validator-sequencer-custom-1 | grep "P2P host started"
@@ -679,7 +679,7 @@ ENABLE_CONSENSUS=true
 ENABLE_EVENT_MONITOR=true
 
 # Launch
-./launch.sh distributed
+./dsv.sh distributed
 ```
 
 ### VPS 3: Validator Node 2
@@ -691,7 +691,7 @@ PRIVATE_KEY=<unique-key-for-validator-2>
 PUBLIC_IP=<vps3-public-ip>
 
 # Launch
-./launch.sh distributed
+./dsv.sh distributed
 ```
 
 ### Verification
@@ -716,9 +716,9 @@ docker exec <container-name> curl -s http://localhost:8001/peers
 # Pull latest code
 git pull
 
-# Rebuild image (launch.sh does this automatically)
-./launch.sh stop
-./launch.sh distributed
+# Rebuild image (dsv.sh does this automatically)
+./dsv.sh stop
+./dsv.sh distributed
 
 # Verify ABI is included
 docker exec <container> ls -la /app/abi/
@@ -734,12 +734,12 @@ docker exec <container> ls -la /app/abi/
 echo "SUBMISSION_WINDOW_DURATION=20" >> .env
 
 # Rebuild containers to pick up env changes
-./launch.sh stop
+./dsv.sh stop
 docker compose -f docker-compose.distributed.yml build --no-cache
-./launch.sh distributed
+./dsv.sh distributed
 
 # Verify in event monitor logs
-./launch.sh event-monitor-logs | grep "window opened"
+./dsv.sh event-monitor-logs | grep "window opened"
 ```
 
 **Note**: The SUBMISSION_WINDOW_DURATION env var overrides any contract-specified duration for testing flexibility
@@ -757,8 +757,8 @@ echo "REDIS_HOST=redis" >> .env
 echo "REDIS_HOST=localhost" >> .env
 
 # Restart services
-./launch.sh stop
-./launch.sh unified
+./dsv.sh stop
+./dsv.sh unified
 ```
 
 #### JSON Array Parsing Errors
@@ -787,7 +787,7 @@ cat .env | grep SUBMISSION_FORMAT_STRATEGY
 SUBMISSION_FORMAT_STRATEGY=single  # or 'batch'
 
 # Debug submission processing logs
-./launch.sh dqr-logs | grep -E 'Processing|P2PSnapshotSubmission|epochId'
+./dsv.sh dqr-logs | grep -E 'Processing|P2PSnapshotSubmission|epochId'
 
 # Check for field name conversions (snake_case → camelCase)
 grep -R 'epoch_id' .  # Should return no results if converted
@@ -932,7 +932,7 @@ screen -S sequencer
    # Recommended tuning:
    # - Increase FINALIZER_WORKERS for high-throughput networks
    # - Adjust FINALIZATION_BATCH_SIZE based on processing power
-   # - Monitor worker health with ./launch.sh pipeline
+   # - Monitor worker health with ./dsv.sh pipeline
    ```
 
 ### Support and Resources

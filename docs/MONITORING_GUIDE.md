@@ -11,10 +11,10 @@ The system now supports both P2PSnapshotSubmission batch format (multiple submis
 ### Basic Monitoring
 ```bash
 # Simple batch status monitoring
-./launch.sh monitor
+./dsv.sh monitor
 
 # Comprehensive pipeline monitoring (recommended)
-./launch.sh pipeline
+./dsv.sh pipeline
 ```
 
 ## Pipeline Stages
@@ -388,7 +388,7 @@ Monitor queue depths to determine scaling needs:
 ### No Active Windows
 ```bash
 # Check event monitor is running
-./launch.sh event-monitor-logs
+./dsv.sh event-monitor-logs
 
 # Verify EVENT_START_BLOCK setting
 grep EVENT_START_BLOCK .env
@@ -403,20 +403,20 @@ Workers only appear when implemented. Current status:
 ### Queue Backlog
 ```bash
 # Check dequeuer performance
-./launch.sh dqr-logs | grep "Processing submission"
+./dsv.sh dqr-logs | grep "Processing submission"
 
 # Monitor queue depth trends
-watch -n 5 "./launch.sh monitor | grep 'Pending'"
+watch -n 5 "./dsv.sh monitor | grep 'Pending'"
 ```
 
 ### Data Format Issues
 The system now handles both batch and single submission formats with advanced conversion strategies:
 ```bash
 # Check for batch format submissions
-./launch.sh dqr-logs | grep "P2PSnapshotSubmission"
+./dsv.sh dqr-logs | grep "P2PSnapshotSubmission"
 
 # Check field name changes (snake_case → camelCase)
-./launch.sh dqr-logs | grep "epochId\|projectId"
+./dsv.sh dqr-logs | grep "epochId\|projectId"
 
 # Verify conversion strategy
 docker exec powerloom-sequencer-validator-dequeuer-1 \
@@ -424,7 +424,7 @@ docker exec powerloom-sequencer-validator-dequeuer-1 \
 
 # Manual format override
 # Possible values: 'auto', 'single', 'batch'
-SUBMISSION_FORMAT_STRATEGY=single ./launch.sh distributed
+SUBMISSION_FORMAT_STRATEGY=single ./dsv.sh distributed
 ```
 
 #### Conversion Troubleshooting
