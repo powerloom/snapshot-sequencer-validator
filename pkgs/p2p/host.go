@@ -2,7 +2,7 @@ package p2p
 
 import (
 	"context"
-	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"strconv"
 
@@ -129,23 +129,17 @@ func (p *P2PHost) ConnectToBootstrap(bootstrapAddr string) error {
 	return nil
 }
 
-func loadOrCreatePrivateKey(keyStr string) (crypto.PrivKey, error) {
-	if keyStr == "" {
-		// Generate new key
-		priv, _, err := crypto.GenerateKeyPairWithReader(crypto.Ed25519, 2048, rand.Reader)
+func loadOrCreatePrivateKey(privKeyHex string) (crypto.PrivKey, error) {
+	if privKeyHex != "" {
+		// Decode hex string to bytes
+		privKeyBytes, err := hex.DecodeString(privKeyHex)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to decode private key hex: %v", err)
 		}
-		log.Info("Generated new P2P private key")
-		return priv, nil
+		// Load existing key
+		return crypto.UnmarshalEd25519PrivateKey(privKeyBytes)
 	}
-
-	// Decode existing key
-	keyBytes := []byte(keyStr)
-	priv, err := crypto.UnmarshalPrivateKey(keyBytes)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal private key: %w", err)
-	}
-
-	return priv, nil
+	// Generate new key
+	privKey, _, err := crypto.GenerateEd25519Key(nil)
+	return privKey, err
 }

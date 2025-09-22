@@ -40,9 +40,11 @@ show_usage() {
     echo "  stop          - Stop all services"
     echo "  clean [-y]    - Stop and remove all containers/volumes (use -y to skip prompt)"
     echo "  logs          - Show logs for all services"
-    echo "  listener-logs [N] - Show P2P listener logs (last N lines if specified)"
-    echo "  dqr-logs [N]  - Show dequeuer worker logs (last N lines if specified)"
-    echo "  finalizer-logs [N] - Show finalizer logs (last N lines if specified)"
+    echo "  listener-logs [N] - Show P2P listener logs (distributed mode)"
+    echo "  p2p-logs [N]  - Show P2P Gateway logs (separated mode)"
+    echo "  aggregator-logs [N] - Show Aggregator logs (separated mode)"
+    echo "  dequeuer-logs [N] - Show dequeuer logs (separated/distributed mode)"
+    echo "  finalizer-logs [N] - Show finalizer logs (separated/distributed mode)"
     echo "  event-monitor-logs [N] - Show event monitor logs (last N lines if specified)"
     echo "  redis-logs [N]    - Show Redis logs (last N lines if specified)"
     echo "  status        - Show status of all services"
@@ -113,9 +115,25 @@ is_distributed_mode() {
     fi
 }
 
+# Function to check if separated mode is running
+is_separated_mode() {
+    # Check if separated containers are running
+    if $DOCKER_COMPOSE_CMD -f docker-compose.separated.yml ps --services 2>/dev/null | grep -q p2p-gateway; then
+        return 0  # true - separated mode is running
+    else
+        return 1  # false - separated mode is not running
+    fi
+}
+
 # Function to detect which mode is currently running
 detect_running_mode() {
-    # Check for distributed mode first
+    # Check for separated mode first (recommended)
+    if $DOCKER_COMPOSE_CMD -f docker-compose.separated.yml ps --services 2>/dev/null | grep -q p2p-gateway; then
+        echo "docker-compose.separated.yml"
+        return 0
+    fi
+
+    # Check for distributed mode
     if $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml ps --services 2>/dev/null | grep -q listener; then
         echo "docker-compose.distributed.yml"
     elif $DOCKER_COMPOSE_CMD -f docker-compose.snapshot-sequencer.yml ps --services 2>/dev/null | grep -q sequencer; then
@@ -621,7 +639,14 @@ case $COMMAND in
     finalizer-logs)
         # Shortcut for viewing finalizer logs
         # Usage: ./dsv.sh finalizer-logs [number_of_lines]
-        if is_distributed_mode; then
+        if is_separated_mode; then
+            LINES="${2:-}"
+            if [ ! -z "$LINES" ] && [ "$LINES" -eq "$LINES" ] 2>/dev/null; then
+                $DOCKER_COMPOSE_CMD -f docker-compose.separated.yml logs -f --tail="$LINES" finalizer
+            else
+                $DOCKER_COMPOSE_CMD -f docker-compose.separated.yml logs -f finalizer
+            fi
+        elif is_distributed_mode; then
             LINES="${2:-}"
             if [ ! -z "$LINES" ] && [ "$LINES" -eq "$LINES" ] 2>/dev/null; then
                 $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml logs -f --tail="$LINES" finalizer
@@ -629,7 +654,7 @@ case $COMMAND in
                 $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml logs -f finalizer
             fi
         else
-            print_color "$YELLOW" "Finalizer only runs in distributed mode. Use: ./dsv.sh distributed"
+            print_color "$YELLOW" "Finalizer only runs in separated/distributed mode. Use: ./dsv.sh separated (recommended) or ./dsv.sh distributed"
         fi
         ;;
     event-monitor-logs)
@@ -1117,6 +1142,11 @@ case $COMMAND in
         if [ $? -eq 0 ]; then
             print_color "$GREEN" "✅ Separated architecture started successfully"
             print_color "$YELLOW" "Monitor with: ./dsv.sh logs"
+            print_color "$YELLOW" "Component logs:"
+            print_color "$CYAN" "  ./dsv.sh p2p-logs      - P2P Gateway logs"
+            print_color "$CYAN" "  ./dsv.sh aggregator-logs - Aggregator logs"
+            print_color "$CYAN" "  ./dsv.sh finalizer-logs  - Finalizer logs"
+            print_color "$CYAN" "  ./dsv.sh dequeuer-logs   - Dequeuer logs"
         else
             print_color "$RED" "❌ Failed to start separated architecture"
             exit 1
@@ -1125,6 +1155,56 @@ case $COMMAND in
     debug)
         launch_debug
         ;;
+
+    p2p-logs)
+        # P2P Gateway logs for separated mode
+        if is_separated_mode; then
+            LINES="${2:-}"
+            if [ ! -z "$LINES" ] && [ "$LINES" -eq "$LINES" ] 2>/dev/null; then
+                $DOCKER_COMPOSE_CMD -f docker-compose.separated.yml logs -f --tail="$LINES" p2p-gateway
+            else
+                $DOCKER_COMPOSE_CMD -f docker-compose.separated.yml logs -f p2p-gateway
+            fi
+        else
+            print_color "$YELLOW" "P2P Gateway only runs in separated mode. Use: ./dsv.sh separated"
+        fi
+        ;;
+
+    aggregator-logs)
+        # Aggregator logs for separated mode
+        if is_separated_mode; then
+            LINES="${2:-}"
+            if [ ! -z "$LINES" ] && [ "$LINES" -eq "$LINES" ] 2>/dev/null; then
+                $DOCKER_COMPOSE_CMD -f docker-compose.separated.yml logs -f --tail="$LINES" aggregator
+            else
+                $DOCKER_COMPOSE_CMD -f docker-compose.separated.yml logs -f aggregator
+            fi
+        else
+            print_color "$YELLOW" "Aggregator only runs in separated mode. Use: ./dsv.sh separated"
+        fi
+        ;;
+
+    dequeuer-logs)
+        # Dequeuer logs for separated mode
+        if is_separated_mode; then
+            LINES="${2:-}"
+            if [ ! -z "$LINES" ] && [ "$LINES" -eq "$LINES" ] 2>/dev/null; then
+                $DOCKER_COMPOSE_CMD -f docker-compose.separated.yml logs -f --tail="$LINES" dequeuer
+            else
+                $DOCKER_COMPOSE_CMD -f docker-compose.separated.yml logs -f dequeuer
+            fi
+        elif is_distributed_mode; then
+            LINES="${2:-}"
+            if [ ! -z "$LINES" ] && [ "$LINES" -eq "$LINES" ] 2>/dev/null; then
+                $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml logs -f --tail="$LINES" dequeuer
+            else
+                $DOCKER_COMPOSE_CMD -f docker-compose.distributed.yml logs -f dequeuer
+            fi
+        else
+            print_color "$YELLOW" "Dequeuer only runs in separated/distributed mode"
+        fi
+        ;;
+
     *)
         show_usage
         exit 1
