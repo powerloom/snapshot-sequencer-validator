@@ -197,7 +197,10 @@ The `dsv.sh` script is the primary tool for managing your sequencer deployment.
 
 ```bash
 # Start unified sequencer (all components in one container)
-./dsv.sh unified
+./dsv.sh sequencer
+
+# Start sequencer with custom .env settings
+./dsv.sh sequencer-custom
 
 # Start distributed mode (separate containers per component)
 ./dsv.sh distributed
@@ -205,11 +208,14 @@ The `dsv.sh` script is the primary tool for managing your sequencer deployment.
 # Start distributed mode with Redis exposed for debugging
 ./dsv.sh distributed-debug
 
-# Start validator mode with consensus
-./dsv.sh validator
+# Start minimal setup (redis + unified)
+./dsv.sh minimal
 
-# Start with custom .env settings
-./dsv.sh sequencer-custom
+# Start full stack with monitoring
+./dsv.sh full
+
+# Start with custom profile
+./dsv.sh custom
 
 # Stop all running services
 ./dsv.sh stop
@@ -217,11 +223,8 @@ The `dsv.sh` script is the primary tool for managing your sequencer deployment.
 # Clean all containers and volumes (with confirmation)
 ./dsv.sh clean
 
-# Force clean without confirmation
-./dsv.sh clean --force
-
-# View batch details for a specific epoch
-./dsv.sh batch-details [epoch_id]
+# Force clean without confirmation (supports -y or --yes)
+./dsv.sh clean -y
 
 # Monitor batch preparation status
 ./dsv.sh monitor
@@ -229,23 +232,81 @@ The `dsv.sh` script is the primary tool for managing your sequencer deployment.
 # Comprehensive pipeline monitoring
 ./dsv.sh pipeline
 
-# View consensus voting status
-./dsv.sh consensus
+# NEW: Consensus/aggregation monitoring commands
+./dsv.sh consensus                           # Show consensus status with validator batches
+./dsv.sh consensus-logs [N]                  # Show consensus-related logs
+./dsv.sh aggregated-batch [epoch]            # Show complete local aggregation view
+./dsv.sh validator-details <id> [epoch]      # Show specific validator's proposals
 
-# View combined logs
-./dsv.sh collection-logs    # Dequeuer + Event Monitor
-./dsv.sh finalization-logs  # Event Monitor + Finalizer
-./dsv.sh pipeline-logs      # All three components
-./dsv.sh consensus-logs     # Consensus component logs
+# Individual component logs (with optional line count)
+./dsv.sh listener-logs [N]                   # P2P listener logs
+./dsv.sh dqr-logs [N]                        # Dequeuer worker logs
+./dsv.sh finalizer-logs [N]                  # Finalizer logs
+./dsv.sh event-monitor-logs [N]              # Event monitor logs
+./dsv.sh redis-logs [N]                      # Redis logs
+
+# Combined pipeline logs
+./dsv.sh collection-logs [N]                 # Dequeuer + Event Monitor
+./dsv.sh finalization-logs [N]               # Event Monitor + Finalizer
+./dsv.sh pipeline-logs [N]                   # All three components
+
+# Service status
+./dsv.sh status                              # Show status of all services
 
 # View usage help
 ./dsv.sh help
 ```
 
-#### New Commands
-- `batch-details`: Shows detailed batch metadata with IPFS CIDs
-- `consensus`: View consensus voting status and tracking
-- `consensus-logs`: View logs for the consensus component
+#### New Consensus Monitoring Commands
+
+**consensus**: Shows comprehensive consensus/aggregation status
+```bash
+./dsv.sh consensus
+# Displays:
+# - Recent aggregation status with validator batch counts
+# - Consensus results with IPFS CIDs and Merkle roots
+# - Validator batches received for current epochs
+# - Vote distribution across validators
+```
+
+**consensus-logs [N]**: Shows filtered consensus-related logs
+```bash
+./dsv.sh consensus-logs 50
+# Shows last 50 lines of consensus activity including:
+# - Batch exchange between validators
+# - Aggregation processing
+# - Vote counting and consensus determination
+```
+
+**aggregated-batch [epoch]**: Shows complete local aggregation view
+```bash
+./dsv.sh aggregated-batch 123
+# Displays for epoch 123:
+# - Individual validator batch contributions
+# - Project-by-project vote distribution
+# - Consensus winners and vote counts
+# - Validator contribution breakdown
+# - Local consensus determination results
+```
+
+**validator-details <id> [epoch]**: Shows specific validator's proposals
+```bash
+./dsv.sh validator-details validator1 123
+# Shows validator1's batch for epoch 123:
+# - IPFS CID and Merkle root of their batch
+# - Specific project proposals they submitted
+# - Comparison with final consensus results
+# - Which of their proposals were accepted/rejected
+```
+
+#### Enhanced Clean Command
+
+**clean [-y|--yes]**: Now supports auto-confirmation for automation
+```bash
+./dsv.sh clean -y        # Skip confirmation prompt
+./dsv.sh clean --yes     # Also skips confirmation
+./dsv.sh clean           # Still prompts for confirmation
+```
 
 #### Command Details
 
@@ -372,6 +433,40 @@ The comprehensive monitoring guide covers:
 - Performance optimization and batch size tuning
 - Troubleshooting procedures and health indicators
 - Advanced monitoring queries and metrics collection
+- **NEW: Consensus monitoring and validator batch tracking**
+
+### Consensus Monitoring Workflow
+
+The new consensus monitoring commands provide complete transparency into the batch aggregation process:
+
+1. **Monitor Overall Consensus Activity**:
+   ```bash
+   ./dsv.sh consensus
+   # Shows recent aggregation status and consensus results
+   ```
+
+2. **Track Specific Epoch Aggregation**:
+   ```bash
+   ./dsv.sh aggregated-batch 12345
+   # Shows complete view of how epoch 12345 was aggregated locally
+   # Includes all validator contributions and vote distribution
+   ```
+
+3. **Examine Individual Validator Contributions**:
+   ```bash
+   ./dsv.sh validator-details validator_abc 12345
+   # Shows what validator_abc proposed for epoch 12345
+   # Compares their proposals with final consensus
+   ```
+
+4. **Debug Consensus Issues**:
+   ```bash
+   ./dsv.sh consensus-logs 100
+   # Shows recent consensus activity logs
+   # Useful for debugging batch exchange and aggregation issues
+   ```
+
+**Key Insight**: Since each validator maintains their own local aggregation copy, these commands show YOUR validator's view of the consensus process. Other validators may have slightly different aggregated results based on which batches they received.
 
 ### Component Log Shortcuts
 

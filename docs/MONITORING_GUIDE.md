@@ -47,39 +47,43 @@ The monitoring system tracks 6 distinct stages:
 - **Merkle Roots**: Cryptographic proofs of batch contents
 - **Validator Broadcasts**: Vote dissemination status
 
-### Stage 6: Consensus Validation (NEW)
-- **Voting Status**: Real-time tracking of validator consensus
-- **Voting Threshold**: Percentage of validators who have approved a batch
-- **Consensus Details**: Per-project and overall batch voting progress
-- **Timeout Tracking**: Monitor consensus voting window
+### Stage 6: Consensus/Batch Aggregation (NEW)
+- **Validator Batch Exchange**: Real-time tracking of batch broadcasts between validators
+- **Local Aggregation**: Each validator aggregates all received batches locally
+- **Vote Counting**: Per-project CID vote tallies from all validators
+- **Consensus Determination**: Local consensus based on majority vote per project
+- **No Second Round**: Each validator maintains their own aggregated view - no global consensus round
 
 ## Monitoring Commands
 
-### launch.sh Commands
+### dsv.sh Commands
 
 | Command | Description |
 |---------|-------------|
 | `monitor` | Basic batch preparation status |
 | `pipeline` | Comprehensive pipeline monitoring |
 | `status` | Service status overview |
-| `consensus` | Consensus voting details |
+| **Consensus Monitoring (NEW)** | |
+| `consensus` | Comprehensive consensus/aggregation status |
+| `consensus-logs [N]` | Filtered consensus-related logs |
+| `aggregated-batch [epoch]` | Complete local aggregation view |
+| `validator-details <id> [epoch]` | Specific validator's proposals |
 | **Individual Logs** | |
-| `listener-logs` | P2P listener activity |
-| `dqr-logs` | Submission processing logs |
-| `finalizer-logs` | Batch finalization logs |
-| `event-monitor-logs` | Epoch release events |
-| `redis-logs` | Redis operation logs |
-| `consensus-logs` | Consensus validator vote tracking |
-| **Combined Logs (NEW)** | |
-| `collection-logs` | Dequeuer + Event Monitor logs |
-| `finalization-logs` | Event Monitor + Finalizer logs |
-| `pipeline-logs` | All three: Dequeuer + Event Monitor + Finalizer |
-| `consensus-logs` | Consensus component logs
+| `listener-logs [N]` | P2P listener activity |
+| `dqr-logs [N]` | Submission processing logs |
+| `finalizer-logs [N]` | Batch finalization logs |
+| `event-monitor-logs [N]` | Epoch release events |
+| `redis-logs [N]` | Redis operation logs |
+| **Combined Logs** | |
+| `collection-logs [N]` | Dequeuer + Event Monitor logs |
+| `finalization-logs [N]` | Event Monitor + Finalizer logs |
+| `pipeline-logs [N]` | All three: Dequeuer + Event Monitor + Finalizer |
 
 All log commands support optional line count (default: 100):
 ```bash
-./launch.sh collection-logs 200    # Last 200 lines
-./launch.sh pipeline-logs          # Default 100 lines
+./dsv.sh collection-logs 200    # Last 200 lines
+./dsv.sh pipeline-logs          # Default 100 lines
+./dsv.sh consensus-logs 50      # Last 50 consensus logs
 ```
 
 ### Direct Script Usage
@@ -92,7 +96,146 @@ All log commands support optional line count (default: 100):
 ./scripts/monitor_pipeline.sh container-name
 ```
 
+## Consensus Monitoring Deep Dive
+
+The new consensus monitoring system provides complete visibility into how validators aggregate batches and determine local consensus. This is critical for understanding the decentralized batch aggregation process.
+
+### Understanding Local Aggregation
+
+**Key Concept**: Each validator maintains their own local aggregation of all received validator batches. There is NO second round of consensus - each validator's local view is their final consensus.
+
+```
+Validator A receives batches from: [Val1, Val2, Val3, Val4]
+Validator B receives batches from: [Val1, Val2, Val3, Val5]
+Validator C receives batches from: [Val1, Val2, Val4, Val5]
+
+Each validator aggregates their received batches independently.
+Results may differ slightly based on network conditions.
+```
+
+### Consensus Monitoring Commands Explained
+
+#### 1. `./dsv.sh consensus` - Overview Status
+Shows the current state of consensus across recent epochs:
+
+**Sample Output**:
+```
+🤝 Consensus/Aggregation Status
+================================
+📊 Batch Aggregation Status
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🔄 Recent Aggregation Status:
+  📦 Epoch 172883: 4 validators, 25 projects aggregated
+  📦 Epoch 172884: 3 validators, 18 projects aggregated
+
+🎯 Consensus Results:
+  ✅ Epoch 172883: CID=QmABC123, Merkle=a1b2c3d4..., Projects=25
+  ✅ Epoch 172884: CID=QmDEF456, Merkle=e5f6g7h8..., Projects=18
+
+📨 Validator Batches Received:
+  📊 4 validators across 2 epochs
+```
+
+#### 2. `./dsv.sh aggregated-batch [epoch]` - Complete Aggregation View
+Shows the complete local aggregation for a specific epoch:
+
+**Sample Output**:
+```
+📦 Epoch 172883 - Complete Aggregation View
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🔍 INDIVIDUAL VALIDATOR BATCHES:
+
+📨 Validator: validator_001
+   IPFS CID: QmValidator001BatchCID...
+   Merkle: a1b2c3d4e5f6...
+   Projects: 25
+   PeerID: 12D3KooW...
+   Timestamp: 1695123456
+   Project Proposals:
+     - uniswap_v3: QmUniswapCID...
+     - aave_v2: QmAaveCID...
+     - compound_v2: QmCompoundCID...
+
+📨 Validator: validator_002
+   [Similar structure]
+
+📊 LOCAL AGGREGATION RESULTS:
+  Total Validators Participated: 4
+  Projects with Consensus: 25
+  Last Updated: 2023-09-19T10:30:45Z
+
+🗳️ DETAILED VOTE DISTRIBUTION:
+  Project: uniswap_v3
+    CID QmUniswapCID...: 4 validator(s)
+
+  Project: aave_v2
+    CID QmAaveCID123...: 3 validator(s)
+    CID QmAaveCID456...: 1 validator(s)
+
+✅ CONSENSUS WINNERS:
+  uniswap_v3: QmUniswapCID...
+  aave_v2: QmAaveCID123...
+  compound_v2: QmCompoundCID...
+
+👥 VALIDATOR CONTRIBUTIONS:
+  validator_001: 25 projects contributed
+  validator_002: 23 projects contributed
+  validator_003: 20 projects contributed
+```
+
+#### 3. `./dsv.sh validator-details <id> [epoch]` - Individual Validator Analysis
+Shows what a specific validator proposed and how it compared to consensus:
+
+**Sample Output**:
+```
+👤 Validator Details: validator_001
+====================================
+📦 All Batches from Validator validator_001:
+
+🔹 Epoch 172883:
+  IPFS CID: QmValidator001Epoch172883...
+  Merkle Root: a1b2c3d4e5f6g7h8i9j0...
+  Projects: 25
+  Timestamp: 1695123456
+  Project Proposals:
+    - uniswap_v3: QmUniswapCID...
+    - aave_v2: QmAaveCID123...
+    - compound_v2: QmCompoundCID...
+
+✅ CONSENSUS COMPARISON:
+  Projects that reached consensus:
+    ✅ uniswap_v3 - ACCEPTED
+    ✅ aave_v2 - ACCEPTED
+    ❌ compound_v2 - Different CID won
+```
+
+#### 4. `./dsv.sh consensus-logs [N]` - Activity Logs
+Filters system logs to show only consensus-related activity:
+
+**Sample Output**:
+```
+INFO[2023-09-19T10:30:15Z] 📡 Broadcasted finalized batch for epoch 172883
+INFO[2023-09-19T10:30:16Z] 📨 Received batch from validator validator_002 for epoch 172883
+INFO[2023-09-19T10:30:17Z] 📊 AGGREGATION for epoch 172883: 4 validators contributed, 25 projects aggregated
+```
+
 ## Redis Keys Structure
+
+### Consensus/Aggregation Tracking (NEW)
+```
+# Validator batch storage
+validator:{validatorID}:batch:{epochID}              # Individual validator's batch for epoch
+validator:{validatorID}:epoch:{epochID}:batch        # Alternative key pattern
+
+# Aggregation status
+consensus:epoch:{epochID}:status                     # Local aggregation status for epoch
+consensus:epoch:{epochID}:result                     # Final local consensus determination
+
+# Epoch validator tracking
+epoch:{epochID}:validators                           # Set of validators who submitted batches
+```
 
 ### Submission Tracking (Updated Format)
 ```
@@ -168,21 +311,26 @@ metrics:avg_latency                       # Average processing time
 - ✅ Finalization queue < 10 batches
 - ✅ Worker heartbeats < 60s old
 - ✅ Aggregation queue < 5 epochs
-- ✅ Consensus voting progress > 50%
+- ✅ **NEW**: Regular validator batch exchange (>= 2 validators per epoch)
+- ✅ **NEW**: Consensus determination completing (projects have majority votes)
+- ✅ **NEW**: IPFS batch retrieval succeeding
 
 ### Warning Signs
 - ⚠️ Queue depth > 100 (backlog forming)
 - ⚠️ Worker heartbeat > 60s (stale worker)
 - ⚠️ Finalization queue > 10 (workers overwhelmed)
-- ⚠️ Consensus voting < 50% (might not reach threshold)
-- ⚠️ High vote divergence (multiple CIDs competing)
+- ⚠️ **NEW**: Only 1 validator participating (no aggregation possible)
+- ⚠️ **NEW**: High vote divergence (no clear majority for projects)
+- ⚠️ **NEW**: IPFS retrieval failures for validator batches
+- ⚠️ **NEW**: Stale validator batches (no recent broadcasts)
 
 ### Critical Issues
 - 🔴 Queue depth > 1000 (severe backlog)
 - 🔴 No worker heartbeats (workers down)
 - 🔴 Aggregation blocked (parts incomplete)
-- 🔴 Consensus timeout reached without resolution
-- 🔴 Insufficient unique validators participating
+- 🔴 **NEW**: No validator batch exchange (network partition)
+- 🔴 **NEW**: Validator batch signature validation failures
+- 🔴 **NEW**: Consistent IPFS failures (storage layer down)
 
 ## Integration with Workers
 
@@ -370,6 +518,66 @@ Planned monitoring improvements:
 - Grafana dashboards
 - WebSocket real-time updates
 - Historical trend analysis
+
+### Consensus Troubleshooting
+
+#### No Validator Batches Received
+```bash
+# Check if validator is broadcasting
+./dsv.sh consensus-logs | grep "Broadcasted finalized batch"
+
+# Check P2P connectivity
+./dsv.sh listener-logs | grep -E "Connected|peer"
+
+# Verify gossipsub topic subscription
+./dsv.sh listener-logs | grep "/powerloom/finalized-batches"
+```
+
+#### High Vote Divergence
+```bash
+# Check project-level vote distribution
+./dsv.sh aggregated-batch 12345
+
+# Look for inconsistent project CIDs across validators
+# This may indicate:
+# - Different submission sets received
+# - Network timing issues
+# - IPFS content differences
+```
+
+#### Validator Batches Not Aggregating
+```bash
+# Check minimum validator threshold
+./dsv.sh consensus | grep "validators contributed"
+
+# If < MinValidatorsForConsensus (usually 2), aggregation won't trigger
+# Check Redis for validator presence
+docker exec <container> redis-cli SMEMBERS "epoch:12345:validators"
+```
+
+#### IPFS Batch Retrieval Failures
+```bash
+# Check IPFS connectivity
+./dsv.sh listener-logs | grep -E "IPFS|fetch.*batch"
+
+# Look for IPFS errors in consensus logs
+./dsv.sh consensus-logs | grep -E "Failed to fetch|IPFS"
+
+# Verify IPFS client configuration
+docker exec <container> printenv | grep IPFS
+```
+
+#### Consensus Status Not Updating
+```bash
+# Check Redis consensus keys exist
+docker exec <container> redis-cli KEYS "consensus:epoch:*"
+
+# Look for aggregation processing logs
+./dsv.sh consensus-logs | grep "AGGREGATION"
+
+# Verify periodic consensus checker is running
+./dsv.sh consensus-logs | grep "BATCH AGGREGATION STATUS"
+```
 
 ### Consensus Monitoring Roadmap
 - Detailed validator performance tracking
