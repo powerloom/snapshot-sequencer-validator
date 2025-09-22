@@ -36,11 +36,15 @@ func NewAggregator(cfg *config.Settings) (*Aggregator, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Initialize Redis
-	redisClient := redis.NewClient(&redis.Options{
-		Addr:     fmt.Sprintf("%s:%s", cfg.RedisHost, cfg.RedisPort),
-		Password: cfg.RedisPassword,
-		DB:       cfg.RedisDB,
-	})
+	redisOpts := &redis.Options{
+		Addr: fmt.Sprintf("%s:%s", cfg.RedisHost, cfg.RedisPort),
+		DB:   cfg.RedisDB,
+	}
+	// Only set password if it's not empty
+	if cfg.RedisPassword != "" {
+		redisOpts.Password = cfg.RedisPassword
+	}
+	redisClient := redis.NewClient(redisOpts)
 
 	if err := redisClient.Ping(ctx).Err(); err != nil {
 		cancel()

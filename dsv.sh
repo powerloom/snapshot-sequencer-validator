@@ -164,12 +164,15 @@ monitor_pipeline() {
 
 # Clean everything
 clean_all() {
-    print_color "$YELLOW" "⚠️  This will remove all containers and volumes"
+    print_color "$YELLOW" "⚠️  This will remove sequencer containers and volumes"
     read -p "Continue? (y/N) " -n 1 -r
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         stop_services
-        docker volume prune -f
+        # Only remove volumes belonging to this project
+        if is_separated_running || docker ps | grep -q snapshot-sequencer; then
+            $DOCKER_COMPOSE_CMD -f docker-compose.separated.yml down -v 2>/dev/null || true
+        fi
         print_color "$GREEN" "✓ Cleanup complete"
     else
         print_color "$YELLOW" "Cancelled"
