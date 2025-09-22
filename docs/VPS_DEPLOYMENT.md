@@ -19,20 +19,52 @@
 
 The Powerloom Decentralized Sequencer Validator provides two deployment systems:
 
-### System 1: Consensus Test (STABLE)
-- **Binary**: `cmd/sequencer-consensus-test/main.go`
-- **Docker**: `docker-compose.yml`
-- **Launcher**: `start.sh`
-- **Purpose**: Tests consensus with real P2P listener, dequeuer, but dummy batch generation
-- **Status**: Tested and stable for consensus testing
+### System Architecture: Single-Responsibility Containers
 
-### System 2: Full Decentralized Sequencer (EXPERIMENTAL)
-- **Binary**: `cmd/unified/main.go`
-- **Docker**: `docker-compose.snapshot-sequencer.yml`, `docker-compose.distributed.yml`, or `docker-compose.validator.yml`
+#### Core Components
+1. **P2P Gateway (Singleton)**
+   - **Binary**: `cmd/p2p-gateway/main.go`
+   - **Purpose**: Handles ALL P2P communication
+   - **Responsibilities**:
+     - Peer discovery
+     - Gossipsub message exchange
+     - Submission broadcasting
+     - Provides centralized P2P communication interface
+
+2. **Aggregator (Singleton)**
+   - **Binary**: `cmd/aggregator/main.go`
+   - **Purpose**: Performs batch aggregation and consensus
+   - **Responsibilities**:
+     - Collect batches from finalizers
+     - Perform voting and consensus
+     - Generate final aggregated batch with Merkle root
+     - IPFS storage of consensus results
+
+3. **Finalizer**
+   - **Binary**: `cmd/finalizer/main.go`
+   - **Purpose**: Create individual project batches
+   - **Responsibilities**:
+     - Dequeue submissions
+     - Generate project-specific batches
+     - Prepare batches for aggregation
+     - No longer handles aggregation logic
+
+4. **Event Monitor**
+   - **Monitors blockchain events**
+   - Tracks epoch releases
+   - Manages submission windows
+
+#### Deployment Options
+- **Docker**: `docker-compose.separated.yml`
 - **Launcher**: `dsv.sh` (Decentralized Sequencer Validator control script)
-- **Purpose**: Production-ready snapshot sequencer with component toggles
-- **Status**: Experimental, actively developed
-- **New Features**: Added P2P consensus implementation, enhanced batch validation
+- **Purpose**: Modular, scalable snapshot sequencer with clear component responsibilities
+- **Status**: New architecture for improved performance and maintainability
+
+#### New Binaries
+- `p2p-gateway`: Centralized P2P communication
+- `aggregator`: Consensus and batch aggregation
+- `finalizer`: Batch creation
+- Existing unified and consensus-test binaries maintained for backward compatibility
 
 ## Prerequisites
 
@@ -116,23 +148,30 @@ REDIS_PASSWORD=          # Leave empty if no auth
 
 #### Component Toggles
 ```bash
-# Control which components run (for unified mode)
-ENABLE_LISTENER=true      # P2P gossipsub listener
-ENABLE_DEQUEUER=true      # Redis queue processor
-ENABLE_FINALIZER=false    # Batch finalizer
-ENABLE_BATCH_AGGREGATION=false    # Batch aggregation
-ENABLE_EVENT_MONITOR=false # EpochReleased event monitoring
+# New Single-Responsibility Component Toggles
+ENABLE_P2P_GATEWAY=true   # Central P2P communication handler
+ENABLE_AGGREGATOR=true    # Batch consensus and aggregation
+ENABLE_FINALIZER=true     # Batch creation from submissions
+ENABLE_EVENT_MONITOR=true # Blockchain event tracking
 
-# Batch Aggregation Toggles
-VOTING_THRESHOLD=0.67    # Percentage of validators required for batch aggregation
-MIN_VALIDATORS=3         # Minimum number of validators for valid batch aggregation
-BATCH_AGGREGATION_TIMEOUT=300    # Timeout for batch aggregation voting in seconds
+# Separated Architecture Configurations
+P2P_GATEWAY_REPLICAS=1    # Typically a singleton
+AGGREGATOR_REPLICAS=1     # Typically a singleton
+FINALIZER_REPLICAS=3      # Can scale horizontally
+EVENT_MONITOR_REPLICAS=1  # Typically a singleton
+
+# Batch Aggregation Configuration (moved to Aggregator)
+VOTING_THRESHOLD=0.67     # Percentage of validators required for batch aggregation
+MIN_VALIDATORS=3          # Minimum validators for valid batch
+BATCH_AGGREGATION_TIMEOUT=300  # Timeout for aggregation voting
 ```
 
 #### Batch Aggregation Configuration
-- `VOTING_THRESHOLD`: Controls the percentage of validators needed to approve a batch (default: 0.67 or 67%)
-- `MIN_VALIDATORS`: Minimum number of validators required to start batch aggregation
-- `BATCH_AGGREGATION_TIMEOUT`: Maximum time allowed for batch aggregation voting before timeout
+- Now centralized in the Aggregator component
+- `VOTING_THRESHOLD`: Percentage of validators needed to approve a batch (default: 0.67 or 67%)
+- `MIN_VALIDATORS`: Minimum validators required to start aggregation
+- `BATCH_AGGREGATION_TIMEOUT`: Maximum time for aggregation voting before timeout
+- Configuration applies across all validators consistently
 
 #### RPC Configuration
 ```bash
@@ -574,17 +613,16 @@ docker exec powerloom-sequencer-validator-redis-1 \
 
 ## Deployment Modes
 
-### Unified Mode (Development/Testing)
+### Development/Testing Mode
 
-Single container with all components:
+Single container with configurable components:
 
 ```bash
 # Configure .env
 cat > .env << EOF
-ENABLE_LISTENER=true
-ENABLE_DEQUEUER=true
+ENABLE_P2P_GATEWAY=true
+ENABLE_AGGREGATOR=true
 ENABLE_FINALIZER=false
-ENABLE_BATCH_AGGREGATION=false
 ENABLE_EVENT_MONITOR=false
 BOOTSTRAP_MULTIADDR=/ip4/159.203.190.22/tcp/9100/p2p/...
 PRIVATE_KEY=<your-key>
@@ -594,16 +632,18 @@ EOF
 ./dsv.sh unified
 ```
 
-### Distributed Mode (Production)
+### Separated Mode (Production)
 
-Separate containers for scalability:
+New architecture with single-responsibility containers:
 
 ```bash
-# Configure .env for distributed mode
+# Configure .env for separated mode
 cat > .env << EOF
-# Component scaling
-DEQUEUER_REPLICAS=3
-FINALIZER_REPLICAS=2
+# Component Scaling
+P2P_GATEWAY_REPLICAS=1     # Centralized P2P communication
+AGGREGATOR_REPLICAS=1      # Consensus batch aggregation
+FINALIZER_REPLICAS=3       # Batch creation (horizontally scalable)
+EVENT_MONITOR_REPLICAS=1   # Blockchain event tracking
 
 # P2P Configuration
 BOOTSTRAP_MULTIADDR=/ip4/159.203.190.22/tcp/9100/p2p/...
@@ -617,82 +657,111 @@ DATA_MARKET_ADDRESSES=0x0C2E22fe7526fAeF28E7A58c84f8723dEFcE200c
 EOF
 
 # Launch
-./dsv.sh distributed
+./dsv.sh separated
 ```
 
-**Components in distributed mode:**
-- **listener**: Receives P2P submissions (1 instance)
-- **dequeuer**: Processes queue (scales horizontally)
-- **event-monitor**: Watches for EpochReleased events (1 instance)
-- **finalizer**: Creates batches (redundancy via replicas)
-- **consensus**: Votes on batches (1 instance)
+**Components in Separated Mode:**
+- **p2p-gateway**: Centralized P2P communication (singleton)
+- **aggregator**: Performs consensus and batch aggregation (singleton)
+- **finalizer**: Creates project-specific batches (horizontally scalable)
+- **event-monitor**: Tracks blockchain epoch events (singleton)
 
-### Custom Mode (Flexible)
+### Custom Mode (Flexible Configuration)
 
 Configure exactly what you need:
 
 ```bash
-# Example: Only P2P listener
-ENABLE_LISTENER=true
-ENABLE_DEQUEUER=false
+# Example: Only P2P Gateway
+ENABLE_P2P_GATEWAY=true
+ENABLE_AGGREGATOR=false
 ENABLE_FINALIZER=false
-ENABLE_BATCH_AGGREGATION=false
 ENABLE_EVENT_MONITOR=false
 
-./dsv.sh sequencer-custom
+./dsv.sh separated-custom
 ```
+
+#### Deployment Architecture Benefits
+- Clear separation of concerns
+- Easier horizontal scaling of batch creation
+- Centralized P2P communication
+- Simplified network topology
+- More predictable performance characteristics
 
 ## Multi-VPS Setup
 
-### VPS 1: Bootstrap Node
+### VPS 1: P2P Gateway (Bootstrap Node)
 
 ```bash
-# .env configuration
-SEQUENCER_ID=bootstrap-node
+# .env configuration for P2P Gateway
+SEQUENCER_ID=p2p-gateway-1
 P2P_PORT=9100
-ENABLE_LISTENER=true
-ENABLE_DEQUEUER=false
+
+# P2P Gateway Configurations
+ENABLE_P2P_GATEWAY=true
+ENABLE_AGGREGATOR=false
+ENABLE_FINALIZER=false
+ENABLE_EVENT_MONITOR=false
+
 # No BOOTSTRAP_MULTIADDR (it IS the bootstrap)
 
 # Launch
-./dsv.sh sequencer-custom
+./dsv.sh separated
 
 # Get multiaddr for other nodes
-docker logs powerloom-sequencer-validator-sequencer-custom-1 | grep "P2P host started"
+docker logs powerloom-sequencer-validator-p2p-gateway-1 | grep "P2P host started"
 # Share the multiaddr with other validators
 ```
 
-### VPS 2: Validator Node 1
+### VPS 2: Validator Node 1 (Full Setup)
 
 ```bash
-# .env configuration  
+# .env configuration for a full validator
 SEQUENCER_ID=validator-1
 BOOTSTRAP_MULTIADDR=/ip4/<VPS1-IP>/tcp/9100/p2p/<BOOTSTRAP-PEER-ID>
 PRIVATE_KEY=<unique-key-for-validator-1>
 PUBLIC_IP=<this-vps-public-ip>
 
-# Full validator setup
-ENABLE_LISTENER=true
-ENABLE_DEQUEUER=true
-ENABLE_FINALIZER=true
-ENABLE_CONSENSUS=true
-ENABLE_EVENT_MONITOR=true
+# New Single-Responsibility Architecture Setup
+ENABLE_P2P_GATEWAY=false    # Disabled: using centralized gateway
+ENABLE_AGGREGATOR=true      # Participates in batch consensus
+ENABLE_FINALIZER=true       # Creates project batches
+ENABLE_EVENT_MONITOR=true   # Tracks blockchain events
+
+# Replicas and Scaling Configuration
+AGGREGATOR_REPLICAS=1       # Typically a singleton per validator
+FINALIZER_REPLICAS=3        # Can scale horizontally
 
 # Launch
-./dsv.sh distributed
+./dsv.sh separated
 ```
 
 ### VPS 3: Validator Node 2
 
 ```bash
-# Similar to VPS 2 but with:
+# Similar to VPS 2 with unique configurations
 SEQUENCER_ID=validator-2
 PRIVATE_KEY=<unique-key-for-validator-2>
 PUBLIC_IP=<vps3-public-ip>
 
+# Distributed Setup
+ENABLE_P2P_GATEWAY=false
+ENABLE_AGGREGATOR=true
+ENABLE_FINALIZER=true
+ENABLE_EVENT_MONITOR=true
+
+AGGREGATOR_REPLICAS=1
+FINALIZER_REPLICAS=3
+
 # Launch
-./dsv.sh distributed
+./dsv.sh separated
 ```
+
+#### Deployment Notes
+- The new `./dsv.sh separated` command uses `docker-compose.separated.yml`
+- Each validator now has clear, separate responsibilities
+- Centralized P2P Gateway reduces network complexity
+- Easily scalable finalizer workers
+- Consistent configuration across all validators
 
 ### Verification
 

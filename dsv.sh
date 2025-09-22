@@ -31,6 +31,7 @@ show_usage() {
     echo "Commands:"
     echo "  sequencer     - Launch all-in-one snapshot sequencer (all components hardcoded ON)"
     echo "  sequencer-custom - Launch snapshot sequencer with YOUR .env settings"
+    echo "  separated     - Launch separated architecture (RECOMMENDED for production)"
     echo "  distributed   - Launch distributed components (listener, dequeuer, finalizer)"
     echo "  distributed-debug - Launch distributed with Redis exposed"
     echo "  minimal       - Launch minimal setup (redis + unified)"
@@ -1098,6 +1099,29 @@ case $COMMAND in
         "
         ;;
 
+    separated)
+        print_color "$GREEN" "🚀 Starting Separated Architecture (Production Mode)"
+        print_color "$CYAN" "This runs single-responsibility containers:"
+        print_color "$CYAN" "  - P2P Gateway (singleton): All P2P communication"
+        print_color "$CYAN" "  - Dequeuer (scalable): Process submissions"
+        print_color "$CYAN" "  - Finalizer (scalable): Create batches"
+        print_color "$CYAN" "  - Aggregator (singleton): Consensus/aggregation"
+        print_color "$CYAN" "  - Event Monitor (singleton): Track epochs"
+
+        if [ ! -f docker-compose.separated.yml ]; then
+            print_color "$RED" "Error: docker-compose.separated.yml not found"
+            exit 1
+        fi
+
+        docker compose -f docker-compose.separated.yml up -d
+        if [ $? -eq 0 ]; then
+            print_color "$GREEN" "✅ Separated architecture started successfully"
+            print_color "$YELLOW" "Monitor with: ./dsv.sh logs"
+        else
+            print_color "$RED" "❌ Failed to start separated architecture"
+            exit 1
+        fi
+        ;;
     debug)
         launch_debug
         ;;
