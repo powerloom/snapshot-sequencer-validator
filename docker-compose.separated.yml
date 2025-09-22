@@ -17,13 +17,13 @@ services:
       - sequencer-net
       - dsv-internal-network
 
-  # P2P Listener - Receives submissions from network
-  listener:
+  # P2P Gateway - Singleton for ALL P2P communication
+  p2p-gateway:
     build:
       context: .
-      dockerfile: Dockerfile.snapshot-sequencer
+      dockerfile: Dockerfile.p2p-gateway
     environment:
-      - SEQUENCER_ID=listener-${SEQUENCER_ID:-1}
+      - SEQUENCER_ID=p2p-gateway-${SEQUENCER_ID:-1}
       - P2P_PORT=${P2P_PORT:-9001}
       - REDIS_HOST=redis
       - REDIS_PORT=${REDIS_PORT:-6379}
@@ -34,19 +34,9 @@ services:
       - PRIVATE_KEY=${PRIVATE_KEY}
       - PUBLIC_IP=${PUBLIC_IP}
       - DEBUG_MODE=${DEBUG_MODE:-false}
-      # Component toggles - ONLY LISTENER
-      - ENABLE_LISTENER=true
-      - ENABLE_DEQUEUER=false
-      - ENABLE_FINALIZER=false
-      - ENABLE_BATCH_AGGREGATION=${ENABLE_BATCH_AGGREGATION:-false}
-      - ENABLE_EVENT_MONITOR=false
       # Protocol/Market config
       - PROTOCOL_STATE_CONTRACT=${PROTOCOL_STATE_CONTRACT}
       - DATA_MARKET_ADDRESSES=${DATA_MARKET_ADDRESSES}
-      # Deduplication
-      - DEDUP_ENABLED=${DEDUP_ENABLED:-true}
-      - DEDUP_LOCAL_CACHE_SIZE=${DEDUP_LOCAL_CACHE_SIZE:-10000}
-      - DEDUP_TTL_SECONDS=${DEDUP_TTL_SECONDS:-7200}
     depends_on:
       redis:
         condition: service_healthy
@@ -62,7 +52,7 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  # Dequeuer - Processes submissions from Redis queue
+  # Dequeuer - Processes submissions from Redis queue (scalable)
   dequeuer:
     build:
       context: .
@@ -78,7 +68,7 @@ services:
       - ENABLE_LISTENER=false
       - ENABLE_DEQUEUER=true
       - ENABLE_FINALIZER=false
-      - ENABLE_BATCH_AGGREGATION=${ENABLE_BATCH_AGGREGATION:-false}
+      - ENABLE_BATCH_AGGREGATION=false
       - ENABLE_EVENT_MONITOR=false
       # Dequeuer specific
       - DEQUEUER_WORKERS=${DEQUEUER_WORKERS:-5}
@@ -98,7 +88,7 @@ services:
       - dsv-internal-network
     restart: unless-stopped
     deploy:
-      replicas: ${DEQUEUER_REPLICAS:-2}  # Can scale horizontally
+      replicas: ${DEQUEUER_REPLICAS:-2}
     logging:
       driver: "json-file"
       options:
@@ -150,28 +140,23 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  # Finalizer - Creates and submits finalized batches
+  # Finalizer - Creates batches, stores in IPFS (scalable)
   finalizer:
     build:
       context: .
       dockerfile: Dockerfile.snapshot-sequencer
     environment:
       - SEQUENCER_ID=finalizer-${SEQUENCER_ID:-1}
-      - P2P_PORT=${P2P_PORT:-9001}
-      - BOOTSTRAP_MULTIADDR=${BOOTSTRAP_MULTIADDR}
-      - RENDEZVOUS_POINT=${RENDEZVOUS_POINT:-powerloom-snapshot-sequencer-network}
-      - PRIVATE_KEY=${P2P_PRIVATE_KEY:-}
-      - PUBLIC_IP=${PUBLIC_IP:-}
       - REDIS_HOST=redis
       - REDIS_PORT=${REDIS_PORT:-6379}
       - REDIS_DB=${REDIS_DB:-0}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - DEBUG_MODE=${DEBUG_MODE:-false}
-      # Component toggles - FINALIZER + BATCH AGGREGATION
+      # Component toggles - ONLY FINALIZER (NO AGGREGATION)
       - ENABLE_LISTENER=false
       - ENABLE_DEQUEUER=false
       - ENABLE_FINALIZER=true
-      - ENABLE_BATCH_AGGREGATION=${ENABLE_BATCH_AGGREGATION:-true}
+      - ENABLE_BATCH_AGGREGATION=false  # Aggregation is separate now
       - ENABLE_EVENT_MONITOR=false
       # Storage configuration
       - STORAGE_PROVIDER=${STORAGE_PROVIDER:-ipfs}
@@ -181,6 +166,9 @@ services:
       - PROTOCOL_STATE_CONTRACT=${PROTOCOL_STATE_CONTRACT}
       - DATA_MARKET_ADDRESSES=${DATA_MARKET_ADDRESSES}
       - SUBMISSION_WINDOW_DURATION=${SUBMISSION_WINDOW_DURATION:-60}
+      # Finalizer specific
+      - FINALIZER_WORKERS=${FINALIZER_WORKERS:-5}
+      - FINALIZATION_BATCH_SIZE=${FINALIZATION_BATCH_SIZE:-20}
     depends_on:
       redis:
         condition: service_healthy
@@ -189,46 +177,39 @@ services:
       - dsv-internal-network
     restart: unless-stopped
     deploy:
-      replicas: ${FINALIZER_REPLICAS:-2}  # Redundancy
+      replicas: ${FINALIZER_REPLICAS:-2}
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
 
-  # Optional: Consensus component (Phase 3)
-  consensus:
+  # Aggregator - Singleton for consensus/batch aggregation
+  aggregator:
     build:
       context: .
-      dockerfile: Dockerfile.snapshot-sequencer
+      dockerfile: Dockerfile.aggregator
     environment:
-      - SEQUENCER_ID=consensus-${SEQUENCER_ID:-1}
-      - P2P_PORT=9002  # Different port for consensus P2P
+      - SEQUENCER_ID=aggregator-${SEQUENCER_ID:-1}
       - REDIS_HOST=redis
       - REDIS_PORT=${REDIS_PORT:-6379}
       - REDIS_DB=${REDIS_DB:-0}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - DEBUG_MODE=${DEBUG_MODE:-false}
-      # Component toggles - ONLY CONSENSUS
-      - ENABLE_LISTENER=false
-      - ENABLE_DEQUEUER=false
-      - ENABLE_FINALIZER=false
-      - ENABLE_BATCH_AGGREGATION=${ENABLE_BATCH_AGGREGATION:-true}
-      - ENABLE_EVENT_MONITOR=false
-      # Consensus specific
-      - PRIVATE_KEY=${CONSENSUS_PRIVATE_KEY:-}
-      - BOOTSTRAP_MULTIADDR=${CONSENSUS_BOOTSTRAP:-}
+      # Storage configuration for aggregated results
+      - IPFS_HOST=${IPFS_HOST:-localhost:5001}
+      # Protocol/Market config
+      - PROTOCOL_STATE_CONTRACT=${PROTOCOL_STATE_CONTRACT}
+      - DATA_MARKET_ADDRESSES=${DATA_MARKET_ADDRESSES}
     depends_on:
       redis:
         condition: service_healthy
-    ports:
-      - "9002:9002"  # Consensus P2P port
+      p2p-gateway:
+        condition: service_started
     networks:
       - sequencer-net
       - dsv-internal-network
     restart: unless-stopped
-    profiles:
-      - consensus  # Only start if consensus profile is active
     logging:
       driver: "json-file"
       options:

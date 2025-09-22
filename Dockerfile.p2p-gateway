@@ -1,0 +1,34 @@
+# Build stage
+FROM golang:1.25-alpine AS builder
+
+RUN apk add --no-cache git build-base
+
+WORKDIR /app
+
+# Copy go mod files
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build the P2P Gateway binary
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o p2p-gateway cmd/p2p-gateway/main.go
+
+# Runtime stage
+FROM alpine:latest
+
+RUN apk --no-cache add ca-certificates bash
+
+WORKDIR /root/
+
+# Copy the binary from builder
+COPY --from=builder /app/p2p-gateway .
+
+# Copy ABI files if needed
+COPY --from=builder /app/abi ./abi
+
+# Expose P2P port
+EXPOSE 9001
+
+ENTRYPOINT ["./p2p-gateway"]

@@ -1407,7 +1407,7 @@ func (s *UnifiedSequencer) runBatchAggregation() {
 			select {
 			case <-ticker.C:
 				epoch := uint64(time.Now().Unix() / 30)
-				log.Infof("Consensus: Processing epoch %d (P2P consensus not enabled)", epoch)
+				log.Infof("Batch Aggregation: Processing epoch %d locally (P2P broadcast disabled)", epoch)
 			case <-s.ctx.Done():
 				log.Info("Batch aggregation component shutting down")
 				return
