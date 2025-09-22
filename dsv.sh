@@ -77,7 +77,7 @@ start_services() {
         print_color "$YELLOW" "Warning: .env file not found. Using defaults."
     fi
 
-    $DOCKER_COMPOSE_CMD -f docker-compose.separated.yml up -d
+    $DOCKER_COMPOSE_CMD -f docker-compose.separated.yml up -d --build
 
     if [ $? -eq 0 ]; then
         print_color "$GREEN" "✅ Services started successfully"
