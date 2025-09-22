@@ -1,5 +1,3 @@
-version: '3.8'
-
 # Debug override - exposes Redis port for monitoring
 # Usage: docker-compose -f docker-compose.snapshot-sequencer.yml -f docker-compose.debug.yml up
 
