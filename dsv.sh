@@ -133,7 +133,14 @@ monitor_pipeline() {
         return 1
     fi
 
+    # Get actual Redis port from environment or docker
     REDIS_PORT=${REDIS_PORT:-6379}
+
+    # If Redis container exists, get its actual port
+    REDIS_CONTAINER_PORT=$(docker exec $CONTAINER printenv REDIS_PORT 2>/dev/null)
+    if [ ! -z "$REDIS_CONTAINER_PORT" ]; then
+        REDIS_PORT=$REDIS_CONTAINER_PORT
+    fi
 
     # Active windows
     print_color "$CYAN" "📂 Active Submission Windows:"
