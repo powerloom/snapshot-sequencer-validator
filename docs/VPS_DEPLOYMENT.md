@@ -17,7 +17,7 @@
 
 ## Overview
 
-The Powerloom Decentralized Sequencer Validator provides two deployment systems:
+The Powerloom Decentralized Sequencer Validator uses a separated architecture for production deployments:
 
 ### System Architecture: Single-Responsibility Containers
 
@@ -112,21 +112,25 @@ DATA_MARKET_ADDRESSES=0x0C2E22fe7526fAeF28E7A58c84f8723dEFcE200c
 
 ### 3. Launch Sequencer
 ```bash
-# Quick start with default settings
+# Quick start with default settings (development)
 ./dsv.sh unified
 
-# Or distributed mode for production
-./dsv.sh distributed
+# RECOMMENDED: Separated mode for production
+./dsv.sh separated
 
-# Full validator mode with consensus
+# Full validator mode with comprehensive consensus
 ./dsv.sh validator
 ```
 
-#### New Launch Options
-- `validator`: Deploys full validator with P2P consensus support
-- Added comprehensive P2P consensus deployment mode
-- Supports batch details and consensus tracking
-
+#### Launch Options
+- `unified`: Single container with configurable components (development/testing)
+- `separated`: RECOMMENDED production mode with single-responsibility containers
+  - Solves port conflict issues in distributed mode
+  - Clear component separation
+  - Improved horizontal scalability
+- `validator`: Deploys full P2P consensus-enabled deployment
+  - Supports detailed batch details and consensus tracking
+  - Recommended for production validator nodes
 ## Configuration
 
 ### Environment Variables Reference
@@ -241,11 +245,14 @@ The `dsv.sh` script is the primary tool for managing your sequencer deployment.
 # Start sequencer with custom .env settings
 ./dsv.sh sequencer-custom
 
-# Start distributed mode (separate containers per component)
-./dsv.sh distributed
+# Start separated mode (RECOMMENDED - separate binaries with clean architecture)
+./dsv.sh separated
 
-# Start distributed mode with Redis exposed for debugging
-./dsv.sh distributed-debug
+# Start separated mode with custom .env settings
+./dsv.sh separated-custom
+
+# Legacy distributed mode (DEPRECATED - has port conflicts)
+# ./dsv.sh distributed  # DO NOT USE - all containers try to bind port 9001
 
 # Start minimal setup (redis + unified)
 ./dsv.sh minimal
@@ -607,10 +614,6 @@ docker exec powerloom-sequencer-validator-listener-1 \
   curl -s http://localhost:8001/peers | jq '.peer_count'
 
 # Monitor Redis queue depth
-docker exec powerloom-sequencer-validator-redis-1 \
-  redis-cli LLEN submissionQueue
-```
-
 ## Deployment Modes
 
 ### Development/Testing Mode
@@ -632,18 +635,26 @@ EOF
 ./dsv.sh unified
 ```
 
-### Separated Mode (Production)
+### Separated Mode (Production - RECOMMENDED)
 
-New architecture with single-responsibility containers:
+**THIS IS THE DEFAULT AND RECOMMENDED DEPLOYMENT MODE**
+
+The separated architecture solves the critical port conflict issue in the old distributed mode where all containers tried to bind to port 9001. This new architecture uses dedicated binaries with clean single-responsibility design:
 
 ```bash
 # Configure .env for separated mode
 cat > .env << EOF
+# SOLVED: Port 9001 conflict from distributed mode
+# - P2P Gateway: Dedicated binary owns port 9001 exclusively
+# - Aggregator: Separate binary for consensus (no P2P port needed)
+# - Finalizer: Uses unified binary with ENABLE_BATCH_AGGREGATION=false
+# - Clean separation prevents any port binding conflicts
+
 # Component Scaling
-P2P_GATEWAY_REPLICAS=1     # Centralized P2P communication
-AGGREGATOR_REPLICAS=1      # Consensus batch aggregation
-FINALIZER_REPLICAS=3       # Batch creation (horizontally scalable)
-EVENT_MONITOR_REPLICAS=1   # Blockchain event tracking
+P2P_GATEWAY_REPLICAS=1     # SINGLETON: Centralized P2P gateway
+AGGREGATOR_REPLICAS=1      # SINGLETON: Consensus batch aggregation
+FINALIZER_REPLICAS=3       # SCALABLE: Batch creation workers
+EVENT_MONITOR_REPLICAS=1   # SINGLETON: Blockchain event tracking
 
 # P2P Configuration
 BOOTSTRAP_MULTIADDR=/ip4/159.203.190.22/tcp/9100/p2p/...
@@ -656,15 +667,26 @@ PROTOCOL_STATE_CONTRACT=0xE88E5f64AEB483d7057645326AdDFA24A3B312DF
 DATA_MARKET_ADDRESSES=0x0C2E22fe7526fAeF28E7A58c84f8723dEFcE200c
 EOF
 
-# Launch
+# Launch Separated Mode
 ./dsv.sh separated
 ```
 
+**Resolved Architecture Challenges:**
+- **Port Conflict**: P2P Gateway owns port 9001 exclusively
+- **Scalability**: Horizontal scaling for finalizer workers
+- **Clear Responsibilities**: Single binary per component
+
 **Components in Separated Mode:**
-- **p2p-gateway**: Centralized P2P communication (singleton)
-- **aggregator**: Performs consensus and batch aggregation (singleton)
-- **finalizer**: Creates project-specific batches (horizontally scalable)
-- **event-monitor**: Tracks blockchain epoch events (singleton)
+- **p2p-gateway**: Centralized P2P communication (port 9001)
+  - Resolves previous port binding issues
+  - Single point of message routing
+- **aggregator**: Performs consensus and batch aggregation
+  - Merkle tree generation
+  - IPFS storage of consensus results
+- **finalizer**: Creates project-specific batches
+  - Horizontally scalable workers
+  - No longer handles complex aggregation logic
+- **event-monitor**: Tracks blockchain epoch events
 
 ### Custom Mode (Flexible Configuration)
 
@@ -686,82 +708,57 @@ ENABLE_EVENT_MONITOR=false
 - Centralized P2P communication
 - Simplified network topology
 - More predictable performance characteristics
-
 ## Multi-VPS Setup
 
-### VPS 1: P2P Gateway (Bootstrap Node)
+### VPS 1: Bootstrap Node
 
 ```bash
-# .env configuration for P2P Gateway
-SEQUENCER_ID=p2p-gateway-1
+# .env configuration
+SEQUENCER_ID=bootstrap-node
 P2P_PORT=9100
-
-# P2P Gateway Configurations
-ENABLE_P2P_GATEWAY=true
-ENABLE_AGGREGATOR=false
-ENABLE_FINALIZER=false
-ENABLE_EVENT_MONITOR=false
-
+ENABLE_LISTENER=true
+ENABLE_DEQUEUER=false
 # No BOOTSTRAP_MULTIADDR (it IS the bootstrap)
 
 # Launch
-./dsv.sh separated
+./dsv.sh sequencer-custom
 
 # Get multiaddr for other nodes
-docker logs powerloom-sequencer-validator-p2p-gateway-1 | grep "P2P host started"
+docker logs powerloom-sequencer-validator-sequencer-custom-1 | grep "P2P host started"
 # Share the multiaddr with other validators
 ```
 
-### VPS 2: Validator Node 1 (Full Setup)
+### VPS 2: Validator Node 1
 
 ```bash
-# .env configuration for a full validator
+# .env configuration  
 SEQUENCER_ID=validator-1
 BOOTSTRAP_MULTIADDR=/ip4/<VPS1-IP>/tcp/9100/p2p/<BOOTSTRAP-PEER-ID>
 PRIVATE_KEY=<unique-key-for-validator-1>
 PUBLIC_IP=<this-vps-public-ip>
 
-# New Single-Responsibility Architecture Setup
-ENABLE_P2P_GATEWAY=false    # Disabled: using centralized gateway
-ENABLE_AGGREGATOR=true      # Participates in batch consensus
-ENABLE_FINALIZER=true       # Creates project batches
-ENABLE_EVENT_MONITOR=true   # Tracks blockchain events
-
-# Replicas and Scaling Configuration
-AGGREGATOR_REPLICAS=1       # Typically a singleton per validator
-FINALIZER_REPLICAS=3        # Can scale horizontally
+# Full validator setup
+ENABLE_LISTENER=true
+ENABLE_DEQUEUER=true
+ENABLE_FINALIZER=true
+ENABLE_CONSENSUS=true
+ENABLE_EVENT_MONITOR=true
 
 # Launch
-./dsv.sh separated
+./dsv.sh distributed
 ```
 
 ### VPS 3: Validator Node 2
 
 ```bash
-# Similar to VPS 2 with unique configurations
+# Similar to VPS 2 but with:
 SEQUENCER_ID=validator-2
 PRIVATE_KEY=<unique-key-for-validator-2>
 PUBLIC_IP=<vps3-public-ip>
 
-# Distributed Setup
-ENABLE_P2P_GATEWAY=false
-ENABLE_AGGREGATOR=true
-ENABLE_FINALIZER=true
-ENABLE_EVENT_MONITOR=true
-
-AGGREGATOR_REPLICAS=1
-FINALIZER_REPLICAS=3
-
 # Launch
-./dsv.sh separated
+./dsv.sh distributed
 ```
-
-#### Deployment Notes
-- The new `./dsv.sh separated` command uses `docker-compose.separated.yml`
-- Each validator now has clear, separate responsibilities
-- Centralized P2P Gateway reduces network complexity
-- Easily scalable finalizer workers
-- Consistent configuration across all validators
 
 ### Verification
 
