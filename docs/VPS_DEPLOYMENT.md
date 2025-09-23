@@ -112,22 +112,16 @@ DATA_MARKET_ADDRESSES=0x0C2E22fe7526fAeF28E7A58c84f8723dEFcE200c
 
 ### 3. Launch Sequencer
 ```bash
-# Start production services
+# Start production services (separated architecture)
 ./dsv.sh start
 
-# For development/testing only
+# For development/testing only (unified mode)
 ./dsv.sh dev
 ```
 
-#### Launch Options
-- `unified`: Single container with configurable components (development/testing)
-- `separated`: RECOMMENDED production mode with single-responsibility containers
-  - Solves port conflict issues in distributed mode
-  - Clear component separation
-  - Improved horizontal scalability
-- `validator`: Deploys full P2P consensus-enabled deployment
-  - Supports detailed batch details and consensus tracking
-  - Recommended for production validator nodes
+#### Launch Modes
+- `start`: Production mode with separated architecture (P2P Gateway, Aggregator, Dequeuer, Finalizer, Event Monitor)
+- `dev`: Development mode with unified single container
 ## Configuration
 
 ### Environment Variables Reference
@@ -236,168 +230,90 @@ The `dsv.sh` script is the primary tool for managing your sequencer deployment.
 #### Available Commands
 
 ```bash
-# Start production separated architecture
-./dsv.sh start
+# Main Commands
+./dsv.sh start         # Start separated architecture (production)
+./dsv.sh stop          # Stop all services
+./dsv.sh restart       # Restart all services
+./dsv.sh status        # Show service status
+./dsv.sh clean         # Stop and remove all containers/volumes
 
-# Stop all services
-./dsv.sh stop
+# Monitoring
+./dsv.sh monitor       # Monitor pipeline status
+./dsv.sh logs          # Show all logs (with optional tail count)
 
-# Restart services
-./dsv.sh restart
+# Component-specific logs
+./dsv.sh p2p-logs [N]         # P2P Gateway logs
+./dsv.sh aggregator-logs [N]  # Aggregator logs
+./dsv.sh finalizer-logs [N]   # Finalizer logs
+./dsv.sh dequeuer-logs [N]    # Dequeuer logs
+./dsv.sh event-logs [N]       # Event monitor logs
+./dsv.sh redis-logs [N]       # Redis logs
 
-# Show service status
-./dsv.sh status
+# Development
+./dsv.sh build         # Build Go binaries (NOT Docker images)
+./dsv.sh dev           # Start unified sequencer (single container)
 
-# Clean all containers and volumes
-./dsv.sh clean
-
-# Monitor batch preparation status
-./dsv.sh monitor
-
-# Comprehensive pipeline monitoring
-./dsv.sh pipeline
-
-# NEW: Consensus/aggregation monitoring commands
-./dsv.sh consensus                           # Show consensus status with validator batches
-./dsv.sh consensus-logs [N]                  # Show consensus-related logs
-./dsv.sh aggregated-batch [epoch]            # Show complete local aggregation view
-./dsv.sh validator-details <id> [epoch]      # Show specific validator's proposals
-
-# Individual component logs (with optional line count)
-./dsv.sh listener-logs [N]                   # P2P listener logs
-./dsv.sh dqr-logs [N]                        # Dequeuer worker logs
-./dsv.sh finalizer-logs [N]                  # Finalizer logs
-./dsv.sh event-monitor-logs [N]              # Event monitor logs
-./dsv.sh redis-logs [N]                      # Redis logs
-
-# Combined pipeline logs
-./dsv.sh collection-logs [N]                 # Dequeuer + Event Monitor
-./dsv.sh finalization-logs [N]               # Event Monitor + Finalizer
-./dsv.sh pipeline-logs [N]                   # All three components
-
-# Service status
-./dsv.sh status                              # Show status of all services
-
-# View usage help
-./dsv.sh help
+# Help
+./dsv.sh help          # Show usage information
 ```
 
-#### New Consensus Monitoring Commands
-
-**consensus**: Shows comprehensive consensus/aggregation status
-```bash
-./dsv.sh consensus
-# Displays:
-# - Recent aggregation status with validator batch counts
-# - Consensus results with IPFS CIDs and Merkle roots
-# - Validator batches received for current epochs
-# - Vote distribution across validators
-```
-
-**consensus-logs [N]**: Shows filtered consensus-related logs
-```bash
-./dsv.sh consensus-logs 50
-# Shows last 50 lines of consensus activity including:
-# - Batch exchange between validators
-# - Aggregation processing
-# - Vote counting and consensus determination
-```
-
-**aggregated-batch [epoch]**: Shows complete local aggregation view
-```bash
-./dsv.sh aggregated-batch 123
-# Displays for epoch 123:
-# - Individual validator batch contributions
-# - Project-by-project vote distribution
-# - Consensus winners and vote counts
-# - Validator contribution breakdown
-# - Local consensus determination results
-```
-
-**validator-details <id> [epoch]**: Shows specific validator's proposals
-```bash
-./dsv.sh validator-details validator1 123
-# Shows validator1's batch for epoch 123:
-# - IPFS CID and Merkle root of their batch
-# - Specific project proposals they submitted
-# - Comparison with final consensus results
-# - Which of their proposals were accepted/rejected
-```
-
-#### Enhanced Clean Command
-
-**clean [-y|--yes]**: Now supports auto-confirmation for automation
-```bash
-./dsv.sh clean -y        # Skip confirmation prompt
-./dsv.sh clean --yes     # Also skips confirmation
-./dsv.sh clean           # Still prompts for confirmation
-```
 
 #### Command Details
 
-**unified**: Launches single container with all components enabled based on .env toggles
+**start**: Launches separated architecture with Docker Compose
 ```bash
-./dsv.sh unified
-# Uses: docker-compose.snapshot-sequencer.yml
-# Service: sequencer-all
+./dsv.sh start
+# Uses: docker-compose.separated.yml
+# Runs: docker compose -f docker-compose.separated.yml up -d --build
+# Services: p2p-gateway, aggregator, dequeuer, finalizer, event-monitor, redis
 ```
 
-**distributed**: Production mode with separate containers for each component
+**dev**: Development mode with unified sequencer
 ```bash
-./dsv.sh distributed
-# Uses: docker-compose.distributed.yml
-# Services: listener, dequeuer, event-monitor, finalizer, consensus
-# Components scale based on REPLICAS variables
+./dsv.sh dev
+# Uses: default docker-compose.yml
+# Runs single container with all components based on .env toggles
 ```
 
-**distributed-debug**: Like distributed but with Redis port exposed
+**build**: Builds Go binaries (NOT Docker images)
 ```bash
-./dsv.sh distributed-debug
-# Uses: docker-compose.distributed.yml + docker-compose.debug.yml
-# Exposes Redis on port 6379 for external monitoring
+./dsv.sh build
+# Runs: ./build-binary.sh
+# Creates binaries in bin/ directory:
+#   - bin/unified
+#   - bin/p2p-gateway
+#   - bin/aggregator
+#   - bin/sequencer-consensus-test
 ```
 
-**sequencer-custom**: Uses your .env settings exactly as configured
+**monitor**: Shows pipeline status from Redis
 ```bash
-./dsv.sh sequencer-custom
-# Uses: docker-compose.snapshot-sequencer.yml
-# Service: sequencer-custom
-# Reads all settings from .env
+./dsv.sh monitor
+# Connects to Redis container to show:
+# - Active submission windows
+# - Queue depths
+# - Recent finalized batches
 ```
 
-**monitor**: Checks batch preparation status
+### Docker Image Building
+
+Docker images are built automatically when using `./dsv.sh start`:
+
 ```bash
-./dsv.sh monitor [container-name]
-# Executes monitoring script inside specified or auto-detected container
-# Shows: submission windows, ready batches, queue depth, statistics
+# The start command includes --build flag
+./dsv.sh start
+# Internally runs: docker compose -f docker-compose.separated.yml up -d --build
 ```
 
-### build-snapshot-sequencer.sh - Docker Image Builder
-
-Builds the Docker image for the snapshot sequencer:
+For manual Docker image rebuilding:
 
 ```bash
-# Build the Docker image
-./build-snapshot-sequencer.sh
+# Force rebuild with no cache
+docker compose -f docker-compose.separated.yml build --no-cache
 
-# What it does:
-# 1. Builds from Dockerfile.snapshot-sequencer
-# 2. Tags as snapshot-sequencer:latest
-# 3. Includes ABI files in /app/abi/
-# 4. Creates multi-binary image (unified, consensus-test)
-```
-
-### start.sh - Consensus Test Launcher
-
-For running the consensus test system:
-
-```bash
-# Start consensus test
-./dsv.sh
-
-# Uses: docker-compose.yml
-# Launches: sequencer-consensus-test binary
-# Purpose: Testing consensus mechanism
+# Or remove images first
+docker rmi $(docker images | grep snapshot-sequencer | awk '{print $3}') -f
+docker compose -f docker-compose.separated.yml build
 ```
 
 ## Monitoring Tools
@@ -458,57 +374,23 @@ The comprehensive monitoring guide covers:
 - Performance optimization and batch size tuning
 - Troubleshooting procedures and health indicators
 - Advanced monitoring queries and metrics collection
-- **NEW: Consensus monitoring and validator batch tracking**
-
-### Consensus Monitoring Workflow
-
-The new consensus monitoring commands provide complete transparency into the batch aggregation process:
-
-1. **Monitor Overall Consensus Activity**:
-   ```bash
-   ./dsv.sh consensus
-   # Shows recent aggregation status and consensus results
-   ```
-
-2. **Track Specific Epoch Aggregation**:
-   ```bash
-   ./dsv.sh aggregated-batch 12345
-   # Shows complete view of how epoch 12345 was aggregated locally
-   # Includes all validator contributions and vote distribution
-   ```
-
-3. **Examine Individual Validator Contributions**:
-   ```bash
-   ./dsv.sh validator-details validator_abc 12345
-   # Shows what validator_abc proposed for epoch 12345
-   # Compares their proposals with final consensus
-   ```
-
-4. **Debug Consensus Issues**:
-   ```bash
-   ./dsv.sh consensus-logs 100
-   # Shows recent consensus activity logs
-   # Useful for debugging batch exchange and aggregation issues
-   ```
-
-**Key Insight**: Since each validator maintains their own local aggregation copy, these commands show YOUR validator's view of the consensus process. Other validators may have slightly different aggregated results based on which batches they received.
 
 ### Component Log Shortcuts
 
 New dedicated log commands for each component support optional line count for initial view and continuous follow:
 
 ```bash
-# View P2P listener logs (default: follow)
-./dsv.sh listener-logs
+# View P2P Gateway logs
+./dsv.sh p2p-logs
 
-# View last 50 lines of listener logs and continue following
-./dsv.sh listener-logs 50
+# View last 50 lines of P2P logs and continue following
+./dsv.sh p2p-logs 50
 
-# View dequeuer worker logs (now with enhanced details)
-./dsv.sh dqr-logs
+# View dequeuer logs
+./dsv.sh dequeuer-logs
 
 # View last 100 lines of dequeuer logs and continue following
-./dsv.sh dqr-logs 100
+./dsv.sh dequeuer-logs 100
 
 # View finalizer logs
 ./dsv.sh finalizer-logs
@@ -517,10 +399,10 @@ New dedicated log commands for each component support optional line count for in
 ./dsv.sh finalizer-logs 75
 
 # View event monitor logs
-./dsv.sh event-monitor-logs
+./dsv.sh event-logs
 
 # View last 25 lines of event monitor logs and continue following
-./dsv.sh event-monitor-logs 25
+./dsv.sh event-logs 25
 
 # View Redis logs
 ./dsv.sh redis-logs
@@ -531,15 +413,8 @@ New dedicated log commands for each component support optional line count for in
 # View all logs
 ./dsv.sh logs
 
-# Combined pipeline logs for debugging (NEW)
-./dsv.sh collection-logs      # Dequeuer + Event Monitor together
-./dsv.sh collection-logs 200  # Show last 200 lines
-
-./dsv.sh finalization-logs    # Event Monitor + Finalizer together
-./dsv.sh finalization-logs 50 # Show last 50 lines
-
-./dsv.sh pipeline-logs        # All three: Dequeuer + Event Monitor + Finalizer
-./dsv.sh pipeline-logs 150    # Show last 150 lines
+# View last N lines of all logs
+./dsv.sh logs 200
 ```
 
 **Log Command Usage Notes:**
@@ -602,16 +477,17 @@ Single container with configurable components:
 ```bash
 # Configure .env
 cat > .env << EOF
-ENABLE_P2P_GATEWAY=true
-ENABLE_AGGREGATOR=true
+ENABLE_LISTENER=true
+ENABLE_DEQUEUER=true
 ENABLE_FINALIZER=false
 ENABLE_EVENT_MONITOR=false
+ENABLE_BATCH_AGGREGATION=false
 BOOTSTRAP_MULTIADDR=/ip4/159.203.190.22/tcp/9100/p2p/...
 PRIVATE_KEY=<your-key>
 EOF
 
-# Launch
-./dsv.sh unified
+# Launch development mode
+./dsv.sh dev
 ```
 
 ### Separated Mode (Production - RECOMMENDED)
@@ -646,8 +522,8 @@ PROTOCOL_STATE_CONTRACT=0xE88E5f64AEB483d7057645326AdDFA24A3B312DF
 DATA_MARKET_ADDRESSES=0x0C2E22fe7526fAeF28E7A58c84f8723dEFcE200c
 EOF
 
-# Launch Separated Mode
-./dsv.sh separated
+# Launch Production Mode
+./dsv.sh start
 ```
 
 **Resolved Architecture Challenges:**
@@ -667,18 +543,16 @@ EOF
   - No longer handles complex aggregation logic
 - **event-monitor**: Tracks blockchain epoch events
 
-### Custom Mode (Flexible Configuration)
+### Custom Configuration
 
-Configure exactly what you need:
+To run with specific components only, configure .env then use:
 
 ```bash
-# Example: Only P2P Gateway
-ENABLE_P2P_GATEWAY=true
-ENABLE_AGGREGATOR=false
-ENABLE_FINALIZER=false
-ENABLE_EVENT_MONITOR=false
+# For production (separated architecture)
+./dsv.sh start
 
-./dsv.sh separated-custom
+# For development (unified container)
+./dsv.sh dev
 ```
 
 #### Deployment Architecture Benefits
@@ -700,10 +574,10 @@ ENABLE_DEQUEUER=false
 # No BOOTSTRAP_MULTIADDR (it IS the bootstrap)
 
 # Launch
-./dsv.sh sequencer-custom
+./dsv.sh dev
 
 # Get multiaddr for other nodes
-docker logs powerloom-sequencer-validator-sequencer-custom-1 | grep "P2P host started"
+docker logs snapshot-sequencer-validator-unified-1 | grep "P2P host started"
 # Share the multiaddr with other validators
 ```
 
@@ -724,7 +598,7 @@ ENABLE_CONSENSUS=true
 ENABLE_EVENT_MONITOR=true
 
 # Launch
-./dsv.sh distributed
+./dsv.sh start
 ```
 
 ### VPS 3: Validator Node 2
@@ -736,7 +610,7 @@ PRIVATE_KEY=<unique-key-for-validator-2>
 PUBLIC_IP=<vps3-public-ip>
 
 # Launch
-./dsv.sh distributed
+./dsv.sh start
 ```
 
 ### Verification
@@ -791,9 +665,32 @@ docker compose -f docker-compose.distributed.yml build --no-cache
 
 #### Redis Connection Failed
 
-**Problem**: `Failed to connect to Redis: connection refused`
+**Problem**: `Failed to connect to Redis: connection refused` or `ERR AUTH <password> called without any password configured`
 
-**Solution**:
+**Solution 1 - Inline Comments in .env File**:
+
+Docker Compose does NOT strip inline comments from .env files! This is a common issue:
+
+```bash
+# WRONG - Docker Compose will include "# comment" as the password value!
+REDIS_PASSWORD=            # Password (leave empty if no auth)
+
+# CORRECT - Comment on separate line
+# Password (leave empty if no auth)
+REDIS_PASSWORD=
+```
+
+If you see `ERR AUTH <password> called without any password configured`, check your .env file for inline comments. Fix:
+```bash
+# Edit .env file and remove inline comments
+nano .env
+# Change any lines like: REDIS_PASSWORD=    # comment
+# To just: REDIS_PASSWORD=
+# Save and restart
+./dsv.sh restart
+```
+
+**Solution 2 - Connection Refused**:
 ```bash
 # For Docker deployment, ensure REDIS_HOST=redis
 echo "REDIS_HOST=redis" >> .env
@@ -803,7 +700,24 @@ echo "REDIS_HOST=localhost" >> .env
 
 # Restart services
 ./dsv.sh stop
-./dsv.sh unified
+./dsv.sh start
+```
+
+**Solution 2 - AUTH Error with Empty Password** (Fixed in latest version):
+
+If you see `ERR AUTH <password> called without any password configured` when REDIS_PASSWORD is empty:
+
+```bash
+# This was a bug in cmd/unified/main.go where empty passwords were still sent to Redis
+# Fixed in commit: Modified Redis connection to only set password if not empty
+
+# To apply the fix:
+1. Pull latest code: git pull
+2. Rebuild Docker images with no cache:
+   docker compose -f docker-compose.separated.yml build --no-cache
+3. Restart: ./dsv.sh restart
+
+# The fix ensures empty REDIS_PASSWORD doesn't trigger AUTH
 ```
 
 #### JSON Array Parsing Errors
@@ -985,6 +899,63 @@ screen -S sequencer
 - **GitHub Issues**: https://github.com/powerloom/snapshot-sequencer-validator/issues
 - **Documentation**: Check `/docs` directory for additional guides
 - **Community**: Join our Discord for support
+
+## Docker Image Rebuilding
+
+### When to Rebuild
+
+You need to rebuild Docker images when:
+- Code changes are made (e.g., bug fixes)
+- Dependencies are updated
+- Configuration changes require new binaries
+
+### Rebuild Process
+
+```bash
+# Method 1: Using dsv.sh (includes --build flag)
+./dsv.sh stop
+./dsv.sh start  # Automatically runs with --build
+
+# Method 2: Force complete rebuild (REQUIRED when --no-cache doesn't work)
+./dsv.sh stop
+
+# Remove ALL related images to force rebuild
+docker rmi $(docker images | grep -E '(snapshot-sequencer|sequencer-validator)' | awk '{print $3}') -f 2>/dev/null || true
+
+# CRITICAL: Clear builder cache completely
+docker builder prune -af
+
+# Also remove any dangling images
+docker image prune -f
+
+# Now rebuild from scratch
+docker compose -f docker-compose.separated.yml build --no-cache
+
+# Start the services
+./dsv.sh start
+
+# Method 3: Rebuild specific service
+docker compose -f docker-compose.separated.yml build --no-cache p2p-gateway
+./dsv.sh restart
+```
+
+### Verifying Rebuild
+
+```bash
+# Check image creation times
+docker images | grep snapshot-sequencer
+
+# Verify code changes are applied (example for Redis fix)
+docker exec <container> grep -A5 "RedisPassword" /app/main.go
+```
+
+## Recent Updates (September 22, 2025)
+
+### Bug Fixes
+- **Redis Empty Password Handling**: Fixed issue where empty REDIS_PASSWORD caused AUTH errors in separated mode
+  - File: `cmd/unified/main.go` lines 107-114
+  - Now only sets password in Redis options if not empty
+  - Matches behavior of P2P Gateway and Aggregator components
 
 ## Recent Updates (September 9, 2025)
 

@@ -46,9 +46,10 @@ func NewP2PGateway(cfg *config.Settings) (*P2PGateway, error) {
 		Addr: fmt.Sprintf("%s:%s", cfg.RedisHost, cfg.RedisPort),
 		DB:   cfg.RedisDB,
 	}
-	// Only set password if it's not empty
-	if cfg.RedisPassword != "" {
-		redisOpts.Password = cfg.RedisPassword
+	// Only set password if it's not empty (trim spaces first)
+	password := strings.TrimSpace(cfg.RedisPassword)
+	if password != "" {
+		redisOpts.Password = password
 	}
 	redisClient := redis.NewClient(redisOpts)
 

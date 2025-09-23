@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -108,9 +109,10 @@ func main() {
 			Addr: redisAddr,
 			DB:   cfg.RedisDB,
 		}
-		// Only set password if it's not empty
-		if cfg.RedisPassword != "" {
-			redisOpts.Password = cfg.RedisPassword
+		// Only set password if it's not empty (trim spaces first)
+		password := strings.TrimSpace(cfg.RedisPassword)
+		if password != "" {
+			redisOpts.Password = password
 		}
 		redisClient = redis.NewClient(redisOpts)
 
