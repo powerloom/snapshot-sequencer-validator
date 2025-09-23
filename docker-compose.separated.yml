@@ -13,7 +13,6 @@ services:
       retries: 5
     networks:
       - sequencer-net
-      - dsv-internal-network
 
   # P2P Gateway - Singleton for ALL P2P communication
   p2p-gateway:
@@ -42,7 +41,6 @@ services:
       - "${P2P_PORT:-9001}:${P2P_PORT:-9001}"
     networks:
       - sequencer-net
-      - dsv-internal-network
     restart: unless-stopped
     logging:
       driver: "json-file"
@@ -83,7 +81,6 @@ services:
         condition: service_healthy
     networks:
       - sequencer-net
-      - dsv-internal-network
     restart: unless-stopped
     deploy:
       replicas: ${DEQUEUER_REPLICAS:-2}
@@ -130,7 +127,6 @@ services:
         condition: service_healthy
     networks:
       - sequencer-net
-      - dsv-internal-network
     restart: unless-stopped
     logging:
       driver: "json-file"
@@ -172,7 +168,6 @@ services:
         condition: service_healthy
     networks:
       - sequencer-net
-      - dsv-internal-network
     restart: unless-stopped
     deploy:
       replicas: ${FINALIZER_REPLICAS:-2}
@@ -206,7 +201,6 @@ services:
         condition: service_started
     networks:
       - sequencer-net
-      - dsv-internal-network
     restart: unless-stopped
     logging:
       driver: "json-file"
@@ -227,7 +221,6 @@ services:
       - "9090:9090"
     networks:
       - sequencer-net
-      - dsv-internal-network
     profiles:
       - monitoring
 
@@ -243,7 +236,6 @@ services:
       - GF_USERS_ALLOW_SIGN_UP=false
     networks:
       - sequencer-net
-      - dsv-internal-network
     profiles:
       - monitoring
 
@@ -255,5 +247,3 @@ volumes:
 networks:
   sequencer-net:
     driver: bridge
-  dsv-internal-network:
-    external: true
