@@ -103,13 +103,17 @@ func main() {
 	if enableListener || enableDequeuer || enableFinalizer || enableEventMonitor {
 		redisAddr := fmt.Sprintf("%s:%s", cfg.RedisHost, cfg.RedisPort)
 		log.Infof("Connecting to Redis at %s (DB: %d)", redisAddr, cfg.RedisDB)
-		
-		redisClient = redis.NewClient(&redis.Options{
-			Addr:     redisAddr,
-			Password: cfg.RedisPassword,
-			DB:       cfg.RedisDB,
-		})
-		
+
+		redisOpts := &redis.Options{
+			Addr: redisAddr,
+			DB:   cfg.RedisDB,
+		}
+		// Only set password if it's not empty
+		if cfg.RedisPassword != "" {
+			redisOpts.Password = cfg.RedisPassword
+		}
+		redisClient = redis.NewClient(redisOpts)
+
 		if err := redisClient.Ping(ctx).Err(); err != nil {
 			log.Fatalf("Failed to connect to Redis: %v", err)
 		}
