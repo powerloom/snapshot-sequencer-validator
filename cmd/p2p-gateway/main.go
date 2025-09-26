@@ -83,16 +83,33 @@ func NewP2PGateway(cfg *config.Settings) (*P2PGateway, error) {
 }
 
 func (g *P2PGateway) setupTopics() error {
-	// Snapshot submissions topic
-	submissionTopic, err := g.p2pHost.Pubsub.Join("/powerloom/snapshot-submissions/all")
-	if err != nil {
-		return fmt.Errorf("failed to join submission topic: %w", err)
+	// Join required topics - BOTH discovery and main topics like working version
+	topics := []string{
+		"/powerloom/snapshot-submissions/0",   // Discovery topic
+		"/powerloom/snapshot-submissions/all", // Main submissions
 	}
-	g.submissionTopic = submissionTopic
 
-	g.submissionSub, err = submissionTopic.Subscribe()
-	if err != nil {
-		return fmt.Errorf("failed to subscribe to submission topic: %w", err)
+	for _, topicName := range topics {
+		topic, err := g.p2pHost.Pubsub.Join(topicName)
+		if err != nil {
+			return fmt.Errorf("failed to join topic %s: %w", topicName, err)
+		}
+
+		sub, err := topic.Subscribe()
+		if err != nil {
+			return fmt.Errorf("failed to subscribe to topic %s: %w", topicName, err)
+		}
+
+		// Store the main submission topic and subscription
+		if topicName == "/powerloom/snapshot-submissions/all" {
+			g.submissionTopic = topic
+			g.submissionSub = sub
+		}
+
+		log.Infof("📡 Subscribed to topic: %s", topicName)
+
+		// Handle messages for each topic
+		go g.handleSubmissionMessages(sub, topicName)
 	}
 
 	// Finalized batches topic
@@ -106,6 +123,7 @@ func (g *P2PGateway) setupTopics() error {
 	if err != nil {
 		return fmt.Errorf("failed to subscribe to batch topic: %w", err)
 	}
+	log.Infof("📡 Subscribed to topic: /powerloom/finalized-batches/all")
 
 	// Validator presence topic
 	presenceTopic, err := g.p2pHost.Pubsub.Join("/powerloom/validator/presence")
@@ -118,32 +136,47 @@ func (g *P2PGateway) setupTopics() error {
 	if err != nil {
 		return fmt.Errorf("failed to subscribe to presence topic: %w", err)
 	}
+	log.Infof("📡 Subscribed to topic: /powerloom/validator/presence")
 
 	log.Info("P2P Gateway: Subscribed to all topics")
 	return nil
 }
 
-func (g *P2PGateway) handleIncomingSubmissions() {
+func (g *P2PGateway) handleSubmissionMessages(sub *pubsub.Subscription, topicName string) {
+	isDiscoveryTopic := topicName == "/powerloom/snapshot-submissions/0"
+	topicLabel := "SUBMISSIONS"
+	if isDiscoveryTopic {
+		topicLabel = "DISCOVERY/TEST"
+	}
+	log.Infof("🎧 Started listening on %s topic: %s", topicLabel, topicName)
+
 	for {
-		msg, err := g.submissionSub.Next(g.ctx)
+		msg, err := sub.Next(g.ctx)
 		if err != nil {
 			if g.ctx.Err() != nil {
 				return
 			}
-			log.WithError(err).Error("Failed to get next submission message")
+			log.WithError(err).Error("Error reading message from", topicName)
 			continue
 		}
 
-		// Ignore our own messages
-		if msg.ReceivedFrom == g.p2pHost.Host.ID() {
+		// Skip own messages
+		if g.p2pHost.Host != nil && msg.ReceivedFrom == g.p2pHost.Host.ID() {
 			continue
 		}
+
+		topicLabel := "SUBMISSION"
+		if topicName == "/powerloom/snapshot-submissions/0" {
+			topicLabel = "TEST/DISCOVERY"
+		}
+		log.Infof("📨 RECEIVED %s on %s from peer %s (size: %d bytes)",
+			topicLabel, topicName, msg.ReceivedFrom.ShortString(), len(msg.Data))
 
 		// Route to Redis for dequeuer processing
 		if err := g.redisClient.LPush(g.ctx, "submissionQueue", msg.Data).Err(); err != nil {
 			log.WithError(err).Error("Failed to push submission to Redis")
 		} else {
-			log.Debug("P2P Gateway: Routed submission to Redis queue")
+			log.Infof("✅ P2P Gateway: Routed %s to Redis queue", topicLabel)
 		}
 	}
 }
@@ -290,8 +323,7 @@ func (g *P2PGateway) sendPresenceHeartbeat() {
 func (g *P2PGateway) Start() error {
 	log.Info("Starting P2P Gateway")
 
-	// Start all handlers
-	go g.handleIncomingSubmissions()
+	// Start all handlers (submission handlers already started in setupTopics)
 	go g.handleIncomingBatches()
 	go g.handleValidatorPresence()
 	go g.handleOutgoingMessages()
@@ -333,7 +365,7 @@ func (g *P2PGateway) Stop() {
 	log.Info("Stopping P2P Gateway")
 	g.cancel()
 	if g.p2pHost != nil {
-		g.p2pHost.Host.Close()
+		g.p2pHost.Close()
 	}
 	if g.redisClient != nil {
 		g.redisClient.Close()

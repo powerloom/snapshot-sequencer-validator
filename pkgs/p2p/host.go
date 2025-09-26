@@ -13,40 +13,50 @@ import (
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/p2p/discovery/routing"
+	"github.com/libp2p/go-libp2p/p2p/discovery/util"
 	"github.com/libp2p/go-libp2p/p2p/net/connmgr"
 	"github.com/multiformats/go-multiaddr"
 	"github.com/powerloom/snapshot-sequencer-validator/config"
+	"github.com/powerloom/snapshot-sequencer-validator/pkgs/gossipconfig"
 	log "github.com/sirupsen/logrus"
 )
 
 type P2PHost struct {
-	Host    host.Host
-	Pubsub  *pubsub.PubSub
-	DHT     *dht.IpfsDHT
-	ctx     context.Context
+	Host      host.Host
+	Pubsub    *pubsub.PubSub
+	DHT       *dht.IpfsDHT
+	Discovery *routing.RoutingDiscovery
+	ctx       context.Context
+	cancel    context.CancelFunc
 }
 
 func NewP2PHost(ctx context.Context, cfg *config.Settings) (*P2PHost, error) {
+	// Create cancelable context
+	hostCtx, cancel := context.WithCancel(ctx)
+
 	// Create or load private key
 	privKey, err := loadOrCreatePrivateKey(cfg.P2PPrivateKey)
 	if err != nil {
+		cancel()
 		return nil, fmt.Errorf("failed to get private key: %w", err)
 	}
 
 	p2pPort := strconv.Itoa(cfg.P2PPort)
 
-	// Configure connection manager
+	// Configure connection manager for subscriber mode
 	connMgr, err := connmgr.NewConnManager(
 		cfg.ConnManagerLowWater,
 		cfg.ConnManagerHighWater,
 		connmgr.WithGracePeriod(time.Minute),
 	)
 	if err != nil {
+		cancel()
 		return nil, fmt.Errorf("failed to create connection manager: %w", err)
 	}
 	log.Infof("Connection manager configured: LowWater=%d, HighWater=%d", cfg.ConnManagerLowWater, cfg.ConnManagerHighWater)
 
-	// Build libp2p options (simplified, matching working implementation)
+	// Build libp2p options (EXACT copy from working implementation)
 	opts := []libp2p.Option{
 		libp2p.Identity(privKey),
 		libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/0.0.0.0/tcp/%s", p2pPort)),
@@ -54,7 +64,7 @@ func NewP2PHost(ctx context.Context, cfg *config.Settings) (*P2PHost, error) {
 		libp2p.ConnectionManager(connMgr),
 	}
 
-	// Add public IP if configured
+	// Add public IP address if configured
 	if cfg.P2PPublicIP != "" {
 		publicAddr, err := multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%s", cfg.P2PPublicIP, p2pPort))
 		if err != nil {
@@ -71,51 +81,123 @@ func NewP2PHost(ctx context.Context, cfg *config.Settings) (*P2PHost, error) {
 	// Create libp2p host with options
 	h, err := libp2p.New(opts...)
 	if err != nil {
+		cancel()
 		return nil, fmt.Errorf("failed to create host: %w", err)
 	}
 
 	log.Infof("P2P Host started with peer ID: %s", h.ID())
 
 	// Setup DHT
-	kademliaDHT, err := dht.New(ctx, h, dht.Mode(dht.ModeClient))
+	kademliaDHT, err := dht.New(hostCtx, h, dht.Mode(dht.ModeClient))
 	if err != nil {
+		cancel()
 		return nil, fmt.Errorf("failed to create DHT: %w", err)
 	}
 
-	if err = kademliaDHT.Bootstrap(ctx); err != nil {
+	if err = kademliaDHT.Bootstrap(hostCtx); err != nil {
+		cancel()
 		return nil, fmt.Errorf("failed to bootstrap DHT: %w", err)
-	}
-
-	// Create pubsub
-	ps, err := pubsub.NewGossipSub(
-		ctx,
-		h,
-		pubsub.WithFloodPublish(true),
-		pubsub.WithPeerExchange(true),
-		pubsub.WithDirectPeers([]peer.AddrInfo{}),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create pubsub: %w", err)
-	}
-
-	p2pHost := &P2PHost{
-		Host:   h,
-		Pubsub: ps,
-		DHT:    kademliaDHT,
-		ctx:    ctx,
 	}
 
 	// Connect to bootstrap if configured
 	if len(cfg.BootstrapPeers) > 0 {
-		if err := p2pHost.ConnectToBootstrap(cfg.BootstrapPeers[0]); err != nil {
-			log.WithError(err).Warn("Failed to connect to bootstrap peer")
+		if err := connectToBootstrap(hostCtx, h, cfg.BootstrapPeers[0]); err != nil {
+			log.WithError(err).Warn("Failed to connect to bootstrap peer - will continue with discovery")
 		}
+	}
+
+	// Start discovery on rendezvous point
+	rendezvousString := cfg.Rendezvous
+	routingDiscovery := routing.NewRoutingDiscovery(kademliaDHT)
+
+	// Advertise and discover peers on rendezvous
+	go func() {
+		log.Infof("Starting peer discovery on rendezvous: %s", rendezvousString)
+		util.Advertise(hostCtx, routingDiscovery, rendezvousString)
+
+		for {
+			select {
+			case <-hostCtx.Done():
+				return
+			default:
+				peerChan, err := routingDiscovery.FindPeers(hostCtx, rendezvousString)
+				if err != nil {
+					log.Debugf("Error discovering peers: %v", err)
+					time.Sleep(10 * time.Second)
+					continue
+				}
+
+				for p := range peerChan {
+					if p.ID == h.ID() {
+						continue
+					}
+					if h.Network().Connectedness(p.ID) != 2 {
+						log.Debugf("Found peer through rendezvous: %s", p.ID)
+						if err := h.Connect(hostCtx, p); err != nil {
+							log.Debugf("Failed to connect to peer %s: %v", p.ID, err)
+						} else {
+							log.Infof("Connected to peer via rendezvous: %s", p.ID)
+						}
+					}
+				}
+				time.Sleep(30 * time.Second)
+			}
+		}
+	}()
+
+	// Also advertise on the submission topics for discovery
+	go func() {
+		time.Sleep(5 * time.Second) // Wait a bit for DHT to stabilize
+		topics := []string{
+			"/powerloom/snapshot-submissions/0",
+			"/powerloom/snapshot-submissions/all",
+		}
+		for _, topic := range topics {
+			log.Infof("Advertising on topic: %s", topic)
+			util.Advertise(hostCtx, routingDiscovery, topic)
+		}
+	}()
+
+	// Get standardized gossipsub parameters for snapshot submissions mesh
+	gossipParams, peerScoreParams, peerScoreThresholds, paramHash := gossipconfig.ConfigureSnapshotSubmissionsMesh(h.ID())
+
+	// Create pubsub with standardized parameters
+	ps, err := pubsub.NewGossipSub(hostCtx, h,
+		pubsub.WithGossipSubParams(*gossipParams),
+		pubsub.WithPeerScore(peerScoreParams, peerScoreThresholds),
+		pubsub.WithDiscovery(routingDiscovery),
+		pubsub.WithFloodPublish(true),
+		pubsub.WithMessageSignaturePolicy(pubsub.StrictSign),
+	)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("failed to create pubsub: %w", err)
+	}
+
+	log.Infof("🔑 Gossipsub parameter hash: %s (p2p gateway)", paramHash)
+	log.Info("Initialized gossipsub with standardized snapshot submissions mesh parameters")
+
+	p2pHost := &P2PHost{
+		Host:      h,
+		Pubsub:    ps,
+		DHT:       kademliaDHT,
+		Discovery: routingDiscovery,
+		ctx:       hostCtx,
+		cancel:    cancel,
 	}
 
 	return p2pHost, nil
 }
 
-func (p *P2PHost) ConnectToBootstrap(bootstrapAddr string) error {
+func (p *P2PHost) Close() error {
+	if p.cancel != nil {
+		p.cancel()
+	}
+	return p.Host.Close()
+}
+
+// connectToBootstrap connects to a bootstrap peer
+func connectToBootstrap(ctx context.Context, h host.Host, bootstrapAddr string) error {
 	maddr, err := multiaddr.NewMultiaddr(bootstrapAddr)
 	if err != nil {
 		return fmt.Errorf("invalid bootstrap address: %w", err)
@@ -126,7 +208,7 @@ func (p *P2PHost) ConnectToBootstrap(bootstrapAddr string) error {
 		return fmt.Errorf("failed to parse bootstrap peer info: %w", err)
 	}
 
-	if err := p.Host.Connect(p.ctx, *peerinfo); err != nil {
+	if err := h.Connect(ctx, *peerinfo); err != nil {
 		return fmt.Errorf("failed to connect to bootstrap: %w", err)
 	}
 
