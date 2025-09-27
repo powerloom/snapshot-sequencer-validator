@@ -323,57 +323,74 @@ docker compose -f docker-compose.separated.yml build
 Monitor batch preparation and submission windows:
 
 ```bash
-# Quick monitoring via launch.sh
+# Quick monitoring via monitor_simple.sh
 ./dsv.sh monitor
-
-# Comprehensive pipeline monitoring
-./dsv.sh pipeline
 ```
 
-The monitor now correctly:
-- Prioritizes event-monitor container (has Redis access)
-- Falls back to dequeuer, then any sequencer container
-- Shows active submission windows with TTL
-- Displays ready batches and pending submissions
+The monitoring script provides comprehensive insights into the Decentralized Sequencer Validator system, with enhanced Phase 3 P2P Validator Consensus capabilities:
 
-**Comprehensive Pipeline Monitoring**
-The new `pipeline` command provides a detailed view of the entire submission and batch processing pipeline:
-- Current submission window status
-- Detailed pipeline stage metrics
-- Dequeuer worker health
-- Redis queue depths
-- Finalizer readiness
-- Consensus vote tracking
+**Key Monitoring Sections:**
+1. **Active Submission Windows**
+   - Shows open and closed epochs
+   - Displays market and epoch details
+   - Time-to-live (TTL) for each window
 
-**Example output:**
-```
-🔷 Current Submission Window:
-  ✅ 0x21cb57C1f2352ad215a463DD867b838749CD3b8f:172883 (TTL: 18s)
+2. **Submission Queue**
+   - Pending submissions count
+   - Provides queue depth for debugging
 
-📦 Ready Batches:
-  None
+3. **Batch Readiness**
+   - Identifies ready batches with vote data
+   - Shows protocol, market, and epoch details
+   - Highlights project count and vote status
 
-⏳ Pending Submissions:
-  Count: 5
+4. **Finalized Batches**
+   - Displays recently finalized batches
+   - Shows IPFS CID, Merkle root
+   - Includes finalization timestamp
 
-🔄 Pipeline Stages:
-  Listener: ✅ Active (95% health)
-  Dequeuer: ✅ Processing (5/5 workers)
-  Finalizer: ⏳ Pending
-  Consensus: ⏳ Initializing
-```
+5. **Active Workers**
+   - Lists worker statuses
+   - Monitors worker health and activity
 
-The `pipeline` command leverages new monitoring utilities in `pkgs/workers/monitoring.go` to provide a comprehensive view of the entire batch processing workflow.
+6. **Finalization Queue**
+   - Tracks batches pending finalization
+   - Shows queue lengths across different protocols
 
-📚 **For detailed monitoring documentation, see [MONITORING_GUIDE.md](./MONITORING_GUIDE.md)**
+7. **🌐 P2P Validator Consensus (Phase 3)**
+   ```
+   🌐 P2P Validator Consensus (Phase 3):
+     ✓ Validator batch exchange active
+     Active Validators: 5
+     Epochs with votes: 3
+     Recent validator batches:
+       → validator-1: Epoch 172883 (TTL: 120s)
+       → validator-2: Epoch 172883 (TTL: 90s)
 
-The comprehensive monitoring guide covers:
-- All 5 pipeline stages in detail (submission → splitting → finalization → aggregation → output)
-- Redis key structures and data flow
-- Worker monitoring integration with code examples
-- Performance optimization and batch size tuning
-- Troubleshooting procedures and health indicators
-- Advanced monitoring queries and metrics collection
+     ✓ Consensus aggregation active
+       📊 Epoch 172883: 5 validators → 12 projects aggregated
+
+     ✓ 1 consensus results ready for chain submission
+       🎯 Latest: Epoch 172883 → CID QmXYZ... (12 projects)
+   ```
+
+   Key features:
+   - Validator batch exchange status
+   - Unique validator and epoch tracking
+   - Consensus aggregation details
+   - Consensus results ready for chain submission
+
+**Quick Stats and Vote Distribution**
+- Queue depth
+- Open submission windows
+- Vote data format (new vs. old)
+
+📚 **Comprehensive Documentation**: See [MONITORING_GUIDE.md](./MONITORING_GUIDE.md) for in-depth monitoring strategies.
+
+**Recommended Monitoring Workflow:**
+1. Use `./dsv.sh monitor` for quick system overview
+2. Check container logs with `./dsv.sh logs` for detailed information
+3. Use component-specific log commands for targeted debugging
 
 ### Component Log Shortcuts
 
