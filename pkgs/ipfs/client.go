@@ -13,6 +13,7 @@ import (
 	"github.com/ipfs/go-cid"
 	files "github.com/ipfs/boxo/files"
 	"github.com/ipfs/boxo/path"
+	options "github.com/ipfs/kubo/core/coreiface/options"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -73,7 +74,7 @@ func (c *Client) StoreFinalizedBatch(ctx context.Context, batch interface{}) (st
 	reader := bytes.NewReader(jsonData)
 	
 	// Add to IPFS with CIDv1 format
-	path, err := c.api.Unixfs().Add(ctx, files.NewReaderFile(reader), func(settings *ipfsApi.UnixfsAddSettings) error {
+	path, err := c.api.Unixfs().Add(ctx, files.NewReaderFile(reader), func(settings *options.UnixfsAddSettings) error {
 		settings.CidVersion = 1  // Force CIDv1
 		settings.Chunker = "size-262144"  // 256KB chunks
 		settings.Pin = true  // Auto-pin
