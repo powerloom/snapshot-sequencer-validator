@@ -98,39 +98,79 @@ else
     echo "  None"
 fi
 
-# Finalized Batches (Updated to look for batch:finalized:epochID keys)
+# Finalized Batches (Looking for protocol:market:finalized:epochID pattern)
 echo -e "\n${BLUE}✅ Recent Finalized Batches:${NC}"
-FINALIZED=$(redis_cmd KEYS "batch:finalized:*" | head -10)
+# Try both patterns - old and new
+FINALIZED=$(redis_cmd KEYS "*:*:finalized:*" | head -10)
+if [ -z "$FINALIZED" ]; then
+    # Fallback to old pattern if new pattern doesn't exist
+    FINALIZED=$(redis_cmd KEYS "batch:finalized:*" | head -10)
+fi
 if [ ! -z "$FINALIZED" ]; then
     for batch in $FINALIZED; do
         EPOCH=$(echo "$batch" | grep -oE "[0-9]+$")
-        # Get all metadata: IPFS CID, merkle root, finalization time
-        IPFS_CID=$(redis_cmd HGET "$batch" "ipfs_cid")
-        MERKLE=$(redis_cmd HGET "$batch" "merkle_root")
-        FINALIZED_AT=$(redis_cmd HGET "$batch" "finalized_at")
+        # Get the finalized batch data (stored as JSON string)
+        BATCH_DATA=$(redis_cmd GET "$batch")
 
-        # Format output based on available data
-        if [ ! -z "$IPFS_CID" ]; then
+        if [ ! -z "$BATCH_DATA" ] && command -v jq >/dev/null 2>&1; then
+            # Parse JSON data with jq
+            IPFS_CID=$(echo "$BATCH_DATA" | jq -r '.batchIPFSCID // .BatchIPFSCID // ""' 2>/dev/null)
+            MERKLE=$(echo "$BATCH_DATA" | jq -r '.merkleRoot // .MerkleRoot // ""' 2>/dev/null | base64 2>/dev/null || echo "")
+            PROJECT_COUNT=$(echo "$BATCH_DATA" | jq -r '.projectIds // .ProjectIds // [] | length' 2>/dev/null)
+            TIMESTAMP=$(echo "$BATCH_DATA" | jq -r '.timestamp // .Timestamp // ""' 2>/dev/null)
+
             echo -e "  ${GREEN}✓ Epoch $EPOCH${NC}"
-            echo "    📦 IPFS CID: $IPFS_CID"
-            if [ ! -z "$MERKLE" ]; then
-                echo "    🌳 Merkle: ${MERKLE:0:16}..."
+            if [ ! -z "$IPFS_CID" ] && [ "$IPFS_CID" != "null" ]; then
+                echo "    📦 IPFS CID: $IPFS_CID"
             fi
-            if [ ! -z "$FINALIZED_AT" ]; then
-                # Convert timestamp to readable format if date command available
+            if [ ! -z "$MERKLE" ] && [ "$MERKLE" != "null" ]; then
+                # If it's base64, show hex preview
+                if [ ${#MERKLE} -eq 44 ]; then
+                    MERKLE_HEX=$(echo "$MERKLE" | base64 -d 2>/dev/null | xxd -p -c 256 2>/dev/null | head -c 16)
+                    echo "    🌳 Merkle: ${MERKLE_HEX}..."
+                else
+                    echo "    🌳 Merkle: ${MERKLE:0:16}..."
+                fi
+            fi
+            if [ ! -z "$PROJECT_COUNT" ] && [ "$PROJECT_COUNT" != "null" ]; then
+                echo "    📊 Projects: $PROJECT_COUNT"
+            fi
+            if [ ! -z "$TIMESTAMP" ] && [ "$TIMESTAMP" != "null" ] && [ "$TIMESTAMP" != "0" ]; then
+                # Convert timestamp to readable format
                 if command -v date >/dev/null 2>&1; then
-                    FORMATTED_TIME=$(date -d "@$FINALIZED_AT" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "timestamp: $FINALIZED_AT")
+                    FORMATTED_TIME=$(date -d "@$TIMESTAMP" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "timestamp: $TIMESTAMP")
                     echo "    ⏰ Finalized: $FORMATTED_TIME"
                 fi
             fi
-        elif [ ! -z "$MERKLE" ]; then
-            echo "  ✓ Epoch $EPOCH (Merkle: ${MERKLE:0:12}...)"
         else
-            echo "  ✓ Epoch $EPOCH"
+            # Fallback if no jq available
+            echo "  ✓ Epoch $EPOCH (data stored)"
         fi
     done
 else
     echo "  None"
+fi
+
+# Local Aggregation Activity (Phase 2)
+echo -e "\n${BLUE}📦 Local Batch Aggregation:${NC}"
+# Check for batch parts being collected
+BATCH_PARTS=$(redis_cmd KEYS "epoch:*:parts:*")
+if [ ! -z "$BATCH_PARTS" ]; then
+    for part_key in $BATCH_PARTS; do
+        EPOCH=$(echo "$part_key" | sed 's/epoch://;s/:parts:.*//')
+        if [[ "$part_key" == *":ready" ]]; then
+            READY_COUNT=$(redis_cmd SCARD "$part_key")
+            echo "  📥 Epoch $EPOCH: $READY_COUNT parts ready for aggregation"
+        elif [[ "$part_key" == *":completed" ]]; then
+            COMPLETED=$(redis_cmd SMEMBERS "$part_key" | wc -w)
+            echo "  ✅ Epoch $EPOCH: $COMPLETED parts completed"
+        elif [[ "$part_key" == *":total" ]]; then
+            TOTAL=$(redis_cmd GET "$part_key")
+            echo "  📊 Epoch $EPOCH: $TOTAL total parts expected"
+        fi
+    done
+else
+    echo "  No active batch aggregation"
 fi
 
 # Workers
