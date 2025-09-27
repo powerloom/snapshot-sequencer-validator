@@ -197,7 +197,7 @@ func (g *P2PGateway) handleIncomingBatches() {
 			continue
 		}
 
-		// Parse to get epoch ID
+		// Parse to get epoch ID and validator ID
 		var batchData map[string]interface{}
 		if err := json.Unmarshal(msg.Data, &batchData); err != nil {
 			log.WithError(err).Error("Failed to parse batch data")
@@ -206,20 +206,36 @@ func (g *P2PGateway) handleIncomingBatches() {
 
 		epochID, ok := batchData["epochId"]
 		if !ok {
-			log.Error("Batch missing epochId")
-			continue
+			// Try camelCase
+			epochID, ok = batchData["EpochId"]
+			if !ok {
+				log.Error("Batch missing epochId")
+				continue
+			}
+		}
+
+		// Extract validator ID from batch or use peer ID
+		validatorID := msg.ReceivedFrom.String()
+		if seqID, ok := batchData["sequencerId"].(string); ok && seqID != "" {
+			validatorID = seqID
+		} else if seqID, ok := batchData["SequencerId"].(string); ok && seqID != "" {
+			validatorID = seqID
 		}
 
 		// Route to Redis for aggregator processing
-		key := fmt.Sprintf("incoming:batch:%v", epochID)
+		// Include validator ID in the key so we can track who sent what
+		key := fmt.Sprintf("incoming:batch:%v:%s", epochID, validatorID)
 		if err := g.redisClient.Set(g.ctx, key, msg.Data, 30*time.Minute).Err(); err != nil {
 			log.WithError(err).Error("Failed to store incoming batch")
 		} else {
-			// Also add to aggregation queue
+			// Also add to aggregation queue (only epoch ID)
 			if err := g.redisClient.LPush(g.ctx, "aggregation:queue", epochID).Err(); err != nil {
 				log.WithError(err).Error("Failed to add to aggregation queue")
 			}
-			log.WithField("epoch", epochID).Info("P2P Gateway: Received batch from network")
+			log.WithFields(logrus.Fields{
+				"epoch": epochID,
+				"from": validatorID,
+			}).Info("P2P Gateway: Received finalized batch from validator")
 		}
 	}
 }
@@ -276,8 +292,9 @@ func (g *P2PGateway) handleOutgoingMessages() {
 			var topic *pubsub.Topic
 
 			switch msgType {
-			case "batch":
+			case "batch", "finalized_batch":
 				topic = g.batchTopic
+				log.WithField("type", msgType).Info("Broadcasting finalized batch to validator network")
 			case "presence":
 				topic = g.presenceTopic
 			default:

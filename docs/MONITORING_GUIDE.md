@@ -50,12 +50,14 @@ The monitoring system tracks 6 distinct stages:
 - **Merkle Roots**: Cryptographic proofs of batch contents
 - **Validator Broadcasts**: Vote dissemination status
 
-### Stage 6: Consensus/Batch Aggregation (NEW)
+### Stage 6: Consensus/Batch Aggregation (LIVE)
 - **Validator Batch Exchange**: Real-time tracking of batch broadcasts between validators
 - **Local Aggregation**: Each validator aggregates all received batches locally
 - **Vote Counting**: Per-project CID vote tallies from all validators
 - **Consensus Determination**: Local consensus based on majority vote per project
-- **No Second Round**: Each validator maintains their own aggregated view - no global consensus round
+- **Decentralized Aggregation**: Each validator maintains their own local batch aggregation
+- **No Global Consensus**: Independent local vote determination
+- **Gossipsub Broadcast**: Batches shared via `/powerloom/finalized-batches/all`
 
 ## Monitoring Commands
 

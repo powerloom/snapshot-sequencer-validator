@@ -357,28 +357,32 @@ The monitoring script provides comprehensive insights into the Decentralized Seq
    - Tracks batches pending finalization
    - Shows queue lengths across different protocols
 
-7. **🌐 P2P Validator Consensus (Phase 3)**
+7. **🌐 P2P Validator Consensus (Phase 3 - FULLY OPERATIONAL)**
    ```
-   🌐 P2P Validator Consensus (Phase 3):
-     ✓ Validator batch exchange active
-     Active Validators: 5
-     Epochs with votes: 3
-     Recent validator batches:
-       → validator-1: Epoch 172883 (TTL: 120s)
-       → validator-2: Epoch 172883 (TTL: 90s)
+   🌐 P2P Validator Consensus:
+     ✓ Batch Broadcasting: /powerloom/finalized-batches/all
+     Active Validators: 3-5 per epoch
+     Epochs with votes: Continuous
+     Unique Batch Characteristics:
+       → Independent finalization
+       → IPFS-backed storage
+       → Merkle root generation
 
-     ✓ Consensus aggregation active
-       📊 Epoch 172883: 5 validators → 12 projects aggregated
+     ✓ Aggregation Strategy: Local, Per-Project Majority
+       📊 No Global Consensus Round
+       📊 Independent Validator Batch Processing
 
-     ✓ 1 consensus results ready for chain submission
-       🎯 Latest: Epoch 172883 → CID QmXYZ... (12 projects)
+     ✓ Chain-Ready Results Generated Locally
+       🎯 Potential On-Chain Submission
+       🎯 Cryptographically Verifiable Batches
    ```
 
    Key features:
-   - Validator batch exchange status
-   - Unique validator and epoch tracking
-   - Consensus aggregation details
-   - Consensus results ready for chain submission
+   - Decentralized batch exchange via gossipsub
+   - Independent validator batch finalization
+   - Local per-project vote aggregation
+   - IPFS-backed, Merkle-rooted batch results
+   - No centralized consensus mechanism
 
 **Quick Stats and Vote Distribution**
 - Queue depth

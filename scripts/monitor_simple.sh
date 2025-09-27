@@ -227,7 +227,31 @@ fi
 # P2P Validator Consensus Status (Phase 3)
 echo -e "\n${BLUE}🌐 P2P Validator Consensus (Phase 3):${NC}"
 
-# Check for validator batches in Redis
+# Check outgoing broadcasts queued for P2P Gateway
+OUTGOING_QUEUE=$(redis_cmd LLEN "outgoing:broadcast:batch")
+if [ "$OUTGOING_QUEUE" -gt 0 ]; then
+    echo -e "  📤 Outgoing broadcasts queued: $OUTGOING_QUEUE"
+fi
+
+# Check incoming batches from other validators
+INCOMING_BATCHES=$(redis_cmd KEYS "incoming:batch:*")
+if [ ! -z "$INCOMING_BATCHES" ]; then
+    echo -e "  ${GREEN}✓ Receiving batches from other validators${NC}"
+    for batch in $(echo "$INCOMING_BATCHES" | head -5); do
+        # Parse epochId and validatorId from key
+        EPOCH=$(echo "$batch" | sed 's/.*batch://' | cut -d: -f1)
+        VALIDATOR=$(echo "$batch" | sed 's/.*batch:[^:]*://')
+        echo "    📥 Epoch $EPOCH from validator: $VALIDATOR"
+    done
+fi
+
+# Check aggregation queue
+AGG_QUEUE=$(redis_cmd LLEN "aggregation:queue")
+if [ "$AGG_QUEUE" -gt 0 ]; then
+    echo -e "  🔄 Epochs pending aggregation: $AGG_QUEUE"
+fi
+
+# Check for validator batches in Redis (old format)
 VALIDATOR_BATCHES=$(redis_cmd KEYS "validator:*:batch:*")
 if [ ! -z "$VALIDATOR_BATCHES" ]; then
     echo -e "  ${GREEN}✓ Validator batch exchange active${NC}"

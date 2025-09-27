@@ -103,30 +103,61 @@ func (a *Aggregator) processAggregationQueue() {
 }
 
 func (a *Aggregator) aggregateEpoch(epochIDStr string) {
-	// Get our own finalized batch
-	ourBatchKey := fmt.Sprintf("batch:finalized:%s", epochIDStr)
-	ourBatchData, err := a.redisClient.Get(a.ctx, ourBatchKey).Result()
-	if err != nil {
-		log.WithError(err).Error("Failed to get our finalized batch")
-		return
+	// Get our own finalized batch from the unified sequencer's finalizer
+	// Try both old and new key patterns
+	ourBatchKey := ""
+	ourBatchData := ""
+
+	// Try new pattern: protocol:market:finalized:epochId
+	pattern := fmt.Sprintf("*:*:finalized:%s", epochIDStr)
+	keys, _ := a.redisClient.Keys(a.ctx, pattern).Result()
+	if len(keys) > 0 {
+		ourBatchKey = keys[0]
+		ourBatchData, _ = a.redisClient.Get(a.ctx, ourBatchKey).Result()
 	}
 
-	var ourBatch consensus.FinalizedBatch
-	if err := json.Unmarshal([]byte(ourBatchData), &ourBatch); err != nil {
-		log.WithError(err).Error("Failed to parse our batch")
-		return
+	// Fallback to old pattern if not found
+	if ourBatchData == "" {
+		ourBatchKey = fmt.Sprintf("batch:finalized:%s", epochIDStr)
+		ourBatchData, _ = a.redisClient.Get(a.ctx, ourBatchKey).Result()
 	}
 
-	// Get all incoming batches for this epoch
+	if ourBatchData == "" {
+		log.WithField("epoch", epochIDStr).Warn("No local finalized batch found for epoch")
+		// Continue anyway - we might just aggregate other validators' batches
+	}
+
+	var ourBatch *consensus.FinalizedBatch
+	if ourBatchData != "" {
+		ourBatch = &consensus.FinalizedBatch{}
+		if err := json.Unmarshal([]byte(ourBatchData), ourBatch); err != nil {
+			log.WithError(err).Error("Failed to parse our batch")
+			// Continue with other validators' batches
+		}
+	}
+
+	// Get all incoming batches from OTHER validators for this epoch
 	incomingPattern := fmt.Sprintf("incoming:batch:%s:*", epochIDStr)
-	keys, err := a.redisClient.Keys(a.ctx, incomingPattern).Result()
+	incomingKeys, err := a.redisClient.Keys(a.ctx, incomingPattern).Result()
 	if err != nil {
 		log.WithError(err).Error("Failed to get incoming batch keys")
 		return
 	}
 
+	totalValidators := len(incomingKeys)
+	if ourBatch != nil {
+		totalValidators++ // Include ourselves
+	}
+
+	log.WithFields(logrus.Fields{
+		"epoch": epochIDStr,
+		"local_batch": ourBatch != nil,
+		"incoming_batches": len(incomingKeys),
+		"total_validators": totalValidators,
+	}).Info("Starting epoch aggregation")
+
 	// Aggregate all batches
-	aggregatedBatch := a.createAggregatedBatch(ourBatch, keys)
+	aggregatedBatch := a.createAggregatedBatch(ourBatch, incomingKeys)
 
 	// Store aggregated result
 	aggregatedKey := fmt.Sprintf("batch:aggregated:%s", epochIDStr)
@@ -154,27 +185,35 @@ func (a *Aggregator) aggregateEpoch(epochIDStr string) {
 	}).Info("Aggregator: Completed aggregation")
 }
 
-func (a *Aggregator) createAggregatedBatch(ourBatch consensus.FinalizedBatch, incomingKeys []string) consensus.FinalizedBatch {
-	// Start with our batch as the base
+func (a *Aggregator) createAggregatedBatch(ourBatch *consensus.FinalizedBatch, incomingKeys []string) consensus.FinalizedBatch {
+	// Initialize aggregated batch
 	aggregated := consensus.FinalizedBatch{
-		EpochId:           ourBatch.EpochId,
 		SubmissionDetails: make(map[string][]submissions.SubmissionMetadata),
 		ProjectVotes:      make(map[string]uint32),
 		Timestamp:         uint64(time.Now().Unix()),
 	}
 
-	// Add our submissions
-	for projectID, submissions := range ourBatch.SubmissionDetails {
-		aggregated.SubmissionDetails[projectID] = append(
-			aggregated.SubmissionDetails[projectID],
-			submissions...,
-		)
+	// Track all validators' views
+	validatorViews := make(map[string]*consensus.FinalizedBatch)
 
-		// Add our votes
-		aggregated.ProjectVotes[projectID] = ourBatch.ProjectVotes[projectID]
+	// Add our batch if we have one
+	if ourBatch != nil {
+		aggregated.EpochId = ourBatch.EpochId
+		validatorViews[ourBatch.SequencerId] = ourBatch
+
+		// Add our submissions
+		for projectID, submissions := range ourBatch.SubmissionDetails {
+			aggregated.SubmissionDetails[projectID] = append(
+				aggregated.SubmissionDetails[projectID],
+				submissions...,
+			)
+
+			// Add our votes
+			aggregated.ProjectVotes[projectID] = ourBatch.ProjectVotes[projectID]
+		}
 	}
 
-	// Add incoming batches
+	// Add incoming batches from other validators
 	for _, key := range incomingKeys {
 		batchData, err := a.redisClient.Get(a.ctx, key).Result()
 		if err != nil {
@@ -188,6 +227,22 @@ func (a *Aggregator) createAggregatedBatch(ourBatch consensus.FinalizedBatch, in
 			continue
 		}
 
+		// Track this validator's view
+		validatorID := batch.SequencerId
+		if validatorID == "" {
+			// Extract from key as fallback
+			parts := strings.Split(key, ":")
+			if len(parts) >= 4 {
+				validatorID = parts[3]
+			}
+		}
+
+		if aggregated.EpochId == 0 {
+			aggregated.EpochId = batch.EpochId
+		}
+
+		validatorViews[validatorID] = &batch
+
 		// Merge submissions
 		for projectID, submissions := range batch.SubmissionDetails {
 			aggregated.SubmissionDetails[projectID] = append(
@@ -200,6 +255,18 @@ func (a *Aggregator) createAggregatedBatch(ourBatch consensus.FinalizedBatch, in
 				aggregated.ProjectVotes[projectID] = batch.ProjectVotes[projectID]
 			}
 		}
+	}
+
+	// Log aggregation summary
+	log.WithFields(logrus.Fields{
+		"epoch": aggregated.EpochId,
+		"validators": len(validatorViews),
+		"total_projects": len(aggregated.ProjectVotes),
+	}).Info("📊 AGGREGATED FINALIZATION: Combined views from all validators")
+
+	// Log which validators contributed
+	for validatorID := range validatorViews {
+		log.Debugf("  Validator %s contributed to aggregation", validatorID)
 	}
 
 	// Store aggregated batch to IPFS if available
