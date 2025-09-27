@@ -184,5 +184,76 @@ else
     echo "  No batches available to check"
 fi
 
+# P2P Validator Consensus Status (Phase 3)
+echo -e "\n${BLUE}🌐 P2P Validator Consensus (Phase 3):${NC}"
+
+# Check for validator batches in Redis
+VALIDATOR_BATCHES=$(redis_cmd KEYS "validator:*:batch:*")
+if [ ! -z "$VALIDATOR_BATCHES" ]; then
+    echo -e "  ${GREEN}✓ Validator batch exchange active${NC}"
+
+    # Count unique validators and epochs
+    VALIDATORS=$(echo "$VALIDATOR_BATCHES" | sed 's/validator://;s/:batch:.*//g' | sort | uniq | wc -l)
+    EPOCHS=$(echo "$VALIDATOR_BATCHES" | sed 's/.*:batch://g' | sort | uniq | wc -l)
+
+    echo "  Active Validators: $VALIDATORS"
+    echo "  Epochs with votes: $EPOCHS"
+
+    # Show recent validator activity
+    echo "  Recent validator batches:"
+    for batch in $(echo "$VALIDATOR_BATCHES" | head -5); do
+        VALIDATOR=$(echo "$batch" | sed 's/validator://;s/:batch:.*//g')
+        EPOCH=$(echo "$batch" | sed 's/.*:batch://g')
+        TTL=$(redis_cmd TTL "$batch")
+        echo "    → $VALIDATOR: Epoch $EPOCH (TTL: ${TTL}s)"
+    done
+else
+    echo -e "  ${YELLOW}⚠ No validator batches found - validators may not be exchanging votes${NC}"
+fi
+
+# Check consensus aggregation status
+CONSENSUS_STATUS=$(redis_cmd KEYS "consensus:epoch:*:status")
+if [ ! -z "$CONSENSUS_STATUS" ]; then
+    echo -e "  ${GREEN}✓ Consensus aggregation active${NC}"
+
+    # Show recent consensus results
+    RECENT_STATUS=$(echo "$CONSENSUS_STATUS" | sort -t: -k3 -n | tail -3)
+    for status in $RECENT_STATUS; do
+        EPOCH=$(echo "$status" | sed 's/consensus:epoch://;s/:status//')
+        # Get consensus data
+        CONSENSUS_DATA=$(redis_cmd GET "$status")
+        if [ ! -z "$CONSENSUS_DATA" ] && command -v jq >/dev/null 2>&1; then
+            VALIDATORS=$(echo "$CONSENSUS_DATA" | jq -r '.total_validators // "?"' 2>/dev/null)
+            PROJECTS=$(echo "$CONSENSUS_DATA" | jq -r '.aggregated_projects | length // "?"' 2>/dev/null)
+            echo "    📊 Epoch $EPOCH: $VALIDATORS validators → $PROJECTS projects aggregated"
+        else
+            echo "    📊 Epoch $EPOCH: Consensus complete"
+        fi
+    done
+else
+    echo -e "  ${YELLOW}⚠ No consensus aggregation status found${NC}"
+fi
+
+# Check consensus results ready for chain submission
+CONSENSUS_RESULTS=$(redis_cmd KEYS "consensus:epoch:*:result")
+if [ ! -z "$CONSENSUS_RESULTS" ]; then
+    RESULT_COUNT=$(echo "$CONSENSUS_RESULTS" | wc -l)
+    echo -e "  ${GREEN}✓ $RESULT_COUNT consensus results ready for chain submission${NC}"
+
+    # Show most recent result
+    LATEST_RESULT=$(echo "$CONSENSUS_RESULTS" | sort -t: -k3 -n | tail -1)
+    if [ ! -z "$LATEST_RESULT" ]; then
+        EPOCH=$(echo "$LATEST_RESULT" | sed 's/consensus:epoch://;s/:result//')
+        RESULT_DATA=$(redis_cmd GET "$LATEST_RESULT")
+        if [ ! -z "$RESULT_DATA" ] && command -v jq >/dev/null 2>&1; then
+            CID=$(echo "$RESULT_DATA" | jq -r '.cid // "?"' 2>/dev/null)
+            PROJECTS=$(echo "$RESULT_DATA" | jq -r '.projects // "?"' 2>/dev/null)
+            echo "    🎯 Latest: Epoch $EPOCH → CID $CID ($PROJECTS projects)"
+        fi
+    fi
+else
+    echo -e "  ${YELLOW}⚠ No consensus results found${NC}"
+fi
+
 echo ""
 echo -e "${CYAN}═══════════════════════════════════${NC}"

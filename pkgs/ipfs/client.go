@@ -72,8 +72,13 @@ func (c *Client) StoreFinalizedBatch(ctx context.Context, batch interface{}) (st
 	// Create a reader from the JSON data
 	reader := bytes.NewReader(jsonData)
 	
-	// Add to IPFS
-	path, err := c.api.Unixfs().Add(ctx, files.NewReaderFile(reader))
+	// Add to IPFS with CIDv1 format
+	path, err := c.api.Unixfs().Add(ctx, files.NewReaderFile(reader), func(settings *ipfsApi.UnixfsAddSettings) error {
+		settings.CidVersion = 1  // Force CIDv1
+		settings.Chunker = "size-262144"  // 256KB chunks
+		settings.Pin = true  // Auto-pin
+		return nil
+	})
 	if err != nil {
 		return "", fmt.Errorf("failed to add to IPFS: %w", err)
 	}
@@ -81,10 +86,7 @@ func (c *Client) StoreFinalizedBatch(ctx context.Context, batch interface{}) (st
 	cidStr := path.String()
 	log.Infof("Stored finalized batch in IPFS: %s", cidStr)
 	
-	// Pin the content to prevent garbage collection
-	if err := c.api.Pin().Add(ctx, path); err != nil {
-		log.Warnf("Failed to pin batch CID %s: %v", cidStr, err)
-	}
+	// Content is already pinned via settings.Pin = true
 	
 	return cidStr, nil
 }
