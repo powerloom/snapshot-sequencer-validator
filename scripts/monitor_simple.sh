@@ -18,8 +18,21 @@ echo ""
 # Get Redis port from environment or use default
 REDIS_PORT=${REDIS_PORT:-6379}
 
-# Find Redis container by port mapping
-REDIS_CONTAINER=$(docker ps --format "table {{.Names}}\t{{.Ports}}" | grep -E "0.0.0.0:${REDIS_PORT}->6379/tcp|${REDIS_PORT}/tcp" | awk '{print $1}' | head -1)
+# Find Redis container by inspecting which one is actually running Redis on the expected port
+for container in $(docker ps --format "{{.Names}}" | grep -i redis); do
+    # Check if this container is running Redis on the expected port
+    PORT=$(docker inspect $container --format '{{range $p, $conf := .Config.ExposedPorts}}{{$p}}{{end}}' | grep -o '[0-9]*' | head -1)
+    if [ -z "$PORT" ]; then PORT=6379; fi  # Default Redis port if not specified
+    if [ "$PORT" = "$REDIS_PORT" ]; then
+        REDIS_CONTAINER=$container
+        break
+    fi
+done
+
+# If still not found, just use the first Redis container
+if [ -z "$REDIS_CONTAINER" ]; then
+    REDIS_CONTAINER=$(docker ps --format "{{.Names}}" | grep -i redis | head -1)
+fi
 
 if [ -z "$REDIS_CONTAINER" ]; then
     echo -e "${RED}Error: No Redis container found on port ${REDIS_PORT}${NC}"
