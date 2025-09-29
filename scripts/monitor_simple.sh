@@ -15,6 +15,13 @@ echo -e "${CYAN}📊 Sequencer Status Monitor${NC}"
 echo -e "${CYAN}═══════════════════════════════════${NC}"
 echo ""
 
+# Get protocol and market from environment or use defaults
+PROTOCOL_STATE=${PROTOCOL_STATE:-"0xE88E5f64AEB483d7057645326AdDFA24A3B312DF"}
+DATA_MARKET=${DATA_MARKET:-"0x0C2E22fe7526fAeF28E7A58c84f8723dEFcE200c"}
+echo -e "${GREEN}Monitoring Protocol: ${PROTOCOL_STATE:0:10}...${NC}"
+echo -e "${GREEN}Monitoring Market: ${DATA_MARKET:0:10}...${NC}"
+echo ""
+
 # Get Redis port from environment or use default
 REDIS_PORT=${REDIS_PORT:-6379}
 
@@ -62,9 +69,9 @@ if [ $PROCESSED_COUNT -gt 0 ] && [ $READY_COUNT -eq 0 ]; then
 fi
 echo ""
 
-# Active Windows (Updated format: epoch:market:epochID:window)
+# Active Windows (Namespaced format: protocol:market:epoch:epochID:window)
 echo -e "${BLUE}🔷 Active Submission Windows:${NC}"
-WINDOWS=$(redis_cmd KEYS "epoch:*:*:window")
+WINDOWS=$(redis_cmd KEYS "${PROTOCOL_STATE}:${DATA_MARKET}:epoch:*:window")
 ACTIVE_COUNT=0
 CLOSED_COUNT=0
 if [ ! -z "$WINDOWS" ]; then
@@ -91,14 +98,14 @@ else
     echo "  None active"
 fi
 
-# Submission Queue
+# Submission Queue (Namespaced)
 echo -e "\n${BLUE}📥 Submission Queue:${NC}"
-QUEUE_DEPTH=$(redis_cmd LLEN "submissionQueue")
+QUEUE_DEPTH=$(redis_cmd LLEN "${PROTOCOL_STATE}:${DATA_MARKET}:submissionQueue")
 echo "  Pending: ${QUEUE_DEPTH:-0} submissions"
 
-# Ready Batches (Updated format: protocol:market:batch:ready:epochID)
+# Ready Batches (Namespaced format: protocol:market:batch:ready:epochID)
 echo -e "\n${BLUE}📦 Ready Batches (with vote data):${NC}"
-READY=$(redis_cmd KEYS "*:*:batch:ready:*")
+READY=$(redis_cmd KEYS "${PROTOCOL_STATE}:${DATA_MARKET}:batch:ready:*")
 if [ ! -z "$READY" ]; then
     for batch in $READY; do
         # Extract protocol:market and epoch from protocol:market:batch:ready:epochID
@@ -130,9 +137,9 @@ fi
 
 # Finalized Batches (LOCAL to this validator - what WE finalized)
 echo -e "\n${BLUE}✅ LOCAL Finalized Batches (This Validator):${NC}"
-# Use SCAN instead of KEYS - check for protocol:market:finalized:epochID pattern
+# Use SCAN instead of KEYS - check for namespaced protocol:market:finalized:epochID pattern
 FINALIZED=""
-for pattern in "*:*:finalized:*" "batch:finalized:*"; do
+for pattern in "${PROTOCOL_STATE}:${DATA_MARKET}:finalized:*"; do
     SCAN_RESULT=$(redis_cmd --scan --pattern "$pattern" 2>/dev/null | head -10)
     if [ ! -z "$SCAN_RESULT" ]; then
         FINALIZED="$FINALIZED $SCAN_RESULT"
@@ -186,8 +193,8 @@ fi
 # LEVEL 1 AGGREGATION: Internal (Finalizer Workers → Local Complete Batch)
 echo -e "\n${CYAN}═══ LEVEL 1: Internal Aggregation (Workers → Local Batch) ═══${NC}"
 echo -e "${BLUE}📦 Finalizer Worker Progress:${NC}"
-# Check for batch parts being collected from multiple workers
-BATCH_PARTS=$(redis_cmd KEYS "epoch:*:parts:*")
+# Check for batch parts being collected from multiple workers (namespaced)
+BATCH_PARTS=$(redis_cmd KEYS "${PROTOCOL_STATE}:${DATA_MARKET}:epoch:*:parts:*")
 if [ ! -z "$BATCH_PARTS" ]; then
     for part_key in $BATCH_PARTS; do
         EPOCH=$(echo "$part_key" | sed 's/epoch://;s/:parts:.*//')
@@ -219,9 +226,9 @@ else
     echo "  No active workers"
 fi
 
-# Check finalization queue
+# Check finalization queue (namespaced)
 echo -e "\n${BLUE}🔄 Finalization Queue:${NC}"
-FIN_QUEUES=$(redis_cmd KEYS "*:*:finalizationQueue")
+FIN_QUEUES=$(redis_cmd KEYS "${PROTOCOL_STATE}:${DATA_MARKET}:finalizationQueue")
 if [ ! -z "$FIN_QUEUES" ]; then
     for queue in $FIN_QUEUES; do
         QUEUE_LEN=$(redis_cmd LLEN "$queue")
@@ -261,15 +268,15 @@ fi
 echo -e "\n${CYAN}═══ LEVEL 2: Network Aggregation (Validators → Consensus) ═══${NC}"
 echo -e "${BLUE}🌐 Validator Network Exchange:${NC}"
 
-# Check outgoing broadcasts queued for P2P Gateway
-OUTGOING_QUEUE=$(redis_cmd LLEN "outgoing:broadcast:batch")
+# Check outgoing broadcasts queued for P2P Gateway (namespaced)
+OUTGOING_QUEUE=$(redis_cmd LLEN "${PROTOCOL_STATE}:${DATA_MARKET}:outgoing:broadcast:batch")
 if [ "$OUTGOING_QUEUE" -gt 0 ]; then
     echo -e "  📤 LOCAL batches queued for broadcast: $OUTGOING_QUEUE"
     echo -e "      (Aggregator broadcasts our complete local view)"
 fi
 
-# Check incoming batches from other validators
-INCOMING_BATCHES=$(redis_cmd KEYS "incoming:batch:*")
+# Check incoming batches from other validators (namespaced)
+INCOMING_BATCHES=$(redis_cmd KEYS "${PROTOCOL_STATE}:${DATA_MARKET}:incoming:batch:*")
 if [ ! -z "$INCOMING_BATCHES" ]; then
     echo -e "  ${GREEN}✓ REMOTE batches received from network:${NC}"
     VALIDATOR_COUNT=$(echo "$INCOMING_BATCHES" | sed 's/.*batch:[^:]*://' | sort -u | wc -l)
@@ -284,15 +291,15 @@ else
     echo -e "  ${YELLOW}⚠ No remote validator batches received yet${NC}"
 fi
 
-# Check aggregation queue
-AGG_QUEUE=$(redis_cmd LLEN "aggregation:queue")
+# Check aggregation queue (namespaced)
+AGG_QUEUE=$(redis_cmd LLEN "${PROTOCOL_STATE}:${DATA_MARKET}:aggregation:queue")
 if [ "$AGG_QUEUE" -gt 0 ]; then
     echo -e "  🔄 Epochs awaiting network aggregation: $AGG_QUEUE"
 fi
 
-# Check for aggregated batches (final network-wide view)
+# Check for aggregated batches (final network-wide view) - namespaced
 echo -e "\n${BLUE}🎯 Network Consensus Results:${NC}"
-AGGREGATED_BATCHES=$(redis_cmd KEYS "batch:aggregated:*" | head -5)
+AGGREGATED_BATCHES=$(redis_cmd KEYS "${PROTOCOL_STATE}:${DATA_MARKET}:batch:aggregated:*" | head -5)
 if [ ! -z "$AGGREGATED_BATCHES" ]; then
     echo -e "  ${GREEN}✓ NETWORK-WIDE aggregated views:${NC}"
     for batch in $AGGREGATED_BATCHES; do
@@ -318,13 +325,12 @@ fi
 echo -e "\n${CYAN}═══ AGGREGATION SUMMARY ═══${NC}"
 echo -e "${BLUE}📊 Two-Level Aggregation Flow:${NC}"
 
-# Count Level 1 completions
-LOCAL_FINALIZED_COUNT=$(redis_cmd --scan --pattern "*:*:finalized:*" 2>/dev/null | wc -l)
-LOCAL_FINALIZED_COUNT2=$(redis_cmd --scan --pattern "batch:finalized:*" 2>/dev/null | wc -l)
-TOTAL_LOCAL=$((LOCAL_FINALIZED_COUNT + LOCAL_FINALIZED_COUNT2))
+# Count Level 1 completions (namespaced)
+LOCAL_FINALIZED_COUNT=$(redis_cmd --scan --pattern "${PROTOCOL_STATE}:${DATA_MARKET}:finalized:*" 2>/dev/null | wc -l)
+TOTAL_LOCAL=$LOCAL_FINALIZED_COUNT
 
-# Count Level 2 completions
-NETWORK_AGGREGATED_COUNT=$(redis_cmd --scan --pattern "batch:aggregated:*" 2>/dev/null | wc -l)
+# Count Level 2 completions (namespaced)
+NETWORK_AGGREGATED_COUNT=$(redis_cmd --scan --pattern "${PROTOCOL_STATE}:${DATA_MARKET}:batch:aggregated:*" 2>/dev/null | wc -l)
 
 echo "  Level 1 (Workers→Local):  $TOTAL_LOCAL epochs finalized locally"
 echo "  Level 2 (Validators→Net): $NETWORK_AGGREGATED_COUNT epochs aggregated network-wide"

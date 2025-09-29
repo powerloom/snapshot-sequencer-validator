@@ -172,8 +172,9 @@ func (g *P2PGateway) handleSubmissionMessages(sub *pubsub.Subscription, topicNam
 		log.Infof("📨 RECEIVED %s on %s from peer %s (size: %d bytes)",
 			topicLabel, topicName, msg.ReceivedFrom.ShortString(), len(msg.Data))
 
-		// Route to Redis for dequeuer processing
-		if err := g.redisClient.LPush(g.ctx, "submissionQueue", msg.Data).Err(); err != nil {
+		// Route to Redis for dequeuer processing (namespaced by protocol:market)
+		queueKey := fmt.Sprintf("%s:%s:submissionQueue", g.config.ProtocolStateContract, g.config.DataMarketAddresses[0])
+		if err := g.redisClient.LPush(g.ctx, queueKey, msg.Data).Err(); err != nil {
 			log.WithError(err).Error("Failed to push submission to Redis")
 		} else {
 			log.Infof("✅ P2P Gateway: Routed %s to Redis queue", topicLabel)
@@ -222,18 +223,25 @@ func (g *P2PGateway) handleIncomingBatches() {
 			validatorID = seqID
 		}
 
-		// Route to Redis for aggregator processing
+		// Route to Redis for aggregator processing (namespaced by protocol:market)
 		// Include validator ID in the key so we can track who sent what
-		key := fmt.Sprintf("incoming:batch:%v:%s", epochID, validatorID)
+		protocolState := g.config.ProtocolStateContract
+		dataMarket := ""
+		if len(g.config.DataMarketAddresses) > 0 {
+			dataMarket = g.config.DataMarketAddresses[0]
+		}
+
+		key := fmt.Sprintf("%s:%s:incoming:batch:%v:%s", protocolState, dataMarket, epochID, validatorID)
 		if err := g.redisClient.Set(g.ctx, key, msg.Data, 30*time.Minute).Err(); err != nil {
 			log.WithError(err).Error("Failed to store incoming batch")
 		} else {
-			// Check if epoch is already aggregated before queueing
-			aggregatedKey := fmt.Sprintf("batch:aggregated:%v", epochID)
+			// Check if epoch is already aggregated before queueing (namespaced)
+			aggregatedKey := fmt.Sprintf("%s:%s:batch:aggregated:%v", protocolState, dataMarket, epochID)
 			exists, _ := g.redisClient.Exists(g.ctx, aggregatedKey).Result()
 			if exists == 0 {
-				// Only add to aggregation queue if not already aggregated
-				if err := g.redisClient.LPush(g.ctx, "aggregation:queue", epochID).Err(); err != nil {
+				// Only add to aggregation queue if not already aggregated (namespaced)
+				aggQueueKey := fmt.Sprintf("%s:%s:aggregation:queue", protocolState, dataMarket)
+				if err := g.redisClient.LPush(g.ctx, aggQueueKey, epochID).Err(); err != nil {
 					log.WithError(err).Error("Failed to add to aggregation queue")
 				}
 			} else {
@@ -269,13 +277,21 @@ func (g *P2PGateway) handleValidatorPresence() {
 
 func (g *P2PGateway) handleOutgoingMessages() {
 	// Watch for messages to broadcast from other components
+	// Get namespaced queue key
+	protocolState := g.config.ProtocolStateContract
+	dataMarket := ""
+	if len(g.config.DataMarketAddresses) > 0 {
+		dataMarket = g.config.DataMarketAddresses[0]
+	}
+	broadcastQueueKey := fmt.Sprintf("%s:%s:outgoing:broadcast:batch", protocolState, dataMarket)
+
 	for {
 		select {
 		case <-g.ctx.Done():
 			return
 		case <-time.After(100 * time.Millisecond):
-			// Check for outgoing batch broadcasts
-			result, err := g.redisClient.BRPop(g.ctx, time.Second, "outgoing:broadcast:batch").Result()
+			// Check for outgoing batch broadcasts (namespaced)
+			result, err := g.redisClient.BRPop(g.ctx, time.Second, broadcastQueueKey).Result()
 			if err != nil {
 				if err != redis.Nil {
 					log.WithError(err).Debug("No outgoing messages")

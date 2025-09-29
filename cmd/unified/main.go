@@ -749,8 +749,14 @@ func (s *UnifiedSequencer) runDequeuerWorker(workerID int) {
 			log.Infof("Dequeuer worker %d shutting down", workerID)
 			return
 		default:
-			// Pop from queue with timeout
-			result, err := s.redisClient.BRPop(s.ctx, 2*time.Second, "submissionQueue").Result()
+			// Pop from queue with timeout - namespaced
+			protocolState := s.config.ProtocolStateContract
+			dataMarket := ""
+			if len(s.config.DataMarketAddresses) > 0 {
+				dataMarket = s.config.DataMarketAddresses[0]
+			}
+			queueKey := fmt.Sprintf("%s:%s:submissionQueue", protocolState, dataMarket)
+			result, err := s.redisClient.BRPop(s.ctx, 2*time.Second, queueKey).Result()
 			if err != nil {
 				if err == redis.Nil {
 					continue // Queue empty
@@ -1045,12 +1051,12 @@ func (s *UnifiedSequencer) processBatchPart(epochID uint64, batchID int, totalBa
 	// Mark batch part as completed
 	workers.TrackBatchPart(s.redisClient, epochStr, batchID, "completed")
 	
-	// Update progress tracking
-	completedKey := fmt.Sprintf("epoch:%d:parts:completed", epochID)
+	// Update progress tracking - namespaced
+	completedKey := fmt.Sprintf("%s:%s:epoch:%d:parts:completed", protocolState, dataMarket, epochID)
 	completed, _ := s.redisClient.Incr(ctx, completedKey).Result()
-	
+
 	// Check if all parts are complete
-	workers.UpdateBatchPartsProgress(s.redisClient, epochStr, int(completed), totalBatches)
+	workers.UpdateBatchPartsProgress(s.redisClient, protocolState, dataMarket, epochStr, int(completed), totalBatches)
 	
 	// Log batch contents for operator visibility
 	log.Infof("✅ Processed batch part %d/%d for epoch %d: %d projects finalized", 

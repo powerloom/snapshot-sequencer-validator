@@ -19,21 +19,21 @@ P2P Gateway ←→ Redis ←→ Dequeuer
 
 ### P2P Gateway Keys
 
-#### Incoming (from network to Redis)
-- `submissionQueue` - LIST: Raw P2P submissions from network
+#### Incoming (from network to Redis) - ALL NAMESPACED
+- `{protocol}:{market}:submissionQueue` - LIST: Raw P2P submissions from network
   - Written by: P2P Gateway
   - Read by: Dequeuer
   - Format: JSON encoded P2PSnapshotSubmission
 
-- `incoming:batch:{epochId}` - STRING: Received batch from another validator
+- `{protocol}:{market}:incoming:batch:{epochId}:{validatorId}` - STRING: Received batch from validator
   - Written by: P2P Gateway
   - Read by: Aggregator
   - TTL: 30 minutes
   - Format: JSON encoded FinalizedBatch
 
-- `aggregation:queue` - LIST: Epochs ready for aggregation
+- `{protocol}:{market}:aggregation:queue` - LIST: Epochs ready for Level 2 aggregation
   - Written by: P2P Gateway (when batch received)
-  - Read by: Aggregator
+  - Read by: Aggregator (Level 2)
   - Format: epochId as string
 
 - `validator:active:{validatorId}` - STRING: Active validator tracking
@@ -42,9 +42,9 @@ P2P Gateway ←→ Redis ←→ Dequeuer
   - TTL: 5 minutes
   - Format: Unix timestamp
 
-#### Outgoing (from Redis to network)
-- `outgoing:broadcast:batch` - LIST: Batches to broadcast
-  - Written by: Aggregator
+#### Outgoing (from Redis to network) - NAMESPACED
+- `{protocol}:{market}:outgoing:broadcast:batch` - LIST: Batches to broadcast
+  - Written by: Aggregator (after Level 1 aggregation)
   - Read by: P2P Gateway
   - Format: JSON with type and data fields
 
@@ -64,9 +64,9 @@ P2P Gateway ←→ Redis ←→ Dequeuer
   - Written by: Dequeuer
   - Read by: Finalizer
 
-### Event Monitor Keys
+### Event Monitor Keys - NAMESPACED
 
-- `epoch:{market}:{epochId}:window` - STRING: Submission window status
+- `{protocol}:{market}:epoch:{epochId}:window` - STRING: Submission window status
   - Written by: Event Monitor
   - Read by: Dequeuer, Finalizer
   - Values: "open" or "closed"
@@ -84,17 +84,22 @@ P2P Gateway ←→ Redis ←→ Dequeuer
   - Format: JSON with project results subset
   - TTL: 2 hours
 
-- `epoch:{epochId}:parts:completed` - STRING: Count of completed parts
+- `{protocol}:{market}:epoch:{epochId}:parts:completed` - STRING: Count of completed parts
   - Written by: Finalizer workers
   - Read by: Workers monitoring
   - Format: Integer count
 
-- `epoch:{epochId}:parts:total` - STRING: Total expected parts
+- `{protocol}:{market}:epoch:{epochId}:parts:total` - STRING: Total expected parts
   - Written by: Event Monitor/Finalizer
   - Read by: Workers monitoring
   - Format: Integer count
 
-- `aggregationQueue` - LIST: Worker parts ready for aggregation
+- `{protocol}:{market}:epoch:{epochId}:parts:ready` - STRING: Flag for ready status
+  - Written by: Finalizer workers when all parts complete
+  - Read by: Aggregator
+  - Format: "true"
+
+- `{protocol}:{market}:aggregationQueue` - LIST: Worker parts ready for Level 1 aggregation
   - Written by: Finalizer workers (via UpdateBatchPartsProgress)
   - Read by: Aggregator (Level 1)
   - Format: JSON with epoch_id, parts_completed
@@ -104,22 +109,12 @@ P2P Gateway ←→ Redis ←→ Dequeuer
   - Read by: Aggregator (for Level 2), Monitoring
   - Format: JSON encoded FinalizedBatch with IPFS CID
 
-### Aggregator Keys
+### Aggregator Keys - ALL NAMESPACED
 
-- `batch:aggregated:{epochId}` - STRING: Network-wide consensus batch
+- `{protocol}:{market}:batch:aggregated:{epochId}` - STRING: Network-wide consensus batch
   - Written by: Aggregator (Level 2 aggregation)
   - Read by: Monitoring/API
   - Format: JSON with all validator batches merged
-
-- `incoming:batch:{epochId}:{validatorId}` - STRING: Received batch from validator
-  - Written by: P2P Gateway
-  - Read by: Aggregator (Level 2 aggregation)
-  - Format: JSON encoded FinalizedBatch from remote validator
-
-- `aggregation:queue` - LIST: Epochs ready for Level 2 aggregation
-  - Written by: P2P Gateway (on batch receipt)
-  - Read by: Aggregator (Level 2)
-  - Format: epochId as string
 
 ### Monitoring Keys
 

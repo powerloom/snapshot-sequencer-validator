@@ -426,8 +426,8 @@ func (wm *WindowManager) StartSubmissionWindow(ctx context.Context, dataMarket s
 		wm.closeWindow(dataMarket, epochID)
 	})
 	
-	// Mark window as open in Redis
-	windowKey := fmt.Sprintf("epoch:%s:%s:window", dataMarket, epochID.String())
+	// Mark window as open in Redis - namespaced with protocol:market
+	windowKey := fmt.Sprintf("%s:%s:epoch:%s:window", wm.protocolState, dataMarket, epochID.String())
 	wm.redisClient.Set(context.Background(), windowKey, "open", duration)
 	
 	log.Infof("⏰ Submission window opened for epoch %s in market %s (duration: %v, active: %d)",
@@ -457,9 +457,9 @@ func (wm *WindowManager) closeWindow(dataMarket string, epochID *big.Int) {
 	// Close the done channel
 	close(window.Done)
 	
-	// Mark window as closed in Redis
+	// Mark window as closed in Redis - namespaced with protocol:market
 	ctx := context.Background()
-	windowKey := fmt.Sprintf("epoch:%s:%s:window", dataMarket, epochID.String())
+	windowKey := fmt.Sprintf("%s:%s:epoch:%s:window", wm.protocolState, dataMarket, epochID.String())
 	wm.redisClient.Set(ctx, windowKey, "closed", 1*time.Hour)
 	
 	// Trigger finalization

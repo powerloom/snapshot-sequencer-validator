@@ -134,23 +134,24 @@ func TrackBatchPart(redisClient *redis.Client, epochID string, batchID int, stat
 }
 
 // UpdateBatchPartsProgress updates the progress of batch parts completion
-func UpdateBatchPartsProgress(redisClient *redis.Client, epochID string, completed, total int) error {
+func UpdateBatchPartsProgress(redisClient *redis.Client, protocolState, dataMarket, epochID string, completed, total int) error {
 	ctx := context.Background()
-	
-	completedKey := fmt.Sprintf("epoch:%s:parts:completed", epochID)
-	totalKey := fmt.Sprintf("epoch:%s:parts:total", epochID)
-	
+
+	// Namespaced keys
+	completedKey := fmt.Sprintf("%s:%s:epoch:%s:parts:completed", protocolState, dataMarket, epochID)
+	totalKey := fmt.Sprintf("%s:%s:epoch:%s:parts:total", protocolState, dataMarket, epochID)
+
 	pipe := redisClient.Pipeline()
 	pipe.Set(ctx, completedKey, completed, 2*time.Hour)
 	pipe.Set(ctx, totalKey, total, 2*time.Hour)
-	
+
 	// Mark as ready if all parts are complete
 	if completed == total && total > 0 {
-		readyKey := fmt.Sprintf("epoch:%s:parts:ready", epochID)
+		readyKey := fmt.Sprintf("%s:%s:epoch:%s:parts:ready", protocolState, dataMarket, epochID)
 		pipe.Set(ctx, readyKey, "true", 2*time.Hour)
-		
-		// Push to aggregation queue
-		aggQueueKey := "aggregationQueue"
+
+		// Push to aggregation queue - namespaced
+		aggQueueKey := fmt.Sprintf("%s:%s:aggregationQueue", protocolState, dataMarket)
 		aggData := map[string]interface{}{
 			"epoch_id":        epochID,
 			"parts_completed": completed,
