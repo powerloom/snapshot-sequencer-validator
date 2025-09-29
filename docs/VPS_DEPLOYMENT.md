@@ -19,7 +19,7 @@
 
 The Powerloom Decentralized Sequencer Validator uses a separated architecture for production deployments:
 
-### System Architecture: Single-Responsibility Containers
+### System Architecture: Two-Level Aggregation (Updated Sep 29, 2025)
 
 #### Core Components
 1. **P2P Gateway (Singleton)**
@@ -28,26 +28,31 @@ The Powerloom Decentralized Sequencer Validator uses a separated architecture fo
    - **Responsibilities**:
      - Peer discovery
      - Gossipsub message exchange
-     - Submission broadcasting
-     - Provides centralized P2P communication interface
+     - Routes submissions to Redis queue
+     - Broadcasts COMPLETE local batches (from aggregator only)
+     - Receives other validators' complete batches
 
 2. **Aggregator (Singleton)**
    - **Binary**: `cmd/aggregator/main.go`
-   - **Purpose**: Performs batch aggregation and consensus
-   - **Responsibilities**:
-     - Collect batches from finalizers
-     - Perform voting and consensus
-     - Generate final aggregated batch with Merkle root
-     - IPFS storage of consensus results
+   - **Purpose**: TWO-LEVEL aggregation
+   - **Level 1 (Internal)**:
+     - Combines partial results from multiple finalizer workers
+     - Creates complete local batch
+     - Stores to IPFS
+     - Broadcasts complete local view to network
+   - **Level 2 (Network)**:
+     - Receives other validators' complete batches
+     - Combines local + remote batches
+     - Creates network-wide consensus view
 
-3. **Finalizer**
-   - **Binary**: `cmd/finalizer/main.go`
-   - **Purpose**: Create individual project batches
+3. **Finalizer Workers (Multiple/Auto-scaled)**
+   - **Binary**: Part of `cmd/unified/main.go`
+   - **Purpose**: Process project batches in parallel
    - **Responsibilities**:
-     - Dequeue submissions
-     - Generate project-specific batches
-     - Prepare batches for aggregation
-     - No longer handles aggregation logic
+     - Process assigned project batches
+     - Store partial results ONLY
+     - NO BROADCASTING (removed Sep 29)
+     - Workers are auto-scaled based on load
 
 4. **Event Monitor**
    - **Monitors blockchain events**
