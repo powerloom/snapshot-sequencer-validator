@@ -78,27 +78,48 @@ P2P Gateway ←→ Redis ←→ Dequeuer
 
 ### Finalizer Keys
 
-- `batch:finalized:{epochId}` - STRING: Finalized batch with IPFS CID
-  - Written by: Finalizer
-  - Read by: Aggregator
-  - Format: JSON encoded FinalizedBatch with BatchCID
+- `{protocol}:{market}:batch:part:{epochId}:{partId}` - STRING: Partial batch from worker
+  - Written by: Finalizer workers
+  - Read by: Aggregator (Level 1 aggregation)
+  - Format: JSON with project results subset
+  - TTL: 2 hours
 
-- `batch:merkle:{epochId}` - STRING: Merkle tree data
-  - Written by: Finalizer
-  - Read by: Aggregator (optional)
-  - TTL: 24 hours
+- `epoch:{epochId}:parts:completed` - STRING: Count of completed parts
+  - Written by: Finalizer workers
+  - Read by: Workers monitoring
+  - Format: Integer count
+
+- `epoch:{epochId}:parts:total` - STRING: Total expected parts
+  - Written by: Event Monitor/Finalizer
+  - Read by: Workers monitoring
+  - Format: Integer count
+
+- `aggregationQueue` - LIST: Worker parts ready for aggregation
+  - Written by: Finalizer workers (via UpdateBatchPartsProgress)
+  - Read by: Aggregator (Level 1)
+  - Format: JSON with epoch_id, parts_completed
+
+- `{protocol}:{market}:finalized:{epochId}` - STRING: Complete local finalized batch
+  - Written by: Aggregator (after Level 1 aggregation)
+  - Read by: Aggregator (for Level 2), Monitoring
+  - Format: JSON encoded FinalizedBatch with IPFS CID
 
 ### Aggregator Keys
 
-- `batch:aggregated:{epochId}` - STRING: Aggregated consensus batch
-  - Written by: Aggregator
+- `batch:aggregated:{epochId}` - STRING: Network-wide consensus batch
+  - Written by: Aggregator (Level 2 aggregation)
   - Read by: Monitoring/API
   - Format: JSON with all validator batches merged
 
-- `incoming:batch:{epochId}:*` - Pattern for all incoming batches
+- `incoming:batch:{epochId}:{validatorId}` - STRING: Received batch from validator
   - Written by: P2P Gateway
-  - Read by: Aggregator
-  - Used to find all validator batches for an epoch
+  - Read by: Aggregator (Level 2 aggregation)
+  - Format: JSON encoded FinalizedBatch from remote validator
+
+- `aggregation:queue` - LIST: Epochs ready for Level 2 aggregation
+  - Written by: P2P Gateway (on batch receipt)
+  - Read by: Aggregator (Level 2)
+  - Format: epochId as string
 
 ### Monitoring Keys
 
@@ -116,22 +137,29 @@ P2P Gateway ←→ Redis ←→ Dequeuer
 
 ### 1. Submission Flow
 ```
-Network → P2P Gateway → submissionQueue → Dequeuer → processed:{id} → Finalizer
+Network → P2P Gateway → submissionQueue → Dequeuer → processed:{id} → Event Monitor
 ```
 
-### 2. Batch Broadcast Flow
+### 2. Level 1 Aggregation (Worker Parts → Local Batch)
 ```
-Finalizer → batch:finalized:{epochId} → Aggregator → outgoing:broadcast:batch → P2P Gateway → Network
-```
-
-### 3. Batch Reception Flow
-```
-Network → P2P Gateway → incoming:batch:{epochId} + aggregation:queue → Aggregator
+Finalizer Workers → batch:part:{epoch}:{0..N} → aggregationQueue → Aggregator
+→ {protocol}:{market}:finalized:{epochId} + outgoing:broadcast:batch
 ```
 
-### 4. Aggregation Flow
+### 3. Batch Broadcast Flow
 ```
-batch:finalized:{epochId} + incoming:batch:{epochId}:* → Aggregator → batch:aggregated:{epochId}
+Aggregator (Level 1) → outgoing:broadcast:batch → P2P Gateway → Network
+```
+
+### 4. Batch Reception Flow
+```
+Network → P2P Gateway → incoming:batch:{epochId}:{validatorId} + aggregation:queue → Aggregator
+```
+
+### 5. Level 2 Aggregation (Local + Remote → Consensus)
+```
+{protocol}:{market}:finalized:{epochId} + incoming:batch:{epochId}:*
+→ Aggregator → batch:aggregated:{epochId}
 ```
 
 ## Key Naming Conventions
