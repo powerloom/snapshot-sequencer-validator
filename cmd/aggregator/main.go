@@ -189,6 +189,7 @@ func (a *Aggregator) createAggregatedBatch(ourBatch *consensus.FinalizedBatch, i
 		SubmissionDetails: make(map[string][]submissions.SubmissionMetadata),
 		ProjectVotes:      make(map[string]uint32),
 		Timestamp:         uint64(time.Now().Unix()),
+		SequencerId:       a.config.SequencerID, // Set our node's ID
 	}
 
 	// Track all validators' views
@@ -275,6 +276,29 @@ func (a *Aggregator) createAggregatedBatch(ourBatch *consensus.FinalizedBatch, i
 				"epoch": aggregated.EpochId,
 				"cid":   cid,
 			}).Info("Aggregator: Stored aggregated batch to IPFS")
+		}
+	}
+
+	// CRITICAL: Only broadcast if this is OUR local batch (not a network aggregation)
+	// We broadcast when we have our own batch, not when just aggregating others
+	if ourBatch != nil && len(validatorViews) == 1 {
+		// This is our local finalization - broadcast it
+		broadcastMsg := map[string]interface{}{
+			"type":    "finalized_batch",
+			"epochId": aggregated.EpochId,
+			"data":    aggregated,
+		}
+
+		if msgData, err := json.Marshal(broadcastMsg); err == nil {
+			if err := a.redisClient.LPush(a.ctx, "outgoing:broadcast:batch", msgData).Err(); err != nil {
+				log.WithError(err).Error("Failed to queue batch for validator network broadcast")
+			} else {
+				log.WithFields(logrus.Fields{
+					"epoch": aggregated.EpochId,
+					"projects": len(aggregated.ProjectVotes),
+					"cid": aggregated.BatchIPFSCID,
+				}).Info("📡 Broadcasting LOCAL finalized batch to validator network")
+			}
 		}
 	}
 
