@@ -1327,25 +1327,6 @@ func (s *UnifiedSequencer) createFinalizedBatch(epochID uint64, projectSubmissio
 			finalizedBatch.BatchIPFSCID = batchCID
 			log.Infof("📦 Stored finalized batch in IPFS: %s", batchCID)
 
-			// In separated architecture, broadcast via P2P Gateway through Redis
-			// This goes to OTHER VALIDATORS, not snapshotters
-			// P2P Gateway reads this queue and broadcasts to /powerloom/finalized-batches/all
-			broadcastMsg := map[string]interface{}{
-				"type":    "finalized_batch",
-				"epochId": finalizedBatch.EpochId,
-				"data":    finalizedBatch,  // Send COMPLETE batch with all submission details
-			}
-
-			if msgData, err := json.Marshal(broadcastMsg); err == nil {
-				if err := s.redisClient.LPush(ctx, "outgoing:broadcast:batch", msgData).Err(); err != nil {
-					log.Errorf("Failed to queue batch for validator network broadcast: %v", err)
-				} else {
-					log.Infof("📡 Broadcasting finalized batch to VALIDATOR network (epoch %d, %d projects, IPFS: %s)",
-						finalizedBatch.EpochId, len(finalizedBatch.ProjectIds), batchCID)
-					log.Debugf("Batch includes submission details from %d snapshotters", len(finalizedBatch.SubmissionDetails))
-				}
-			}
-
 			// Keep legacy P2P consensus for unified mode
 			if s.p2pConsensus != nil {
 				if err := s.p2pConsensus.BroadcastFinalizedBatch(finalizedBatch); err != nil {
