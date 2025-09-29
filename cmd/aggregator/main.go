@@ -103,6 +103,18 @@ func (a *Aggregator) processAggregationQueue() {
 }
 
 func (a *Aggregator) aggregateEpoch(epochIDStr string) {
+	// Check if we've already aggregated this epoch recently (deduplication)
+	aggregatedKey := fmt.Sprintf("batch:aggregated:%s", epochIDStr)
+	exists, err := a.redisClient.Exists(a.ctx, aggregatedKey).Result()
+	if err != nil {
+		log.WithField("epoch", epochIDStr).WithError(err).Error("Failed to check aggregated status")
+		return
+	}
+	if exists > 0 {
+		log.WithField("epoch", epochIDStr).Debug("Epoch already aggregated, skipping")
+		return
+	}
+
 	// Get our own finalized batch from the unified sequencer's finalizer
 	// Try both old and new key patterns
 	ourBatchKey := ""
@@ -158,29 +170,15 @@ func (a *Aggregator) aggregateEpoch(epochIDStr string) {
 
 	// Aggregate all batches
 	aggregatedBatch := a.createAggregatedBatch(ourBatch, incomingKeys)
-
-	// Store aggregated result
-	aggregatedKey := fmt.Sprintf("batch:aggregated:%s", epochIDStr)
 	aggregatedData, _ := json.Marshal(aggregatedBatch)
 	if err := a.redisClient.Set(a.ctx, aggregatedKey, aggregatedData, 24*time.Hour).Err(); err != nil {
 		log.WithError(err).Error("Failed to store aggregated batch")
 		return
 	}
 
-	// Broadcast our batch to the network via P2P Gateway
-	outgoingMsg := map[string]interface{}{
-		"type":    "batch",
-		"epochId": ourBatch.EpochId,
-		"data":    ourBatch,
-	}
-	outgoingData, _ := json.Marshal(outgoingMsg)
-	if err := a.redisClient.LPush(a.ctx, "outgoing:broadcast:batch", outgoingData).Err(); err != nil {
-		log.WithError(err).Error("Failed to queue batch for broadcast")
-	}
-
 	log.WithFields(logrus.Fields{
 		"epoch":            epochIDStr,
-		"total_validators": len(keys) + 1,
+		"total_validators": totalValidators,
 		"projects":         len(aggregatedBatch.ProjectVotes),
 	}).Info("Aggregator: Completed aggregation")
 }

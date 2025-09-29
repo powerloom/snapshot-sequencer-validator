@@ -1238,13 +1238,19 @@ func (s *UnifiedSequencer) processBatchFinalization(epochID uint64) {
 
 func (s *UnifiedSequencer) createFinalizedBatch(epochID uint64, projectSubmissions map[string]interface{}) error {
 	ctx := context.Background()
-	
+
+	// Skip empty batches - don't finalize epochs with no actual submissions
+	if len(projectSubmissions) == 0 {
+		log.Warnf("Skipping finalization for epoch %d - no submissions", epochID)
+		return nil
+	}
+
 	// Extract project IDs and CIDs
 	projectIDs := make([]string, 0)
-	snapshotCIDs := make([]string, 0) 
+	snapshotCIDs := make([]string, 0)
 	projectVotes := make(map[string]uint32)
 	submissionDetails := make(map[string][]submissions.SubmissionMetadata)
-	
+
 	for projectID, submissionData := range projectSubmissions {
 		// Handle the new structure with vote metadata and submission details
 		if dataMap, ok := submissionData.(map[string]interface{}); ok {

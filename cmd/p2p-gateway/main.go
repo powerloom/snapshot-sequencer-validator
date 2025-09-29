@@ -228,9 +228,16 @@ func (g *P2PGateway) handleIncomingBatches() {
 		if err := g.redisClient.Set(g.ctx, key, msg.Data, 30*time.Minute).Err(); err != nil {
 			log.WithError(err).Error("Failed to store incoming batch")
 		} else {
-			// Also add to aggregation queue (only epoch ID)
-			if err := g.redisClient.LPush(g.ctx, "aggregation:queue", epochID).Err(); err != nil {
-				log.WithError(err).Error("Failed to add to aggregation queue")
+			// Check if epoch is already aggregated before queueing
+			aggregatedKey := fmt.Sprintf("batch:aggregated:%v", epochID)
+			exists, _ := g.redisClient.Exists(g.ctx, aggregatedKey).Result()
+			if exists == 0 {
+				// Only add to aggregation queue if not already aggregated
+				if err := g.redisClient.LPush(g.ctx, "aggregation:queue", epochID).Err(); err != nil {
+					log.WithError(err).Error("Failed to add to aggregation queue")
+				}
+			} else {
+				log.WithField("epoch", epochID).Debug("Epoch already aggregated, not re-queueing")
 			}
 			log.WithFields(logrus.Fields{
 				"epoch": epochID,
