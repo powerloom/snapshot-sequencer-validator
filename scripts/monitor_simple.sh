@@ -183,26 +183,27 @@ else
     echo "  None"
 fi
 
-# Local Aggregation Activity (Phase 2)
-echo -e "\n${BLUE}📦 Local Batch Aggregation:${NC}"
-# Check for batch parts being collected
+# LEVEL 1 AGGREGATION: Internal (Finalizer Workers → Local Complete Batch)
+echo -e "\n${CYAN}═══ LEVEL 1: Internal Aggregation (Workers → Local Batch) ═══${NC}"
+echo -e "${BLUE}📦 Finalizer Worker Progress:${NC}"
+# Check for batch parts being collected from multiple workers
 BATCH_PARTS=$(redis_cmd KEYS "epoch:*:parts:*")
 if [ ! -z "$BATCH_PARTS" ]; then
     for part_key in $BATCH_PARTS; do
         EPOCH=$(echo "$part_key" | sed 's/epoch://;s/:parts:.*//')
         if [[ "$part_key" == *":ready" ]]; then
             READY_COUNT=$(redis_cmd SCARD "$part_key")
-            echo "  📥 Epoch $EPOCH: $READY_COUNT parts ready for aggregation"
+            echo "  📥 Epoch $EPOCH: $READY_COUNT worker parts ready for internal aggregation"
         elif [[ "$part_key" == *":completed" ]]; then
             COMPLETED=$(redis_cmd SMEMBERS "$part_key" | wc -w)
-            echo "  ✅ Epoch $EPOCH: $COMPLETED parts completed"
+            echo "  ✅ Epoch $EPOCH: $COMPLETED worker parts completed"
         elif [[ "$part_key" == *":total" ]]; then
             TOTAL=$(redis_cmd GET "$part_key")
-            echo "  📊 Epoch $EPOCH: $TOTAL total parts expected"
+            echo "  📊 Epoch $EPOCH: $TOTAL total worker parts expected"
         fi
     done
 else
-    echo "  No active batch aggregation"
+    echo "  No active worker aggregation"
 fi
 
 # Workers
@@ -256,118 +257,88 @@ else
     echo "  No batches available to check"
 fi
 
-# P2P Validator Consensus Status (Phase 3)
-echo -e "\n${BLUE}🌐 P2P Validator Consensus (Phase 3):${NC}"
+# LEVEL 2 AGGREGATION: Network-wide (Local Batch + Remote Batches → Consensus)
+echo -e "\n${CYAN}═══ LEVEL 2: Network Aggregation (Validators → Consensus) ═══${NC}"
+echo -e "${BLUE}🌐 Validator Network Exchange:${NC}"
 
 # Check outgoing broadcasts queued for P2P Gateway
 OUTGOING_QUEUE=$(redis_cmd LLEN "outgoing:broadcast:batch")
 if [ "$OUTGOING_QUEUE" -gt 0 ]; then
-    echo -e "  📤 Outgoing broadcasts queued: $OUTGOING_QUEUE"
+    echo -e "  📤 LOCAL batches queued for broadcast: $OUTGOING_QUEUE"
+    echo -e "      (Aggregator broadcasts our complete local view)"
 fi
 
 # Check incoming batches from other validators
 INCOMING_BATCHES=$(redis_cmd KEYS "incoming:batch:*")
 if [ ! -z "$INCOMING_BATCHES" ]; then
-    echo -e "  ${GREEN}✓ Receiving batches from other validators${NC}"
-    for batch in $(echo "$INCOMING_BATCHES" | head -5); do
+    echo -e "  ${GREEN}✓ REMOTE batches received from network:${NC}"
+    VALIDATOR_COUNT=$(echo "$INCOMING_BATCHES" | sed 's/.*batch:[^:]*://' | sort -u | wc -l)
+    echo -e "      Connected validators: $VALIDATOR_COUNT"
+    for batch in $(echo "$INCOMING_BATCHES" | head -3); do
         # Parse epochId and validatorId from key
         EPOCH=$(echo "$batch" | sed 's/.*batch://' | cut -d: -f1)
         VALIDATOR=$(echo "$batch" | sed 's/.*batch:[^:]*://')
-        echo "    📥 Epoch $EPOCH from validator: $VALIDATOR"
+        echo "      📥 Epoch $EPOCH from $VALIDATOR"
     done
+else
+    echo -e "  ${YELLOW}⚠ No remote validator batches received yet${NC}"
 fi
 
 # Check aggregation queue
 AGG_QUEUE=$(redis_cmd LLEN "aggregation:queue")
 if [ "$AGG_QUEUE" -gt 0 ]; then
-    echo -e "  🔄 Epochs pending aggregation: $AGG_QUEUE"
+    echo -e "  🔄 Epochs awaiting network aggregation: $AGG_QUEUE"
 fi
 
-# Check for aggregated batches (output of aggregator component)
+# Check for aggregated batches (final network-wide view)
+echo -e "\n${BLUE}🎯 Network Consensus Results:${NC}"
 AGGREGATED_BATCHES=$(redis_cmd KEYS "batch:aggregated:*" | head -5)
 if [ ! -z "$AGGREGATED_BATCHES" ]; then
-    echo -e "  ${GREEN}✓ Aggregated batches from multi-validator consensus:${NC}"
+    echo -e "  ${GREEN}✓ NETWORK-WIDE aggregated views:${NC}"
     for batch in $AGGREGATED_BATCHES; do
         EPOCH=${batch##*:}
         DATA=$(redis_cmd GET "$batch")
         if [ ! -z "$DATA" ] && command -v jq >/dev/null 2>&1; then
             PROJECTS=$(echo "$DATA" | jq -r '.ProjectVotes | length // 0' 2>/dev/null)
             CID=$(echo "$DATA" | jq -r '.BatchIPFSCID // ""' 2>/dev/null)
-            echo -n "    📊 Epoch $EPOCH: $PROJECTS aggregated projects"
+            # Try to determine how many validators contributed
+            SUBMISSION_DETAILS=$(echo "$DATA" | jq -r '.SubmissionDetails | length // 0' 2>/dev/null)
+            echo -n "    📊 Epoch $EPOCH: $PROJECTS projects (network consensus)"
             [ ! -z "$CID" ] && [ "$CID" != "" ] && echo -n " | IPFS: ${CID:0:20}..."
             echo
         else
-            echo "    📊 Epoch $EPOCH (aggregated)"
-        fi
-    done
-fi
-
-# Check for validator batches in Redis (old format)
-VALIDATOR_BATCHES=$(redis_cmd KEYS "validator:*:batch:*")
-if [ ! -z "$VALIDATOR_BATCHES" ]; then
-    echo -e "  ${GREEN}✓ Validator batch exchange active${NC}"
-
-    # Count unique validators and epochs
-    VALIDATORS=$(echo "$VALIDATOR_BATCHES" | sed 's/validator://;s/:batch:.*//g' | sort | uniq | wc -l)
-    EPOCHS=$(echo "$VALIDATOR_BATCHES" | sed 's/.*:batch://g' | sort | uniq | wc -l)
-
-    echo "  Active Validators: $VALIDATORS"
-    echo "  Epochs with votes: $EPOCHS"
-
-    # Show recent validator activity
-    echo "  Recent validator batches:"
-    for batch in $(echo "$VALIDATOR_BATCHES" | head -5); do
-        VALIDATOR=$(echo "$batch" | sed 's/validator://;s/:batch:.*//g')
-        EPOCH=$(echo "$batch" | sed 's/.*:batch://g')
-        TTL=$(redis_cmd TTL "$batch")
-        echo "    → $VALIDATOR: Epoch $EPOCH (TTL: ${TTL}s)"
-    done
-else
-    echo -e "  ${YELLOW}⚠ No validator batches found - validators may not be exchanging votes${NC}"
-fi
-
-# Check consensus aggregation status
-CONSENSUS_STATUS=$(redis_cmd KEYS "consensus:epoch:*:status")
-if [ ! -z "$CONSENSUS_STATUS" ]; then
-    echo -e "  ${GREEN}✓ Consensus aggregation active${NC}"
-
-    # Show recent consensus results
-    RECENT_STATUS=$(echo "$CONSENSUS_STATUS" | sort -t: -k3 -n | tail -3)
-    for status in $RECENT_STATUS; do
-        EPOCH=$(echo "$status" | sed 's/consensus:epoch://;s/:status//')
-        # Get consensus data
-        CONSENSUS_DATA=$(redis_cmd GET "$status")
-        if [ ! -z "$CONSENSUS_DATA" ] && command -v jq >/dev/null 2>&1; then
-            VALIDATORS=$(echo "$CONSENSUS_DATA" | jq -r '.total_validators // "?"' 2>/dev/null)
-            PROJECTS=$(echo "$CONSENSUS_DATA" | jq -r '.aggregated_projects | length // "?"' 2>/dev/null)
-            echo "    📊 Epoch $EPOCH: $VALIDATORS validators → $PROJECTS projects aggregated"
-        else
-            echo "    📊 Epoch $EPOCH: Consensus complete"
+            echo "    📊 Epoch $EPOCH (network aggregation complete)"
         fi
     done
 else
-    echo -e "  ${YELLOW}⚠ No consensus aggregation status found${NC}"
+    echo -e "  ${YELLOW}⚠ No network-wide aggregations completed yet${NC}"
 fi
 
-# Check consensus results ready for chain submission
-CONSENSUS_RESULTS=$(redis_cmd KEYS "consensus:epoch:*:result")
-if [ ! -z "$CONSENSUS_RESULTS" ]; then
-    RESULT_COUNT=$(echo "$CONSENSUS_RESULTS" | wc -l)
-    echo -e "  ${GREEN}✓ $RESULT_COUNT consensus results ready for chain submission${NC}"
+# Summary of Two-Level Aggregation Status
+echo -e "\n${CYAN}═══ AGGREGATION SUMMARY ═══${NC}"
+echo -e "${BLUE}📊 Two-Level Aggregation Flow:${NC}"
 
-    # Show most recent result
-    LATEST_RESULT=$(echo "$CONSENSUS_RESULTS" | sort -t: -k3 -n | tail -1)
-    if [ ! -z "$LATEST_RESULT" ]; then
-        EPOCH=$(echo "$LATEST_RESULT" | sed 's/consensus:epoch://;s/:result//')
-        RESULT_DATA=$(redis_cmd GET "$LATEST_RESULT")
-        if [ ! -z "$RESULT_DATA" ] && command -v jq >/dev/null 2>&1; then
-            CID=$(echo "$RESULT_DATA" | jq -r '.cid // "?"' 2>/dev/null)
-            PROJECTS=$(echo "$RESULT_DATA" | jq -r '.projects // "?"' 2>/dev/null)
-            echo "    🎯 Latest: Epoch $EPOCH → CID $CID ($PROJECTS projects)"
-        fi
-    fi
-else
-    echo -e "  ${YELLOW}⚠ No consensus results found${NC}"
+# Count Level 1 completions
+LOCAL_FINALIZED_COUNT=$(redis_cmd --scan --pattern "*:*:finalized:*" 2>/dev/null | wc -l)
+LOCAL_FINALIZED_COUNT2=$(redis_cmd --scan --pattern "batch:finalized:*" 2>/dev/null | wc -l)
+TOTAL_LOCAL=$((LOCAL_FINALIZED_COUNT + LOCAL_FINALIZED_COUNT2))
+
+# Count Level 2 completions
+NETWORK_AGGREGATED_COUNT=$(redis_cmd --scan --pattern "batch:aggregated:*" 2>/dev/null | wc -l)
+
+echo "  Level 1 (Workers→Local):  $TOTAL_LOCAL epochs finalized locally"
+echo "  Level 2 (Validators→Net): $NETWORK_AGGREGATED_COUNT epochs aggregated network-wide"
+
+if [ $TOTAL_LOCAL -gt 0 ] && [ $NETWORK_AGGREGATED_COUNT -eq 0 ]; then
+    echo -e "\n  ${YELLOW}⚠ Local finalization working but no network aggregation yet${NC}"
+    echo "      → Check if other validators are online"
+    echo "      → Verify P2P gateway is broadcasting"
+elif [ $TOTAL_LOCAL -eq 0 ]; then
+    echo -e "\n  ${RED}⚠ No local finalization occurring${NC}"
+    echo "      → Check if submissions are being processed"
+    echo "      → Verify finalizer workers are running"
+elif [ $NETWORK_AGGREGATED_COUNT -gt 0 ]; then
+    echo -e "\n  ${GREEN}✅ Full two-level aggregation operational${NC}"
 fi
 
 echo ""
