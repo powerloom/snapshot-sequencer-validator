@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -80,11 +82,34 @@ func (a *Aggregator) processAggregationQueue() {
 		case <-a.ctx.Done():
 			return
 		default:
-			// Get next epoch to aggregate
-			result, err := a.redisClient.BRPop(a.ctx, time.Second, "aggregation:queue").Result()
+			// FIRST: Check for Level 1 aggregation (finalizer worker parts)
+			result, err := a.redisClient.BRPop(a.ctx, time.Second, "aggregationQueue").Result()
+			if err == nil && len(result) >= 2 {
+				// Parse the complex JSON from finalizer workers
+				var aggData map[string]interface{}
+				if err := json.Unmarshal([]byte(result[1]), &aggData); err != nil {
+					log.WithError(err).Error("Failed to parse aggregation data")
+					continue
+				}
+
+				epochIDStr := aggData["epoch_id"].(string)
+				partsCompleted := int(aggData["parts_completed"].(float64))
+
+				log.WithFields(logrus.Fields{
+					"epoch": epochIDStr,
+					"parts": partsCompleted,
+				}).Info("📦 LEVEL 1: Aggregating finalizer worker parts into local batch")
+
+				// Aggregate worker parts into complete local batch
+				a.aggregateWorkerParts(epochIDStr, partsCompleted)
+				continue
+			}
+
+			// SECOND: Check for Level 2 aggregation (network-wide)
+			result, err = a.redisClient.BRPop(a.ctx, time.Second, "aggregation:queue").Result()
 			if err != nil {
 				if err != redis.Nil {
-					log.WithError(err).Debug("No epochs in aggregation queue")
+					log.WithError(err).Debug("No epochs in aggregation queues")
 				}
 				continue
 			}
@@ -94,12 +119,153 @@ func (a *Aggregator) processAggregationQueue() {
 			}
 
 			epochID := result[1]
-			log.WithField("epoch", epochID).Info("Aggregator: Processing epoch")
+			log.WithField("epoch", epochID).Info("🌐 LEVEL 2: Aggregating network-wide validator batches")
 
-			// Process this epoch
+			// Process Level 2 network aggregation
 			a.aggregateEpoch(epochID)
 		}
 	}
+}
+
+func (a *Aggregator) aggregateWorkerParts(epochIDStr string, totalParts int) {
+	// Convert string to uint64
+	epochID, err := strconv.ParseUint(epochIDStr, 10, 64)
+	if err != nil {
+		log.WithError(err).Error("Failed to parse epoch ID")
+		return
+	}
+
+	// Get protocol state and data market
+	protocolState := a.config.ProtocolStateContract
+	dataMarket := ""
+	if len(a.config.DataMarketAddresses) > 0 {
+		dataMarket = a.config.DataMarketAddresses[0]
+	}
+
+	// Collect all batch parts from finalizer workers
+	aggregatedResults := make(map[string]interface{})
+
+	for i := 0; i < totalParts; i++ {
+		partKey := fmt.Sprintf("%s:%s:batch:part:%d:%d", protocolState, dataMarket, epochID, i)
+		partData, err := a.redisClient.Get(a.ctx, partKey).Result()
+		if err != nil {
+			log.Errorf("Failed to get batch part %d for epoch %d: %v", i, epochID, err)
+			continue
+		}
+
+		var partResults map[string]interface{}
+		if err := json.Unmarshal([]byte(partData), &partResults); err != nil {
+			log.Errorf("Failed to parse batch part %d: %v", i, err)
+			continue
+		}
+
+		// Merge results from this worker
+		for projectID, data := range partResults {
+			aggregatedResults[projectID] = data
+		}
+
+		// Clean up part data
+		a.redisClient.Del(a.ctx, partKey)
+	}
+
+	// Create finalized batch from aggregated worker results
+	finalizedBatch := a.createFinalizedBatchFromParts(epochID, aggregatedResults)
+
+	// Store as our local finalized batch
+	finalizedKey := fmt.Sprintf("%s:%s:finalized:%d", protocolState, dataMarket, epochID)
+	finalizedData, _ := json.Marshal(finalizedBatch)
+	if err := a.redisClient.Set(a.ctx, finalizedKey, finalizedData, 24*time.Hour).Err(); err != nil {
+		log.WithError(err).Error("Failed to store finalized batch")
+		return
+	}
+
+	log.WithFields(logrus.Fields{
+		"epoch":    epochID,
+		"parts":    totalParts,
+		"projects": len(aggregatedResults),
+	}).Info("✅ LEVEL 1 COMPLETE: Created local finalized batch from worker parts")
+
+	// CRITICAL: Broadcast our local batch to validator network
+	broadcastMsg := map[string]interface{}{
+		"type":    "finalized_batch",
+		"epochId": epochID,
+		"data":    finalizedBatch,
+	}
+
+	if msgData, err := json.Marshal(broadcastMsg); err == nil {
+		if err := a.redisClient.LPush(a.ctx, "outgoing:broadcast:batch", msgData).Err(); err != nil {
+			log.WithError(err).Error("Failed to queue batch for validator network broadcast")
+		} else {
+			log.WithFields(logrus.Fields{
+				"epoch":    epochID,
+				"projects": len(finalizedBatch.ProjectVotes),
+				"cid":      finalizedBatch.BatchIPFSCID,
+			}).Info("📡 Broadcasting LOCAL finalized batch to validator network")
+		}
+	}
+
+	// Clean up tracking data
+	a.redisClient.Del(a.ctx,
+		fmt.Sprintf("epoch:%s:parts:completed", epochIDStr),
+		fmt.Sprintf("epoch:%s:parts:total", epochIDStr),
+		fmt.Sprintf("epoch:%s:parts:ready", epochIDStr),
+	)
+}
+
+func (a *Aggregator) createFinalizedBatchFromParts(epochID uint64, projectSubmissions map[string]interface{}) *consensus.FinalizedBatch {
+	// Extract project data and create proper finalized batch
+	projectIDs := make([]string, 0)
+	snapshotCIDs := make([]string, 0)
+	projectVotes := make(map[string]uint32)
+	submissionDetails := make(map[string][]submissions.SubmissionMetadata)
+
+	for projectID, submissionData := range projectSubmissions {
+		if dataMap, ok := submissionData.(map[string]interface{}); ok {
+			if cid, ok := dataMap["cid"].(string); ok {
+				projectIDs = append(projectIDs, projectID)
+				snapshotCIDs = append(snapshotCIDs, cid)
+
+				// Extract vote count
+				if votes, ok := dataMap["votes"].(float64); ok {
+					projectVotes[projectID] = uint32(votes)
+				} else {
+					projectVotes[projectID] = 1
+				}
+			}
+		}
+	}
+
+	// Create merkle root (simplified)
+	combined := ""
+	for i := range projectIDs {
+		combined += projectIDs[i] + ":" + snapshotCIDs[i] + ","
+	}
+	hash := sha256.Sum256([]byte(combined))
+	merkleRoot := hash[:]
+
+	finalizedBatch := &consensus.FinalizedBatch{
+		EpochId:           epochID,
+		ProjectIds:        projectIDs,
+		SnapshotCids:      snapshotCIDs,
+		MerkleRoot:        merkleRoot,
+		SequencerId:       a.config.SequencerID,
+		Timestamp:         uint64(time.Now().Unix()),
+		ProjectVotes:      projectVotes,
+		SubmissionDetails: submissionDetails,
+	}
+
+	// Store in IPFS if available
+	if a.ipfsClient != nil {
+		if cid, err := a.ipfsClient.StoreFinalizedBatch(a.ctx, finalizedBatch); err == nil {
+			finalizedBatch.BatchIPFSCID = cid
+			log.WithFields(logrus.Fields{
+				"epoch": epochID,
+				"cid":   cid,
+			}).Info("📦 Stored finalized batch in IPFS")
+		}
+	}
+
+	return finalizedBatch
 }
 
 func (a *Aggregator) aggregateEpoch(epochIDStr string) {
@@ -279,28 +445,9 @@ func (a *Aggregator) createAggregatedBatch(ourBatch *consensus.FinalizedBatch, i
 		}
 	}
 
-	// CRITICAL: Only broadcast if this is OUR local batch (not a network aggregation)
-	// We broadcast when we have our own batch, not when just aggregating others
-	if ourBatch != nil && len(validatorViews) == 1 {
-		// This is our local finalization - broadcast it
-		broadcastMsg := map[string]interface{}{
-			"type":    "finalized_batch",
-			"epochId": aggregated.EpochId,
-			"data":    aggregated,
-		}
-
-		if msgData, err := json.Marshal(broadcastMsg); err == nil {
-			if err := a.redisClient.LPush(a.ctx, "outgoing:broadcast:batch", msgData).Err(); err != nil {
-				log.WithError(err).Error("Failed to queue batch for validator network broadcast")
-			} else {
-				log.WithFields(logrus.Fields{
-					"epoch": aggregated.EpochId,
-					"projects": len(aggregated.ProjectVotes),
-					"cid": aggregated.BatchIPFSCID,
-				}).Info("📡 Broadcasting LOCAL finalized batch to validator network")
-			}
-		}
-	}
+	// NOTE: Broadcasting is now handled by the unified sequencer after Level 1 aggregation
+	// The aggregator component only performs Level 2 network-wide aggregation
+	// No broadcasting needed here since the unified sequencer already queued it
 
 	return aggregated
 }

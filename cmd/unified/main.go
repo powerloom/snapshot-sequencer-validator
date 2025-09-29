@@ -846,10 +846,11 @@ func (s *UnifiedSequencer) runFinalizer() {
 	for i := 0; i < numWorkers; i++ {
 		go s.runFinalizationWorker(i)
 	}
-	
-	// Also start aggregation worker
-	go s.runAggregationWorker()
-	
+
+	// NOTE: Aggregation is now handled by the separate aggregator component
+	// The unified sequencer only acts as a finalizer worker that creates batch parts
+	// go s.runAggregationWorker() // DISABLED - aggregator component handles this
+
 	// Wait for shutdown
 	<-s.ctx.Done()
 	log.Info("Finalizer component shutting down")
@@ -1355,7 +1356,7 @@ func (s *UnifiedSequencer) createFinalizedBatch(epochID uint64, projectSubmissio
 	if err := s.redisClient.Set(ctx, finalizedKey, finalizedData, 24*time.Hour).Err(); err != nil {
 		return fmt.Errorf("failed to store finalized batch: %w", err)
 	}
-	
+
 	// Log finalized batch summary for operators
 	log.Infof("📦 Created finalized batch for epoch %d: %d projects, merkle=%s", 
 		epochID, len(projectIDs), hex.EncodeToString(merkleRoot[:8]))
