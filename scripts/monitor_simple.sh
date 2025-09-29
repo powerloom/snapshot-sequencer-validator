@@ -15,12 +15,16 @@ echo -e "${CYAN}📊 Sequencer Status Monitor${NC}"
 echo -e "${CYAN}═══════════════════════════════════${NC}"
 echo ""
 
-# Find Redis container
-REDIS_CONTAINER=$(docker ps --filter "name=redis" --format "{{.Names}}" | head -1)
+# Get Redis port from environment or use default
+REDIS_PORT=${REDIS_PORT:-6379}
+
+# Find Redis container by port mapping
+REDIS_CONTAINER=$(docker ps --format "table {{.Names}}\t{{.Ports}}" | grep -E "0.0.0.0:${REDIS_PORT}->6379/tcp|${REDIS_PORT}/tcp" | awk '{print $1}' | head -1)
 
 if [ -z "$REDIS_CONTAINER" ]; then
-    echo -e "${RED}Error: No Redis container found${NC}"
-    echo "Start the sequencer first with: ./dsv.sh distributed"
+    echo -e "${RED}Error: No Redis container found on port ${REDIS_PORT}${NC}"
+    echo "Make sure Redis is running and exposed on port ${REDIS_PORT}"
+    echo "Start the sequencer first with: ./dsv.sh separated"
     exit 1
 fi
 
@@ -31,6 +35,19 @@ echo ""
 redis_cmd() {
     docker exec $REDIS_CONTAINER redis-cli "$@" 2>/dev/null
 }
+
+# CRITICAL DEBUG: Show what's actually happening
+echo -e "${RED}🔍 CRITICAL: Checking actual pipeline state...${NC}"
+PROCESSED_COUNT=$(redis_cmd --scan --pattern "*:*:processed:*" 2>/dev/null | wc -l)
+READY_COUNT=$(redis_cmd --scan --pattern "*:*:batch:ready:*" 2>/dev/null | wc -l)
+FINALIZED_COUNT=$(redis_cmd --scan --pattern "*:*:finalized:*" 2>/dev/null | wc -l)
+echo "Processed submissions: $PROCESSED_COUNT | Ready batches: $READY_COUNT | Finalized: $FINALIZED_COUNT"
+
+if [ $PROCESSED_COUNT -gt 0 ] && [ $READY_COUNT -eq 0 ]; then
+    echo -e "${RED}⚠️  PROBLEM: Submissions are processed but NOT being collected into batches!${NC}"
+    echo -e "${RED}   The collector component is missing or broken.${NC}"
+fi
+echo ""
 
 # Active Windows (Updated format: epoch:market:epochID:window)
 echo -e "${BLUE}🔷 Active Submission Windows:${NC}"
@@ -98,14 +115,16 @@ else
     echo "  None"
 fi
 
-# Finalized Batches (Looking for protocol:market:finalized:epochID pattern)
-echo -e "\n${BLUE}✅ Recent Finalized Batches:${NC}"
-# Try both patterns - old and new
-FINALIZED=$(redis_cmd KEYS "*:*:finalized:*" | head -10)
-if [ -z "$FINALIZED" ]; then
-    # Fallback to old pattern if new pattern doesn't exist
-    FINALIZED=$(redis_cmd KEYS "batch:finalized:*" | head -10)
-fi
+# Finalized Batches (LOCAL to this validator - what WE finalized)
+echo -e "\n${BLUE}✅ LOCAL Finalized Batches (This Validator):${NC}"
+# Use SCAN instead of KEYS - check for protocol:market:finalized:epochID pattern
+FINALIZED=""
+for pattern in "*:*:finalized:*" "batch:finalized:*"; do
+    SCAN_RESULT=$(redis_cmd --scan --pattern "$pattern" 2>/dev/null | head -10)
+    if [ ! -z "$SCAN_RESULT" ]; then
+        FINALIZED="$FINALIZED $SCAN_RESULT"
+    fi
+done
 if [ ! -z "$FINALIZED" ]; then
     for batch in $FINALIZED; do
         EPOCH=$(echo "$batch" | grep -oE "[0-9]+$")
@@ -249,6 +268,25 @@ fi
 AGG_QUEUE=$(redis_cmd LLEN "aggregation:queue")
 if [ "$AGG_QUEUE" -gt 0 ]; then
     echo -e "  🔄 Epochs pending aggregation: $AGG_QUEUE"
+fi
+
+# Check for aggregated batches (output of aggregator component)
+AGGREGATED_BATCHES=$(redis_cmd KEYS "batch:aggregated:*" | head -5)
+if [ ! -z "$AGGREGATED_BATCHES" ]; then
+    echo -e "  ${GREEN}✓ Aggregated batches from multi-validator consensus:${NC}"
+    for batch in $AGGREGATED_BATCHES; do
+        EPOCH=${batch##*:}
+        DATA=$(redis_cmd GET "$batch")
+        if [ ! -z "$DATA" ] && command -v jq >/dev/null 2>&1; then
+            PROJECTS=$(echo "$DATA" | jq -r '.ProjectVotes | length // 0' 2>/dev/null)
+            CID=$(echo "$DATA" | jq -r '.BatchIPFSCID // ""' 2>/dev/null)
+            echo -n "    📊 Epoch $EPOCH: $PROJECTS aggregated projects"
+            [ ! -z "$CID" ] && [ "$CID" != "" ] && echo -n " | IPFS: ${CID:0:20}..."
+            echo
+        else
+            echo "    📊 Epoch $EPOCH (aggregated)"
+        fi
+    done
 fi
 
 # Check for validator batches in Redis (old format)
