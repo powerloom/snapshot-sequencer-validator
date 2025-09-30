@@ -15,6 +15,7 @@ import (
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
 
+	_ "github.com/powerloom/snapshot-sequencer-validator/docs/swagger"
 	keys "github.com/powerloom/snapshot-sequencer-validator/pkgs/redis"
 )
 

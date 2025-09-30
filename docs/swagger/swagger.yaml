@@ -1,0 +1,271 @@
+basePath: /api/v1
+definitions:
+  cmd_monitor-api.AggregatedBatch:
+    properties:
+      epoch_id:
+        type: string
+      project_count:
+        type: integer
+      timestamp:
+        type: string
+      validator_count:
+        type: integer
+    type: object
+  cmd_monitor-api.BatchPart:
+    properties:
+      epoch_id:
+        type: string
+      part_id:
+        type: integer
+      project_count:
+        type: integer
+    type: object
+  cmd_monitor-api.FinalizedBatch:
+    properties:
+      epoch_id:
+        type: string
+      ipfs_cid:
+        type: string
+      project_count:
+        type: integer
+      sequencer_id:
+        type: string
+      timestamp:
+        type: string
+      vote_count:
+        type: integer
+    type: object
+  cmd_monitor-api.PipelineOverview:
+    properties:
+      active_windows:
+        type: integer
+      active_workers:
+        type: integer
+      aggregated_batches:
+        type: integer
+      aggregation_queue:
+        $ref: '#/definitions/cmd_monitor-api.QueueStatus'
+      completed_parts:
+        type: integer
+      finalization_queue:
+        $ref: '#/definitions/cmd_monitor-api.QueueStatus'
+      finalized_batches:
+        type: integer
+      ready_batches:
+        type: integer
+      submission_queue:
+        $ref: '#/definitions/cmd_monitor-api.QueueStatus'
+      timestamp:
+        type: string
+    type: object
+  cmd_monitor-api.QueueStatus:
+    properties:
+      depth:
+        type: integer
+      status:
+        type: string
+    type: object
+  cmd_monitor-api.ReadyBatch:
+    properties:
+      epoch_id:
+        type: string
+      has_votes:
+        type: boolean
+      project_count:
+        type: integer
+    type: object
+  cmd_monitor-api.SubmissionWindow:
+    properties:
+      closed_at:
+        type: string
+      epoch_id:
+        type: string
+      market:
+        type: string
+      status:
+        type: string
+      ttl_seconds:
+        type: integer
+    type: object
+  cmd_monitor-api.WorkerStatus:
+    properties:
+      epoch_id:
+        type: string
+      healthy:
+        type: boolean
+      last_heartbeat:
+        type: string
+      project_id:
+        type: string
+      status:
+        type: string
+      worker_id:
+        type: string
+    type: object
+host: localhost:8080
+info:
+  contact: {}
+  description: Monitoring API for Decentralized Sequencer Validator pipeline
+  title: DSV Pipeline Monitor API
+  version: "1.0"
+paths:
+  /aggregation/queue:
+    get:
+      description: Get aggregation queue status
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Aggregation queue
+      tags:
+      - aggregation
+  /aggregation/results:
+    get:
+      description: Get network-wide aggregated batches
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/cmd_monitor-api.AggregatedBatch'
+            type: array
+      summary: Aggregated batches
+      tags:
+      - aggregation
+  /batches/finalization-queue:
+    get:
+      description: Get finalization queue status
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Finalization queue
+      tags:
+      - batches
+  /batches/finalized:
+    get:
+      description: Get finalized batches with details
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/cmd_monitor-api.FinalizedBatch'
+            type: array
+      summary: Finalized batches
+      tags:
+      - batches
+  /batches/parts:
+    get:
+      description: Get completed batch parts from parallel finalization
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/cmd_monitor-api.BatchPart'
+            type: array
+      summary: Batch parts
+      tags:
+      - batches
+  /batches/ready:
+    get:
+      description: Get batches ready for finalization
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/cmd_monitor-api.ReadyBatch'
+            type: array
+      summary: Ready batches
+      tags:
+      - batches
+  /health:
+    get:
+      description: Check if the API is running and can connect to Redis
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Health check
+      tags:
+      - health
+  /pipeline/overview:
+    get:
+      description: Get overall pipeline status summary
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/cmd_monitor-api.PipelineOverview'
+      summary: Pipeline overview
+      tags:
+      - pipeline
+  /submissions/queue:
+    get:
+      description: Get submission queue depth and sample entries
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Submission queue status
+      tags:
+      - submissions
+  /submissions/windows:
+    get:
+      description: Get active and recently closed submission windows
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/cmd_monitor-api.SubmissionWindow'
+            type: array
+      summary: Submission windows
+      tags:
+      - submissions
+  /workers/status:
+    get:
+      description: Get status of all finalization workers
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/cmd_monitor-api.WorkerStatus'
+            type: array
+      summary: Worker status
+      tags:
+      - workers
+swagger: "2.0"
