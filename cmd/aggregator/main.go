@@ -16,6 +16,7 @@ import (
 	"github.com/powerloom/snapshot-sequencer-validator/config"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/consensus"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/ipfs"
+	rediskeys "github.com/powerloom/snapshot-sequencer-validator/pkgs/redis"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/submissions"
 	"github.com/go-redis/redis/v8"
 	"github.com/sirupsen/logrus"
@@ -29,6 +30,7 @@ type Aggregator struct {
 	redisClient *redis.Client
 	ipfsClient  *ipfs.Client
 	config      *config.Settings
+	keyBuilder  *rediskeys.KeyBuilder
 
 	// Track aggregation state
 	epochBatches map[uint64]map[string]*consensus.FinalizedBatch // epochID -> validatorID -> batch
@@ -66,25 +68,29 @@ func NewAggregator(cfg *config.Settings) (*Aggregator, error) {
 		}
 	}
 
+	// Create key builder with first data market (assuming single market for now)
+	protocolState := cfg.ProtocolStateContract
+	dataMarket := ""
+	if len(cfg.DataMarketAddresses) > 0 {
+		dataMarket = cfg.DataMarketAddresses[0]
+	}
+	keyBuilder := rediskeys.NewKeyBuilder(protocolState, dataMarket)
+
 	return &Aggregator{
 		ctx:          ctx,
 		cancel:       cancel,
 		redisClient:  redisClient,
 		ipfsClient:   ipfsClient,
 		config:       cfg,
+		keyBuilder:   keyBuilder,
 		epochBatches: make(map[uint64]map[string]*consensus.FinalizedBatch),
 	}, nil
 }
 
 func (a *Aggregator) processAggregationQueue() {
 	// Get namespaced queue keys
-	protocolState := a.config.ProtocolStateContract
-	dataMarket := ""
-	if len(a.config.DataMarketAddresses) > 0 {
-		dataMarket = a.config.DataMarketAddresses[0]
-	}
-	level1Queue := fmt.Sprintf("%s:%s:aggregationQueue", protocolState, dataMarket)
-	level2Queue := fmt.Sprintf("%s:%s:aggregation:queue", protocolState, dataMarket)
+	level1Queue := a.keyBuilder.AggregationQueueLevel1()
+	level2Queue := a.keyBuilder.AggregationQueue()
 
 	for {
 		select {
@@ -144,18 +150,11 @@ func (a *Aggregator) aggregateWorkerParts(epochIDStr string, totalParts int) {
 		return
 	}
 
-	// Get protocol state and data market
-	protocolState := a.config.ProtocolStateContract
-	dataMarket := ""
-	if len(a.config.DataMarketAddresses) > 0 {
-		dataMarket = a.config.DataMarketAddresses[0]
-	}
-
 	// Collect all batch parts from finalizer workers
 	aggregatedResults := make(map[string]interface{})
 
 	for i := 0; i < totalParts; i++ {
-		partKey := fmt.Sprintf("%s:%s:batch:part:%d:%d", protocolState, dataMarket, epochID, i)
+		partKey := a.keyBuilder.BatchPart(strconv.FormatUint(epochID, 10), i)
 		partData, err := a.redisClient.Get(a.ctx, partKey).Result()
 		if err != nil {
 			log.Errorf("Failed to get batch part %d for epoch %d: %v", i, epochID, err)
@@ -181,7 +180,7 @@ func (a *Aggregator) aggregateWorkerParts(epochIDStr string, totalParts int) {
 	finalizedBatch := a.createFinalizedBatchFromParts(epochID, aggregatedResults)
 
 	// Store as our local finalized batch
-	finalizedKey := fmt.Sprintf("%s:%s:finalized:%d", protocolState, dataMarket, epochID)
+	finalizedKey := a.keyBuilder.FinalizedBatch(strconv.FormatUint(epochID, 10))
 	finalizedData, _ := json.Marshal(finalizedBatch)
 	if err := a.redisClient.Set(a.ctx, finalizedKey, finalizedData, 24*time.Hour).Err(); err != nil {
 		log.WithError(err).Error("Failed to store finalized batch")
@@ -203,7 +202,7 @@ func (a *Aggregator) aggregateWorkerParts(epochIDStr string, totalParts int) {
 
 	if msgData, err := json.Marshal(broadcastMsg); err == nil {
 		// Use namespaced broadcast queue
-		broadcastQueue := fmt.Sprintf("%s:%s:outgoing:broadcast:batch", protocolState, dataMarket)
+		broadcastQueue := a.keyBuilder.OutgoingBroadcastBatch()
 		if err := a.redisClient.LPush(a.ctx, broadcastQueue, msgData).Err(); err != nil {
 			log.WithError(err).Error("Failed to queue batch for validator network broadcast")
 		} else {
@@ -217,9 +216,9 @@ func (a *Aggregator) aggregateWorkerParts(epochIDStr string, totalParts int) {
 
 	// Clean up tracking data (namespaced)
 	a.redisClient.Del(a.ctx,
-		fmt.Sprintf("%s:%s:epoch:%s:parts:completed", protocolState, dataMarket, epochIDStr),
-		fmt.Sprintf("%s:%s:epoch:%s:parts:total", protocolState, dataMarket, epochIDStr),
-		fmt.Sprintf("%s:%s:epoch:%s:parts:ready", protocolState, dataMarket, epochIDStr),
+		a.keyBuilder.EpochPartsCompleted(epochIDStr),
+		a.keyBuilder.EpochPartsTotal(epochIDStr),
+		a.keyBuilder.EpochPartsReady(epochIDStr),
 	)
 }
 
@@ -280,15 +279,8 @@ func (a *Aggregator) createFinalizedBatchFromParts(epochID uint64, projectSubmis
 }
 
 func (a *Aggregator) aggregateEpoch(epochIDStr string) {
-	// Get protocol state and data market for namespacing
-	protocolState := a.config.ProtocolStateContract
-	dataMarket := ""
-	if len(a.config.DataMarketAddresses) > 0 {
-		dataMarket = a.config.DataMarketAddresses[0]
-	}
-
 	// Check if we've already aggregated this epoch recently (deduplication) - namespaced
-	aggregatedKey := fmt.Sprintf("%s:%s:batch:aggregated:%s", protocolState, dataMarket, epochIDStr)
+	aggregatedKey := a.keyBuilder.BatchAggregated(epochIDStr)
 	exists, err := a.redisClient.Exists(a.ctx, aggregatedKey).Result()
 	if err != nil {
 		log.WithField("epoch", epochIDStr).WithError(err).Error("Failed to check aggregated status")
@@ -301,7 +293,7 @@ func (a *Aggregator) aggregateEpoch(epochIDStr string) {
 
 	// Get our own finalized batch from the unified sequencer's finalizer
 	// Use namespaced key
-	ourBatchKey := fmt.Sprintf("%s:%s:finalized:%s", protocolState, dataMarket, epochIDStr)
+	ourBatchKey := a.keyBuilder.FinalizedBatch(epochIDStr)
 	ourBatchData, _ := a.redisClient.Get(a.ctx, ourBatchKey).Result()
 
 	if ourBatchData == "" {
@@ -319,7 +311,7 @@ func (a *Aggregator) aggregateEpoch(epochIDStr string) {
 	}
 
 	// Get all incoming batches from OTHER validators for this epoch - namespaced
-	incomingPattern := fmt.Sprintf("%s:%s:incoming:batch:%s:*", protocolState, dataMarket, epochIDStr)
+	incomingPattern := fmt.Sprintf("%s:%s:incoming:batch:%s:*", a.keyBuilder.ProtocolState, a.keyBuilder.DataMarket, epochIDStr)
 	incomingKeys, err := a.redisClient.Keys(a.ctx, incomingPattern).Result()
 	if err != nil {
 		log.WithError(err).Error("Failed to get incoming batch keys")
@@ -461,20 +453,13 @@ func (a *Aggregator) monitorFinalizedBatches() {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
-	// Get protocol state and data market for namespacing
-	protocolState := a.config.ProtocolStateContract
-	dataMarket := ""
-	if len(a.config.DataMarketAddresses) > 0 {
-		dataMarket = a.config.DataMarketAddresses[0]
-	}
-
 	for {
 		select {
 		case <-a.ctx.Done():
 			return
 		case <-ticker.C:
 			// Check for new finalized batches - namespaced
-			pattern := fmt.Sprintf("%s:%s:finalized:*", protocolState, dataMarket)
+			pattern := fmt.Sprintf("%s:%s:finalized:*", a.keyBuilder.ProtocolState, a.keyBuilder.DataMarket)
 			keys, err := a.redisClient.Keys(a.ctx, pattern).Result()
 			if err != nil {
 				log.WithError(err).Debug("Failed to check finalized batches")
@@ -490,14 +475,14 @@ func (a *Aggregator) monitorFinalizedBatches() {
 				epochID := parts[len(parts)-1]
 
 				// Check if we've already processed this epoch - namespaced
-				aggregatedKey := fmt.Sprintf("%s:%s:batch:aggregated:%s", protocolState, dataMarket, epochID)
+				aggregatedKey := a.keyBuilder.BatchAggregated(epochID)
 				exists, err := a.redisClient.Exists(a.ctx, aggregatedKey).Result()
 				if err != nil || exists > 0 {
 					continue
 				}
 
 				// Add to aggregation queue - namespaced
-				aggQueue := fmt.Sprintf("%s:%s:aggregation:queue", protocolState, dataMarket)
+				aggQueue := a.keyBuilder.AggregationQueue()
 				if err := a.redisClient.LPush(a.ctx, aggQueue, epochID).Err(); err != nil {
 					log.WithError(err).Error("Failed to queue epoch for aggregation")
 				} else {
@@ -517,8 +502,8 @@ func (a *Aggregator) reportMetrics() {
 		case <-a.ctx.Done():
 			return
 		case <-ticker.C:
-			// Count aggregated batches
-			pattern := "batch:aggregated:*"
+			// Count aggregated batches - namespaced
+			pattern := fmt.Sprintf("%s:%s:batch:aggregated:*", a.keyBuilder.ProtocolState, a.keyBuilder.DataMarket)
 			keys, _ := a.redisClient.Keys(a.ctx, pattern).Result()
 
 			// Count active validators

@@ -14,6 +14,7 @@ import (
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/powerloom/snapshot-sequencer-validator/config"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/p2p"
+	rediskeys "github.com/powerloom/snapshot-sequencer-validator/pkgs/redis"
 	"github.com/go-redis/redis/v8"
 	"github.com/sirupsen/logrus"
 )
@@ -25,6 +26,7 @@ type P2PGateway struct {
 	cancel     context.CancelFunc
 	p2pHost    *p2p.P2PHost
 	redisClient *redis.Client
+	keyBuilder *rediskeys.KeyBuilder
 	config     *config.Settings
 
 	// Topic subscriptions
@@ -65,11 +67,19 @@ func NewP2PGateway(cfg *config.Settings) (*P2PGateway, error) {
 		return nil, fmt.Errorf("failed to create P2P host: %w", err)
 	}
 
+	// Initialize KeyBuilder
+	dataMarket := ""
+	if len(cfg.DataMarketAddresses) > 0 {
+		dataMarket = cfg.DataMarketAddresses[0]
+	}
+	keyBuilder := rediskeys.NewKeyBuilder(cfg.ProtocolStateContract, dataMarket)
+
 	gateway := &P2PGateway{
 		ctx:         ctx,
 		cancel:      cancel,
 		p2pHost:     p2pHost,
 		redisClient: redisClient,
+		keyBuilder:  keyBuilder,
 		config:      cfg,
 	}
 
@@ -173,7 +183,7 @@ func (g *P2PGateway) handleSubmissionMessages(sub *pubsub.Subscription, topicNam
 			topicLabel, topicName, msg.ReceivedFrom.ShortString(), len(msg.Data))
 
 		// Route to Redis for dequeuer processing (namespaced by protocol:market)
-		queueKey := fmt.Sprintf("%s:%s:submissionQueue", g.config.ProtocolStateContract, g.config.DataMarketAddresses[0])
+		queueKey := g.keyBuilder.SubmissionQueue()
 		if err := g.redisClient.LPush(g.ctx, queueKey, msg.Data).Err(); err != nil {
 			log.WithError(err).Error("Failed to push submission to Redis")
 		} else {
@@ -225,22 +235,16 @@ func (g *P2PGateway) handleIncomingBatches() {
 
 		// Route to Redis for aggregator processing (namespaced by protocol:market)
 		// Include validator ID in the key so we can track who sent what
-		protocolState := g.config.ProtocolStateContract
-		dataMarket := ""
-		if len(g.config.DataMarketAddresses) > 0 {
-			dataMarket = g.config.DataMarketAddresses[0]
-		}
-
-		key := fmt.Sprintf("%s:%s:incoming:batch:%v:%s", protocolState, dataMarket, epochID, validatorID)
+		key := g.keyBuilder.IncomingBatch(fmt.Sprintf("%v", epochID), validatorID)
 		if err := g.redisClient.Set(g.ctx, key, msg.Data, 30*time.Minute).Err(); err != nil {
 			log.WithError(err).Error("Failed to store incoming batch")
 		} else {
 			// Check if epoch is already aggregated before queueing (namespaced)
-			aggregatedKey := fmt.Sprintf("%s:%s:batch:aggregated:%v", protocolState, dataMarket, epochID)
+			aggregatedKey := g.keyBuilder.BatchAggregated(fmt.Sprintf("%v", epochID))
 			exists, _ := g.redisClient.Exists(g.ctx, aggregatedKey).Result()
 			if exists == 0 {
 				// Only add to aggregation queue if not already aggregated (namespaced)
-				aggQueueKey := fmt.Sprintf("%s:%s:aggregation:queue", protocolState, dataMarket)
+				aggQueueKey := g.keyBuilder.AggregationQueue()
 				if err := g.redisClient.LPush(g.ctx, aggQueueKey, epochID).Err(); err != nil {
 					log.WithError(err).Error("Failed to add to aggregation queue")
 				}
@@ -268,7 +272,7 @@ func (g *P2PGateway) handleValidatorPresence() {
 
 		// Track active validators
 		validatorID := peer.ID(msg.ReceivedFrom).String()
-		key := fmt.Sprintf("validator:active:%s", validatorID)
+		key := rediskeys.ValidatorActive(validatorID)
 		if err := g.redisClient.Set(g.ctx, key, time.Now().Unix(), 5*time.Minute).Err(); err != nil {
 			log.WithError(err).Error("Failed to track validator presence")
 		}
@@ -278,12 +282,7 @@ func (g *P2PGateway) handleValidatorPresence() {
 func (g *P2PGateway) handleOutgoingMessages() {
 	// Watch for messages to broadcast from other components
 	// Get namespaced queue key
-	protocolState := g.config.ProtocolStateContract
-	dataMarket := ""
-	if len(g.config.DataMarketAddresses) > 0 {
-		dataMarket = g.config.DataMarketAddresses[0]
-	}
-	broadcastQueueKey := fmt.Sprintf("%s:%s:outgoing:broadcast:batch", protocolState, dataMarket)
+	broadcastQueueKey := g.keyBuilder.OutgoingBroadcastBatch()
 
 	for {
 		select {
