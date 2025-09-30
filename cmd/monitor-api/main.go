@@ -90,10 +90,11 @@ type FinalizedBatch struct {
 }
 
 type AggregatedBatch struct {
-	EpochID       string    `json:"epoch_id"`
-	ProjectCount  int       `json:"project_count"`
-	ValidatorCount int      `json:"validator_count"`
-	Timestamp     time.Time `json:"timestamp"`
+	EpochID          string            `json:"epoch_id"`
+	ProjectCount     int               `json:"project_count"`
+	ValidatorCount   int               `json:"validator_count"`
+	ValidatorBatches map[string]string `json:"validator_batches,omitempty"` // validator_id → ipfs_cid
+	Timestamp        time.Time         `json:"timestamp"`
 }
 
 func main() {
@@ -580,6 +581,19 @@ func (m *MonitorAPI) AggregatedBatches(c *gin.Context) {
 
 		if projectIds, ok := batchData["ProjectIds"].([]interface{}); ok {
 			batch.ProjectCount = len(projectIds)
+		}
+
+		if validatorCount, ok := batchData["ValidatorCount"].(float64); ok {
+			batch.ValidatorCount = int(validatorCount)
+		}
+
+		if validatorBatches, ok := batchData["ValidatorBatches"].(map[string]interface{}); ok {
+			batch.ValidatorBatches = make(map[string]string)
+			for k, v := range validatorBatches {
+				if cid, ok := v.(string); ok {
+					batch.ValidatorBatches[k] = cid
+				}
+			}
 		}
 
 		if ts, ok := batchData["Timestamp"].(float64); ok {

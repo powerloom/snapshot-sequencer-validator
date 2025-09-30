@@ -438,6 +438,9 @@ func (a *Aggregator) createAggregatedBatch(ourBatch *consensus.FinalizedBatch, i
 		}
 	}
 
+	// Store validator IPFS CIDs
+	validatorBatchCIDs := make(map[string]string)
+
 	// Add incoming batches from other validators
 	for _, key := range incomingKeys {
 		batchData, err := a.redisClient.Get(a.ctx, key).Result()
@@ -447,18 +450,35 @@ func (a *Aggregator) createAggregatedBatch(ourBatch *consensus.FinalizedBatch, i
 		}
 
 		var batch consensus.FinalizedBatch
-		if err := json.Unmarshal([]byte(batchData), &batch); err != nil {
-			log.WithError(err).Error("Failed to parse incoming batch")
-			continue
-		}
+		var validatorID string
 
-		// Track this validator's view
-		validatorID := batch.SequencerId
-		if validatorID == "" {
-			// Extract from key as fallback
-			parts := strings.Split(key, ":")
-			if len(parts) >= 4 {
-				validatorID = parts[3]
+		// First try to unmarshal as ValidatorBatch (P2P message format)
+		var vBatch consensus.ValidatorBatch
+		if err := json.Unmarshal([]byte(batchData), &vBatch); err == nil && vBatch.BatchIPFSCID != "" {
+			// Store the CID mapping
+			validatorBatchCIDs[vBatch.ValidatorID] = vBatch.BatchIPFSCID
+			validatorID = vBatch.ValidatorID
+
+			// Try to extract FinalizedBatch data (might be embedded or need IPFS fetch)
+			if err := json.Unmarshal([]byte(batchData), &batch); err != nil {
+				log.WithField("validator", validatorID).Debug("ValidatorBatch format detected but missing FinalizedBatch data")
+				continue
+			}
+		} else {
+			// Fallback: try as FinalizedBatch directly
+			if err := json.Unmarshal([]byte(batchData), &batch); err != nil {
+				log.WithError(err).Error("Failed to parse incoming batch")
+				continue
+			}
+
+			// Track this validator's view
+			validatorID = batch.SequencerId
+			if validatorID == "" {
+				// Extract from key as fallback
+				parts := strings.Split(key, ":")
+				if len(parts) >= 4 {
+					validatorID = parts[3]
+				}
 			}
 		}
 
@@ -520,6 +540,10 @@ func (a *Aggregator) createAggregatedBatch(ourBatch *consensus.FinalizedBatch, i
 	}
 	hash := sha256.Sum256([]byte(combined))
 	aggregated.MerkleRoot = hash[:]
+
+	// Store validator count and IPFS CIDs for monitoring
+	aggregated.ValidatorCount = len(validatorViews)
+	aggregated.ValidatorBatches = validatorBatchCIDs
 
 	// Log aggregation summary
 	log.WithFields(logrus.Fields{

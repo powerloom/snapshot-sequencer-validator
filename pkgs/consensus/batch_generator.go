@@ -131,5 +131,7 @@ type FinalizedBatch struct {
 	SequencerId       string                                       `json:"SequencerId"`
 	Timestamp         uint64                                       `json:"Timestamp"`
 	ProjectVotes      map[string]uint32                            `json:"ProjectVotes"`
-	SubmissionDetails map[string][]submissions.SubmissionMetadata `json:"submission_details"` // project→submissions for challenges
+	SubmissionDetails map[string][]submissions.SubmissionMetadata `json:"submission_details"`  // project→submissions for challenges
+	ValidatorCount    int                                          `json:"ValidatorCount,omitempty"`     // number of validators that contributed (for aggregated batches)
+	ValidatorBatches  map[string]string                            `json:"ValidatorBatches,omitempty"`   // validator_id → ipfs_cid mapping (for aggregated batches)
 }
