@@ -131,6 +131,59 @@ monitor_pipeline() {
     fi
 }
 
+# Clean Redis cache state (stale keys from old deployments)
+clean_cache() {
+    print_color "$BLUE" "🗑️  Cleaning Redis cache state"
+
+    # Find Redis container
+    REDIS_CONTAINER=$(docker ps --format "{{.Names}}" | grep -i redis | head -1)
+
+    if [ -z "$REDIS_CONTAINER" ]; then
+        print_color "$RED" "Error: Redis container not found"
+        print_color "$YELLOW" "Start services first with: ./dsv.sh start"
+        return 1
+    fi
+
+    print_color "$YELLOW" "This will flush stale keys from Redis:"
+    echo "  - Finalized batches (*:*:finalized:*)"
+    echo "  - Aggregated batches (*:*:batch:aggregated:*)"
+    echo "  - Batch parts (*:*:batch:part:*)"
+    echo "  - Aggregation queues"
+    echo ""
+    read -p "Continue? (y/N) " -n 1 -r
+    echo
+
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        # Get Redis port from container
+        REDIS_PORT=$(docker exec "$REDIS_CONTAINER" sh -c 'echo $REDIS_PORT' 2>/dev/null)
+        if [ -z "$REDIS_PORT" ]; then
+            REDIS_PORT=6379
+        fi
+
+        # Delete finalized batches
+        FINALIZED_COUNT=$(docker exec $REDIS_CONTAINER sh -c "redis-cli -p $REDIS_PORT --scan --pattern '*:*:finalized:*'" | wc -l)
+        docker exec $REDIS_CONTAINER sh -c "redis-cli -p $REDIS_PORT --scan --pattern '*:*:finalized:*' | xargs -r redis-cli -p $REDIS_PORT DEL" 2>/dev/null
+
+        # Delete aggregated batches
+        AGG_COUNT=$(docker exec $REDIS_CONTAINER sh -c "redis-cli -p $REDIS_PORT --scan --pattern '*:*:batch:aggregated:*'" | wc -l)
+        docker exec $REDIS_CONTAINER sh -c "redis-cli -p $REDIS_PORT --scan --pattern '*:*:batch:aggregated:*' | xargs -r redis-cli -p $REDIS_PORT DEL" 2>/dev/null
+
+        # Delete batch parts
+        PARTS_COUNT=$(docker exec $REDIS_CONTAINER sh -c "redis-cli -p $REDIS_PORT --scan --pattern '*:*:batch:part:*'" | wc -l)
+        docker exec $REDIS_CONTAINER sh -c "redis-cli -p $REDIS_PORT --scan --pattern '*:*:batch:part:*' | xargs -r redis-cli -p $REDIS_PORT DEL" 2>/dev/null
+
+        # Clear aggregation queues
+        docker exec $REDIS_CONTAINER sh -c "redis-cli -p $REDIS_PORT DEL '*:*:aggregationQueue' '*:*:aggregation:queue'" 2>/dev/null
+
+        print_color "$GREEN" "✓ Cache cleaned:"
+        print_color "$GREEN" "  - Finalized batches: $FINALIZED_COUNT"
+        print_color "$GREEN" "  - Aggregated batches: $AGG_COUNT"
+        print_color "$GREEN" "  - Batch parts: $PARTS_COUNT"
+    else
+        print_color "$YELLOW" "Cancelled"
+    fi
+}
+
 # Clean everything
 clean_all() {
     print_color "$YELLOW" "⚠️  This will remove sequencer containers and volumes"
@@ -189,6 +242,9 @@ case "${1:-}" in
         ;;
     monitor)
         monitor_pipeline
+        ;;
+    clean-cache)
+        clean_cache
         ;;
     logs)
         if is_separated_running; then

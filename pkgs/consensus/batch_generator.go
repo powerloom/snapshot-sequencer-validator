@@ -123,14 +123,14 @@ func (g *DummyBatchGenerator) generateDummySignature(epochID uint64, merkleRoot 
 
 // FinalizedBatch struct (will be generated from protobuf in production)
 type FinalizedBatch struct {
-	EpochId           uint64
-	ProjectIds        []string
-	SnapshotCids      []string
-	MerkleRoot        []byte
-	BlsSignature      []byte
-	SequencerId       string
-	Timestamp         uint64
-	ProjectVotes      map[string]uint32
+	EpochId           uint64                                       `json:"EpochId"`
+	ProjectIds        []string                                     `json:"ProjectIds"`
+	SnapshotCids      []string                                     `json:"SnapshotCids"`
+	MerkleRoot        []byte                                       `json:"MerkleRoot"`
+	BlsSignature      []byte                                       `json:"BlsSignature"`
+	SequencerId       string                                       `json:"SequencerId"`
+	Timestamp         uint64                                       `json:"Timestamp"`
+	ProjectVotes      map[string]uint32                            `json:"ProjectVotes"`
 	SubmissionDetails map[string][]submissions.SubmissionMetadata `json:"submission_details"` // project→submissions for challenges
 	BatchIPFSCID      string                                       `json:"batch_ipfs_cid"`      // IPFS CID of this batch
 }

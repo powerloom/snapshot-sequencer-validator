@@ -988,6 +988,14 @@ func (s *UnifiedSequencer) processBatchPart(epochID uint64, batchID int, totalBa
 			continue
 		}
 
+		// Extract submission metadata (WHO submitted WHAT for rewards)
+		var submissionMetadata []interface{}
+		if metadataRaw, exists := projectData["submission_metadata"]; exists {
+			if metadataArray, ok := metadataRaw.([]interface{}); ok {
+				submissionMetadata = metadataArray
+			}
+		}
+
 		// Convert to proper type
 		cidVotes, ok := cidVotesRaw.(map[string]int)
 		if !ok {
@@ -1024,13 +1032,14 @@ func (s *UnifiedSequencer) processBatchPart(epochID uint64, batchID int, totalBa
 
 		if winningCID != "" {
 			partResults[projectID] = map[string]interface{}{
-				"cid":         winningCID,
-				"votes":       maxVotes,
-				"total_votes": totalVotes,
-				"unique_cids": len(cidVotes),
+				"cid":                 winningCID,
+				"votes":               maxVotes,
+				"total_votes":         totalVotes,
+				"unique_cids":         len(cidVotes),
+				"submission_metadata": submissionMetadata, // WHO submitted WHAT for rewards
 			}
-			log.Debugf("Project %s: Selected CID %s with %d/%d votes (from %d unique CIDs)",
-				projectID, winningCID, maxVotes, totalVotes, len(cidVotes))
+			log.Debugf("Project %s: Selected CID %s with %d/%d votes (from %d unique CIDs, %d submissions)",
+				projectID, winningCID, maxVotes, totalVotes, len(cidVotes), len(submissionMetadata))
 		}
 	}
 

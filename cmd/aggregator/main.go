@@ -241,6 +241,37 @@ func (a *Aggregator) createFinalizedBatchFromParts(epochID uint64, projectSubmis
 				} else {
 					projectVotes[projectID] = 1
 				}
+
+				// Extract submission metadata (WHO submitted WHAT for rewards)
+				if metadataRaw, exists := dataMap["submission_metadata"]; exists {
+					if metadataArray, ok := metadataRaw.([]interface{}); ok {
+						// Convert to proper SubmissionMetadata structs
+						projectMetadata := make([]submissions.SubmissionMetadata, 0)
+						for _, metaItem := range metadataArray {
+							if metaMap, ok := metaItem.(map[string]interface{}); ok {
+								metadata := submissions.SubmissionMetadata{}
+								if submitterID, ok := metaMap["submitter_id"].(string); ok {
+									metadata.SubmitterID = submitterID
+								}
+								if snapshotCID, ok := metaMap["snapshot_cid"].(string); ok {
+									metadata.SnapshotCID = snapshotCID
+								}
+								if timestamp, ok := metaMap["timestamp"].(float64); ok {
+									metadata.Timestamp = uint64(timestamp)
+								}
+								if slotID, ok := metaMap["slot_id"].(float64); ok {
+									metadata.SlotID = uint64(slotID)
+								}
+								if signature, ok := metaMap["signature"].(string); ok {
+									metadata.Signature = []byte(signature)
+								}
+								metadata.VoteCount = 1 // Each submission counts as 1 vote
+								projectMetadata = append(projectMetadata, metadata)
+							}
+						}
+						submissionDetails[projectID] = projectMetadata
+					}
+				}
 			}
 		}
 	}
