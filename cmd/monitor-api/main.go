@@ -24,7 +24,6 @@ var log = logrus.New()
 // @title DSV Pipeline Monitor API
 // @version 1.0
 // @description Monitoring API for Decentralized Sequencer Validator pipeline
-// @host localhost:8080
 // @BasePath /api/v1
 
 type MonitorAPI struct {
