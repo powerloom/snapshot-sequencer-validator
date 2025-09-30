@@ -208,6 +208,31 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # Monitor API - REST API for pipeline monitoring with Swagger UI
+  monitor-api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.monitor-api
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - PROTOCOL=${PROTOCOL:-uniswapv2}
+      - MARKET=${DATA_MARKET_ADDRESSES}
+      - MONITOR_API_PORT=8080
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "${MONITOR_API_PORT:-8080}:8080"
+    networks:
+      - sequencer-net
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   # Optional: Monitoring with Prometheus + Grafana
   prometheus:
     image: prom/prometheus:latest
