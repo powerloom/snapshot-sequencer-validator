@@ -132,5 +132,4 @@ type FinalizedBatch struct {
 	Timestamp         uint64                                       `json:"Timestamp"`
 	ProjectVotes      map[string]uint32                            `json:"ProjectVotes"`
 	SubmissionDetails map[string][]submissions.SubmissionMetadata `json:"submission_details"` // project→submissions for challenges
-	BatchIPFSCID      string                                       `json:"batch_ipfs_cid"`      // IPFS CID of this batch
 }

@@ -1330,12 +1330,11 @@ func (s *UnifiedSequencer) createFinalizedBatch(epochID uint64, projectSubmissio
 		if err != nil {
 			log.Errorf("Failed to store batch in IPFS: %v", err)
 		} else {
-			finalizedBatch.BatchIPFSCID = batchCID
 			log.Infof("📦 Stored finalized batch in IPFS: %s", batchCID)
 
 			// Keep legacy P2P consensus for unified mode
 			if s.p2pConsensus != nil {
-				if err := s.p2pConsensus.BroadcastFinalizedBatch(finalizedBatch); err != nil {
+				if err := s.p2pConsensus.BroadcastFinalizedBatch(finalizedBatch, batchCID); err != nil {
 					log.Errorf("Failed to broadcast batch to P2P consensus: %v", err)
 				} else {
 					log.Infof("📡 Broadcasted batch to validator consensus network")

@@ -147,8 +147,9 @@ func (pc *P2PConsensus) setupTopics() error {
 }
 
 // BroadcastFinalizedBatch broadcasts a finalized batch to other validators
-func (pc *P2PConsensus) BroadcastFinalizedBatch(batch *FinalizedBatch) error {
-	if batch.BatchIPFSCID == "" {
+// The batch must already be stored in IPFS, and ipfsCID must be the CID where it was stored
+func (pc *P2PConsensus) BroadcastFinalizedBatch(batch *FinalizedBatch, ipfsCID string) error {
+	if ipfsCID == "" {
 		return fmt.Errorf("cannot broadcast batch without IPFS CID")
 	}
 
@@ -160,7 +161,7 @@ func (pc *P2PConsensus) BroadcastFinalizedBatch(batch *FinalizedBatch) error {
 		ValidatorID:  pc.sequencerID,
 		PeerID:       pc.host.ID().String(),
 		EpochID:      batch.EpochId,
-		BatchIPFSCID: batch.BatchIPFSCID,
+		BatchIPFSCID: ipfsCID,
 		MerkleRoot:   merkleRootHex,
 		ProjectCount: len(batch.ProjectIds),
 		Timestamp:    batch.Timestamp,
@@ -183,7 +184,7 @@ func (pc *P2PConsensus) BroadcastFinalizedBatch(batch *FinalizedBatch) error {
 
 	pc.broadcastBatches++
 	log.Infof("📡 Broadcasted finalized batch for epoch %d (CID: %s, Merkle: %s...)",
-		batch.EpochId, batch.BatchIPFSCID, merkleRootHex[:16])
+		batch.EpochId, ipfsCID, merkleRootHex[:16])
 
 	// Also store our own batch for consensus checking
 	pc.storeValidatorBatch(vBatch)
