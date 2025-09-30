@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -102,7 +103,26 @@ func main() {
 	redisHost := getEnv("REDIS_HOST", "localhost")
 	redisPort := getEnv("REDIS_PORT", "6379")
 	protocol := getEnv("PROTOCOL", "uniswapv2")
-	market := getEnv("MARKET", "0x21cb57C1f2352ad215a463DD867b838749CD3b8f")
+
+	// Parse DATA_MARKET_ADDRESSES (could be comma-separated or JSON array)
+	marketsEnv := getEnv("MARKET", "")
+	if marketsEnv == "" {
+		marketsEnv = getEnv("DATA_MARKET_ADDRESSES", "0x21cb57C1f2352ad215a463DD867b838749CD3b8f")
+	}
+	// Extract first market address (handle comma-separated or JSON array)
+	market := marketsEnv
+	if strings.Contains(marketsEnv, ",") {
+		market = strings.Split(marketsEnv, ",")[0]
+	} else if strings.HasPrefix(marketsEnv, "[") {
+		// JSON array - extract first address
+		marketsEnv = strings.Trim(marketsEnv, "[]")
+		marketsEnv = strings.ReplaceAll(marketsEnv, "\"", "")
+		if strings.Contains(marketsEnv, ",") {
+			market = strings.Split(marketsEnv, ",")[0]
+		}
+	}
+	market = strings.TrimSpace(market)
+
 	port := getEnv("MONITOR_API_PORT", "8080")
 
 	ctx := context.Background()
@@ -177,15 +197,21 @@ func (m *MonitorAPI) Health(c *gin.Context) {
 // @Description Get overall pipeline status summary
 // @Tags pipeline
 // @Produce json
+// @Param protocol query string false "Protocol state identifier"
+// @Param market query string false "Data market address"
 // @Success 200 {object} PipelineOverview
 // @Router /pipeline/overview [get]
 func (m *MonitorAPI) PipelineOverview(c *gin.Context) {
+	protocol := c.DefaultQuery("protocol", m.keyBuilder.ProtocolState)
+	market := c.DefaultQuery("market", m.keyBuilder.DataMarket)
+	kb := keys.NewKeyBuilder(protocol, market)
+
 	overview := PipelineOverview{
 		Timestamp: time.Now(),
 	}
 
 	// Submission queue depth
-	queueKey := m.keyBuilder.SubmissionQueue()
+	queueKey := kb.SubmissionQueue()
 	if depth, err := m.redis.LLen(m.ctx, queueKey).Result(); err == nil {
 		overview.SubmissionQueue = QueueStatus{
 			Depth:  int(depth),
@@ -198,11 +224,11 @@ func (m *MonitorAPI) PipelineOverview(c *gin.Context) {
 	overview.ActiveWindows = len(windowKeys)
 
 	// Ready batches
-	readyKeys, _ := m.scanKeys(m.keyBuilder.ProtocolState + ":" + m.keyBuilder.DataMarket + ":batch:ready:*")
+	readyKeys, _ := m.scanKeys(kb.ProtocolState + ":" + kb.DataMarket + ":batch:ready:*")
 	overview.ReadyBatches = len(readyKeys)
 
 	// Finalization queue
-	finQueueKey := m.keyBuilder.FinalizationQueue()
+	finQueueKey := kb.FinalizationQueue()
 	if depth, err := m.redis.LLen(m.ctx, finQueueKey).Result(); err == nil {
 		overview.FinalizationQueue = QueueStatus{
 			Depth:  int(depth),
@@ -211,19 +237,19 @@ func (m *MonitorAPI) PipelineOverview(c *gin.Context) {
 	}
 
 	// Active workers
-	workerKeys, _ := m.scanKeys(m.keyBuilder.ProtocolState + ":" + m.keyBuilder.DataMarket + ":worker:*:status")
+	workerKeys, _ := m.scanKeys(kb.ProtocolState + ":" + kb.DataMarket + ":worker:*:status")
 	overview.ActiveWorkers = len(workerKeys)
 
 	// Completed parts
-	partKeys, _ := m.scanKeys(m.keyBuilder.ProtocolState + ":" + m.keyBuilder.DataMarket + ":batch:part:*")
+	partKeys, _ := m.scanKeys(kb.ProtocolState + ":" + kb.DataMarket + ":batch:part:*")
 	overview.CompletedParts = len(partKeys)
 
 	// Finalized batches
-	finalizedKeys, _ := m.scanKeys(m.keyBuilder.ProtocolState + ":" + m.keyBuilder.DataMarket + ":finalized:*")
+	finalizedKeys, _ := m.scanKeys(kb.ProtocolState + ":" + kb.DataMarket + ":finalized:*")
 	overview.FinalizedBatches = len(finalizedKeys)
 
 	// Aggregation queue
-	aggQueueKey := m.keyBuilder.AggregationQueue()
+	aggQueueKey := kb.AggregationQueue()
 	if depth, err := m.redis.LLen(m.ctx, aggQueueKey).Result(); err == nil {
 		overview.AggregationQueue = QueueStatus{
 			Depth:  int(depth),
@@ -232,7 +258,7 @@ func (m *MonitorAPI) PipelineOverview(c *gin.Context) {
 	}
 
 	// Aggregated batches
-	aggKeys, _ := m.scanKeys(m.keyBuilder.ProtocolState + ":" + m.keyBuilder.DataMarket + ":batch:aggregated:*")
+	aggKeys, _ := m.scanKeys(kb.ProtocolState + ":" + kb.DataMarket + ":batch:aggregated:*")
 	overview.AggregatedBatches = len(aggKeys)
 
 	c.JSON(http.StatusOK, overview)
@@ -279,9 +305,12 @@ func (m *MonitorAPI) SubmissionWindows(c *gin.Context) {
 // @Success 200 {object} map[string]interface{}
 // @Router /submissions/queue [get]
 func (m *MonitorAPI) SubmissionQueue(c *gin.Context) {
-	queueKey := m.keyBuilder.SubmissionQueue()
-	depth, _ := m.redis.LLen(m.ctx, queueKey).Result()
+	protocol := c.DefaultQuery("protocol", m.keyBuilder.ProtocolState)
+	market := c.DefaultQuery("market", m.keyBuilder.DataMarket)
+	kb := keys.NewKeyBuilder(protocol, market)
 
+	queueKey := kb.SubmissionQueue()
+	depth, _ := m.redis.LLen(m.ctx, queueKey).Result()
 	samples, _ := m.redis.LRange(m.ctx, queueKey, 0, 4).Result()
 
 	c.JSON(http.StatusOK, gin.H{
@@ -299,7 +328,11 @@ func (m *MonitorAPI) SubmissionQueue(c *gin.Context) {
 // @Success 200 {object} []ReadyBatch
 // @Router /batches/ready [get]
 func (m *MonitorAPI) ReadyBatches(c *gin.Context) {
-	pattern := m.keyBuilder.ProtocolState + ":" + m.keyBuilder.DataMarket + ":batch:ready:*"
+	protocol := c.DefaultQuery("protocol", m.keyBuilder.ProtocolState)
+	market := c.DefaultQuery("market", m.keyBuilder.DataMarket)
+	kb := keys.NewKeyBuilder(protocol, market)
+
+	pattern := kb.ProtocolState + ":" + kb.DataMarket + ":batch:ready:*"
 	keys, err := m.scanKeys(pattern)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -330,7 +363,11 @@ func (m *MonitorAPI) ReadyBatches(c *gin.Context) {
 // @Success 200 {object} map[string]interface{}
 // @Router /batches/finalization-queue [get]
 func (m *MonitorAPI) FinalizationQueue(c *gin.Context) {
-	queueKey := m.keyBuilder.FinalizationQueue()
+	protocol := c.DefaultQuery("protocol", m.keyBuilder.ProtocolState)
+	market := c.DefaultQuery("market", m.keyBuilder.DataMarket)
+	kb := keys.NewKeyBuilder(protocol, market)
+
+	queueKey := kb.FinalizationQueue()
 	depth, _ := m.redis.LLen(m.ctx, queueKey).Result()
 
 	samples, _ := m.redis.LRange(m.ctx, queueKey, 0, 4).Result()
@@ -350,7 +387,11 @@ func (m *MonitorAPI) FinalizationQueue(c *gin.Context) {
 // @Success 200 {object} []WorkerStatus
 // @Router /workers/status [get]
 func (m *MonitorAPI) WorkerStatus(c *gin.Context) {
-	pattern := m.keyBuilder.ProtocolState + ":" + m.keyBuilder.DataMarket + ":worker:*:status"
+	protocol := c.DefaultQuery("protocol", m.keyBuilder.ProtocolState)
+	market := c.DefaultQuery("market", m.keyBuilder.DataMarket)
+	kb := keys.NewKeyBuilder(protocol, market)
+
+	pattern := kb.ProtocolState + ":" + kb.DataMarket + ":worker:*:status"
 	keys, err := m.scanKeys(pattern)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -395,7 +436,11 @@ func (m *MonitorAPI) WorkerStatus(c *gin.Context) {
 // @Success 200 {object} []BatchPart
 // @Router /batches/parts [get]
 func (m *MonitorAPI) BatchParts(c *gin.Context) {
-	pattern := m.keyBuilder.ProtocolState + ":" + m.keyBuilder.DataMarket + ":batch:part:*"
+	protocol := c.DefaultQuery("protocol", m.keyBuilder.ProtocolState)
+	market := c.DefaultQuery("market", m.keyBuilder.DataMarket)
+	kb := keys.NewKeyBuilder(protocol, market)
+
+	pattern := kb.ProtocolState + ":" + kb.DataMarket + ":batch:part:*"
 	keys, err := m.scanKeys(pattern)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -425,7 +470,11 @@ func (m *MonitorAPI) BatchParts(c *gin.Context) {
 // @Success 200 {object} []FinalizedBatch
 // @Router /batches/finalized [get]
 func (m *MonitorAPI) FinalizedBatches(c *gin.Context) {
-	pattern := m.keyBuilder.ProtocolState + ":" + m.keyBuilder.DataMarket + ":finalized:*"
+	protocol := c.DefaultQuery("protocol", m.keyBuilder.ProtocolState)
+	market := c.DefaultQuery("market", m.keyBuilder.DataMarket)
+	kb := keys.NewKeyBuilder(protocol, market)
+
+	pattern := kb.ProtocolState + ":" + kb.DataMarket + ":finalized:*"
 	keys, err := m.scanKeys(pattern)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -468,7 +517,11 @@ func (m *MonitorAPI) FinalizedBatches(c *gin.Context) {
 // @Success 200 {object} map[string]interface{}
 // @Router /aggregation/queue [get]
 func (m *MonitorAPI) AggregationQueue(c *gin.Context) {
-	queueKey := m.keyBuilder.AggregationQueue()
+	protocol := c.DefaultQuery("protocol", m.keyBuilder.ProtocolState)
+	market := c.DefaultQuery("market", m.keyBuilder.DataMarket)
+	kb := keys.NewKeyBuilder(protocol, market)
+
+	queueKey := kb.AggregationQueue()
 	depth, _ := m.redis.LLen(m.ctx, queueKey).Result()
 
 	samples, _ := m.redis.LRange(m.ctx, queueKey, 0, 4).Result()
@@ -488,7 +541,11 @@ func (m *MonitorAPI) AggregationQueue(c *gin.Context) {
 // @Success 200 {object} []AggregatedBatch
 // @Router /aggregation/results [get]
 func (m *MonitorAPI) AggregatedBatches(c *gin.Context) {
-	pattern := m.keyBuilder.ProtocolState + ":" + m.keyBuilder.DataMarket + ":batch:aggregated:*"
+	protocol := c.DefaultQuery("protocol", m.keyBuilder.ProtocolState)
+	market := c.DefaultQuery("market", m.keyBuilder.DataMarket)
+	kb := keys.NewKeyBuilder(protocol, market)
+
+	pattern := kb.ProtocolState + ":" + kb.DataMarket + ":batch:aggregated:*"
 	keys, err := m.scanKeys(pattern)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

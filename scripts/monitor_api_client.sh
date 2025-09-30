@@ -1,6 +1,7 @@
 #!/bin/bash
 
 # Monitor API Client - Simple curl-based monitoring
+# Usage: ./monitor_api_client.sh [port] [protocol] [market]
 # No jq dependency, uses grep/sed/awk for parsing
 
 set -e
@@ -13,9 +14,19 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-# Get monitor API port from environment or use default
-MONITOR_API_PORT=${MONITOR_API_PORT:-8080}
+# Arguments: port, protocol, market (all optional)
+MONITOR_API_PORT=${1:-${MONITOR_API_PORT:-8080}}
+PROTOCOL=${2:-${PROTOCOL:-}}
+MARKET=${3:-${MARKET:-}}
+
 API_BASE="http://localhost:${MONITOR_API_PORT}/api/v1"
+
+if [ -n "$PROTOCOL" ]; then
+    echo -e "${YELLOW}Using PROTOCOL: ${PROTOCOL}${NC}"
+fi
+if [ -n "$MARKET" ]; then
+    echo -e "${YELLOW}Using MARKET: ${MARKET}${NC}"
+fi
 
 print_header() {
     echo -e "${CYAN}═══════════════════════════════════════════════${NC}"

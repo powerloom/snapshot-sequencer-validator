@@ -123,7 +123,7 @@ show_status() {
 # Monitor pipeline
 monitor_pipeline() {
     if [ -f "scripts/monitor_api_client.sh" ]; then
-        bash scripts/monitor_api_client.sh
+        bash scripts/monitor_api_client.sh "${MONITOR_API_PORT}" "${PROTOCOL}" "${DATA_MARKET_ADDRESSES}"
     else
         print_color "$CYAN" "Monitor API: http://localhost:\${MONITOR_API_PORT:-8080}/swagger/index.html"
         print_color "$YELLOW" "Use the Monitor API service for pipeline monitoring"
