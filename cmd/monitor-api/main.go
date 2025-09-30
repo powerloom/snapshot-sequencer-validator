@@ -302,6 +302,8 @@ func (m *MonitorAPI) SubmissionWindows(c *gin.Context) {
 // @Description Get submission queue depth and sample entries
 // @Tags submissions
 // @Produce json
+// @Param protocol query string false "Protocol state identifier"
+// @Param market query string false "Data market address"
 // @Success 200 {object} map[string]interface{}
 // @Router /submissions/queue [get]
 func (m *MonitorAPI) SubmissionQueue(c *gin.Context) {
@@ -325,6 +327,8 @@ func (m *MonitorAPI) SubmissionQueue(c *gin.Context) {
 // @Description Get batches ready for finalization
 // @Tags batches
 // @Produce json
+// @Param protocol query string false "Protocol state identifier"
+// @Param market query string false "Data market address"
 // @Success 200 {object} []ReadyBatch
 // @Router /batches/ready [get]
 func (m *MonitorAPI) ReadyBatches(c *gin.Context) {
@@ -361,6 +365,8 @@ func (m *MonitorAPI) ReadyBatches(c *gin.Context) {
 // @Tags batches
 // @Produce json
 // @Success 200 {object} map[string]interface{}
+// @Param protocol query string false "Protocol state identifier"
+// @Param market query string false "Data market address"
 // @Router /batches/finalization-queue [get]
 func (m *MonitorAPI) FinalizationQueue(c *gin.Context) {
 	protocol := c.DefaultQuery("protocol", m.keyBuilder.ProtocolState)
@@ -385,6 +391,8 @@ func (m *MonitorAPI) FinalizationQueue(c *gin.Context) {
 // @Tags workers
 // @Produce json
 // @Success 200 {object} []WorkerStatus
+// @Param protocol query string false "Protocol state identifier"
+// @Param market query string false "Data market address"
 // @Router /workers/status [get]
 func (m *MonitorAPI) WorkerStatus(c *gin.Context) {
 	protocol := c.DefaultQuery("protocol", m.keyBuilder.ProtocolState)
@@ -434,6 +442,8 @@ func (m *MonitorAPI) WorkerStatus(c *gin.Context) {
 // @Tags batches
 // @Produce json
 // @Success 200 {object} []BatchPart
+// @Param protocol query string false "Protocol state identifier"
+// @Param market query string false "Data market address"
 // @Router /batches/parts [get]
 func (m *MonitorAPI) BatchParts(c *gin.Context) {
 	protocol := c.DefaultQuery("protocol", m.keyBuilder.ProtocolState)
@@ -468,6 +478,8 @@ func (m *MonitorAPI) BatchParts(c *gin.Context) {
 // @Tags batches
 // @Produce json
 // @Success 200 {object} []FinalizedBatch
+// @Param protocol query string false "Protocol state identifier"
+// @Param market query string false "Data market address"
 // @Router /batches/finalized [get]
 func (m *MonitorAPI) FinalizedBatches(c *gin.Context) {
 	protocol := c.DefaultQuery("protocol", m.keyBuilder.ProtocolState)
@@ -515,6 +527,8 @@ func (m *MonitorAPI) FinalizedBatches(c *gin.Context) {
 // @Tags aggregation
 // @Produce json
 // @Success 200 {object} map[string]interface{}
+// @Param protocol query string false "Protocol state identifier"
+// @Param market query string false "Data market address"
 // @Router /aggregation/queue [get]
 func (m *MonitorAPI) AggregationQueue(c *gin.Context) {
 	protocol := c.DefaultQuery("protocol", m.keyBuilder.ProtocolState)
@@ -539,6 +553,8 @@ func (m *MonitorAPI) AggregationQueue(c *gin.Context) {
 // @Tags aggregation
 // @Produce json
 // @Success 200 {object} []AggregatedBatch
+// @Param protocol query string false "Protocol state identifier"
+// @Param market query string false "Data market address"
 // @Router /aggregation/results [get]
 func (m *MonitorAPI) AggregatedBatches(c *gin.Context) {
 	protocol := c.DefaultQuery("protocol", m.keyBuilder.ProtocolState)

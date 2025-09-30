@@ -111,6 +111,15 @@ paths:
   /aggregation/queue:
     get:
       description: Get aggregation queue status
+      parameters:
+      - description: Protocol state identifier
+        in: query
+        name: protocol
+        type: string
+      - description: Data market address
+        in: query
+        name: market
+        type: string
       produces:
       - application/json
       responses:
@@ -125,6 +134,15 @@ paths:
   /aggregation/results:
     get:
       description: Get network-wide aggregated batches
+      parameters:
+      - description: Protocol state identifier
+        in: query
+        name: protocol
+        type: string
+      - description: Data market address
+        in: query
+        name: market
+        type: string
       produces:
       - application/json
       responses:
@@ -140,6 +158,15 @@ paths:
   /batches/finalization-queue:
     get:
       description: Get finalization queue status
+      parameters:
+      - description: Protocol state identifier
+        in: query
+        name: protocol
+        type: string
+      - description: Data market address
+        in: query
+        name: market
+        type: string
       produces:
       - application/json
       responses:
@@ -154,6 +181,15 @@ paths:
   /batches/finalized:
     get:
       description: Get finalized batches with details
+      parameters:
+      - description: Protocol state identifier
+        in: query
+        name: protocol
+        type: string
+      - description: Data market address
+        in: query
+        name: market
+        type: string
       produces:
       - application/json
       responses:
@@ -169,6 +205,15 @@ paths:
   /batches/parts:
     get:
       description: Get completed batch parts from parallel finalization
+      parameters:
+      - description: Protocol state identifier
+        in: query
+        name: protocol
+        type: string
+      - description: Data market address
+        in: query
+        name: market
+        type: string
       produces:
       - application/json
       responses:
@@ -184,6 +229,15 @@ paths:
   /batches/ready:
     get:
       description: Get batches ready for finalization
+      parameters:
+      - description: Protocol state identifier
+        in: query
+        name: protocol
+        type: string
+      - description: Data market address
+        in: query
+        name: market
+        type: string
       produces:
       - application/json
       responses:
@@ -235,6 +289,15 @@ paths:
   /submissions/queue:
     get:
       description: Get submission queue depth and sample entries
+      parameters:
+      - description: Protocol state identifier
+        in: query
+        name: protocol
+        type: string
+      - description: Data market address
+        in: query
+        name: market
+        type: string
       produces:
       - application/json
       responses:
@@ -264,6 +327,15 @@ paths:
   /workers/status:
     get:
       description: Get status of all finalization workers
+      parameters:
+      - description: Protocol state identifier
+        in: query
+        name: protocol
+        type: string
+      - description: Data market address
+        in: query
+        name: market
+        type: string
       produces:
       - application/json
       responses:
