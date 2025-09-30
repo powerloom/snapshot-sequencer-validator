@@ -323,16 +323,40 @@ docker compose -f docker-compose.separated.yml build
 
 ## Monitoring Tools
 
-### Batch Status Monitoring
+### RESTful Monitor API Service
 
-Monitor batch preparation and submission windows:
+The new `monitor-api` provides a comprehensive, professional monitoring solution with 11 REST endpoints and interactive Swagger UI:
 
 ```bash
-# Quick monitoring via monitor_simple.sh
+# Access monitor API
+http://localhost:8080/swagger/index.html
+
+# Swagger UI provides interactive documentation and testing
+```
+
+**Monitoring Endpoints:**
+1. `/api/v1/health`: Service health check
+2. `/api/v1/pipeline/overview`: Complete pipeline status
+3. `/api/v1/submissions/windows`: Active submission windows
+4. `/api/v1/submissions/queue`: Submission queue details
+5. `/api/v1/batches/ready`: Batches ready for finalization
+6. `/api/v1/batches/finalization-queue`: Finalization queue status
+7. `/api/v1/workers/status`: Worker health and activity
+8. `/api/v1/batches/parts`: Current batch parts
+9. `/api/v1/batches/finalized`: Recently finalized batches
+10. `/api/v1/aggregation/queue`: Aggregation queue status
+11. `/api/v1/aggregation/results`: Aggregation results
+
+### Legacy Batch Status Monitoring
+
+For quick terminal-based monitoring:
+
+```bash
+# Quick monitoring via legacy script
 ./dsv.sh monitor
 ```
 
-The monitoring script provides comprehensive insights into the Decentralized Sequencer Validator system, with enhanced Phase 3 P2P Validator Consensus capabilities:
+The legacy monitoring script provides quick insights into the Decentralized Sequencer Validator system:
 
 **Key Monitoring Sections:**
 1. **Active Submission Windows**
@@ -362,44 +386,18 @@ The monitoring script provides comprehensive insights into the Decentralized Seq
    - Tracks batches pending finalization
    - Shows queue lengths across different protocols
 
-7. **🌐 P2P Validator Consensus (Phase 3 - FULLY OPERATIONAL)**
-   ```
-   🌐 P2P Validator Consensus:
-     ✓ Batch Broadcasting: /powerloom/finalized-batches/all
-     Active Validators: 3-5 per epoch
-     Epochs with votes: Continuous
-     Unique Batch Characteristics:
-       → Independent finalization
-       → IPFS-backed storage
-       → Merkle root generation
-
-     ✓ Aggregation Strategy: Local, Per-Project Majority
-       📊 No Global Consensus Round
-       📊 Independent Validator Batch Processing
-
-     ✓ Chain-Ready Results Generated Locally
-       🎯 Potential On-Chain Submission
-       🎯 Cryptographically Verifiable Batches
-   ```
-
-   Key features:
-   - Decentralized batch exchange via gossipsub
+7. **P2P Validator Consensus (Phase 3 - FULLY OPERATIONAL)**
+   - Batch Broadcasting: `/powerloom/finalized-batches/all`
+   - Active Validators: 3-5 per epoch
    - Independent validator batch finalization
    - Local per-project vote aggregation
    - IPFS-backed, Merkle-rooted batch results
-   - No centralized consensus mechanism
-
-**Quick Stats and Vote Distribution**
-- Queue depth
-- Open submission windows
-- Vote data format (new vs. old)
-
-📚 **Comprehensive Documentation**: See [MONITORING_GUIDE.md](./MONITORING_GUIDE.md) for in-depth monitoring strategies.
 
 **Recommended Monitoring Workflow:**
-1. Use `./dsv.sh monitor` for quick system overview
-2. Check container logs with `./dsv.sh logs` for detailed information
-3. Use component-specific log commands for targeted debugging
+1. Use Swagger UI for detailed, interactive monitoring
+2. Use `./dsv.sh monitor` for quick system overview
+3. Check container logs with `./dsv.sh logs` for additional details
+4. Use component-specific log commands for targeted debugging
 
 ### Component Log Shortcuts
 
