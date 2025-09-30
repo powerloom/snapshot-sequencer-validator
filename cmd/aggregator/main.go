@@ -37,6 +37,28 @@ type Aggregator struct {
 	mu           sync.RWMutex
 }
 
+// scanKeys uses SCAN instead of KEYS for production safety
+func (a *Aggregator) scanKeys(pattern string) ([]string, error) {
+	var keys []string
+	var cursor uint64
+
+	for {
+		scanKeys, nextCursor, err := a.redisClient.Scan(a.ctx, cursor, pattern, 100).Result()
+		if err != nil {
+			return nil, err
+		}
+
+		keys = append(keys, scanKeys...)
+		cursor = nextCursor
+
+		if cursor == 0 {
+			break
+		}
+	}
+
+	return keys, nil
+}
+
 func NewAggregator(cfg *config.Settings) (*Aggregator, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -209,7 +231,6 @@ func (a *Aggregator) aggregateWorkerParts(epochIDStr string, totalParts int) {
 			log.WithFields(logrus.Fields{
 				"epoch":    epochID,
 				"projects": len(finalizedBatch.ProjectVotes),
-				"cid":      finalizedBatch.BatchIPFSCID,
 			}).Info("📡 Broadcasting LOCAL finalized batch to validator network")
 		}
 	}
@@ -298,7 +319,6 @@ func (a *Aggregator) createFinalizedBatchFromParts(epochID uint64, projectSubmis
 	// Store in IPFS if available
 	if a.ipfsClient != nil {
 		if cid, err := a.ipfsClient.StoreFinalizedBatch(a.ctx, finalizedBatch); err == nil {
-			finalizedBatch.BatchIPFSCID = cid
 			log.WithFields(logrus.Fields{
 				"epoch": epochID,
 				"cid":   cid,
@@ -343,9 +363,9 @@ func (a *Aggregator) aggregateEpoch(epochIDStr string) {
 
 	// Get all incoming batches from OTHER validators for this epoch - namespaced
 	incomingPattern := fmt.Sprintf("%s:%s:incoming:batch:%s:*", a.keyBuilder.ProtocolState, a.keyBuilder.DataMarket, epochIDStr)
-	incomingKeys, err := a.redisClient.Keys(a.ctx, incomingPattern).Result()
+	incomingKeys, err := a.scanKeys(incomingPattern)
 	if err != nil {
-		log.WithError(err).Error("Failed to get incoming batch keys")
+		log.WithError(err).Error("Failed to scan incoming batch keys")
 		return
 	}
 
@@ -462,11 +482,51 @@ func (a *Aggregator) createAggregatedBatch(ourBatch *consensus.FinalizedBatch, i
 		}
 	}
 
+	// Build ProjectIds and SnapshotCids arrays from aggregated data
+	// Determine consensus CID for each project (most votes)
+	projectIDs := make([]string, 0, len(aggregated.ProjectVotes))
+	snapshotCIDs := make([]string, 0, len(aggregated.ProjectVotes))
+
+	for projectID := range aggregated.ProjectVotes {
+		projectIDs = append(projectIDs, projectID)
+
+		// Find consensus CID (most submitted)
+		cidCounts := make(map[string]int)
+		if submissions, exists := aggregated.SubmissionDetails[projectID]; exists {
+			for _, sub := range submissions {
+				cidCounts[sub.SnapshotCID]++
+			}
+		}
+
+		// Get CID with highest count
+		var consensusCID string
+		maxCount := 0
+		for cid, count := range cidCounts {
+			if count > maxCount {
+				maxCount = count
+				consensusCID = cid
+			}
+		}
+		snapshotCIDs = append(snapshotCIDs, consensusCID)
+	}
+
+	aggregated.ProjectIds = projectIDs
+	aggregated.SnapshotCids = snapshotCIDs
+
+	// Calculate merkle root from consensus data
+	combined := ""
+	for i := range projectIDs {
+		combined += projectIDs[i] + ":" + snapshotCIDs[i] + ","
+	}
+	hash := sha256.Sum256([]byte(combined))
+	aggregated.MerkleRoot = hash[:]
+
 	// Log aggregation summary
 	log.WithFields(logrus.Fields{
 		"epoch": aggregated.EpochId,
 		"validators": len(validatorViews),
 		"total_projects": len(aggregated.ProjectVotes),
+		"consensus_cids": len(snapshotCIDs),
 	}).Info("📊 AGGREGATED FINALIZATION: Combined views from all validators")
 
 	// Log which validators contributed
@@ -476,8 +536,7 @@ func (a *Aggregator) createAggregatedBatch(ourBatch *consensus.FinalizedBatch, i
 
 	// Store aggregated batch to IPFS if available
 	if a.ipfsClient != nil {
-		if cid, err := a.ipfsClient.StoreFinalizedBatch(a.ctx, aggregated); err == nil {
-			aggregated.BatchIPFSCID = cid
+		if cid, err := a.ipfsClient.StoreFinalizedBatch(a.ctx, &aggregated); err == nil {
 			log.WithFields(logrus.Fields{
 				"epoch": aggregated.EpochId,
 				"cid":   cid,
@@ -514,9 +573,9 @@ func (a *Aggregator) monitorFinalizedBatches() {
 
 			// Check for new finalized batches - namespaced
 			pattern := fmt.Sprintf("%s:%s:finalized:*", a.keyBuilder.ProtocolState, a.keyBuilder.DataMarket)
-			keys, err := a.redisClient.Keys(a.ctx, pattern).Result()
+			keys, err := a.scanKeys(pattern)
 			if err != nil {
-				log.WithError(err).Debug("Failed to check finalized batches")
+				log.WithError(err).Debug("Failed to scan finalized batches")
 				continue
 			}
 
@@ -580,11 +639,11 @@ func (a *Aggregator) reportMetrics() {
 		case <-ticker.C:
 			// Count aggregated batches - namespaced
 			pattern := fmt.Sprintf("%s:%s:batch:aggregated:*", a.keyBuilder.ProtocolState, a.keyBuilder.DataMarket)
-			keys, _ := a.redisClient.Keys(a.ctx, pattern).Result()
+			keys, _ := a.scanKeys(pattern)
 
 			// Count active validators
 			validatorPattern := "validator:active:*"
-			validators, _ := a.redisClient.Keys(a.ctx, validatorPattern).Result()
+			validators, _ := a.scanKeys(validatorPattern)
 
 			log.WithFields(logrus.Fields{
 				"aggregated_batches": len(keys),

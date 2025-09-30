@@ -160,20 +160,40 @@ clean_cache() {
             REDIS_PORT=6379
         fi
 
-        # Delete finalized batches
-        FINALIZED_COUNT=$(docker exec $REDIS_CONTAINER sh -c "redis-cli -p $REDIS_PORT --scan --pattern '*:*:finalized:*'" | wc -l)
-        docker exec $REDIS_CONTAINER sh -c "redis-cli -p $REDIS_PORT --scan --pattern '*:*:finalized:*' | xargs -r redis-cli -p $REDIS_PORT DEL" 2>/dev/null
+        # Delete finalized batches using SCAN
+        FINALIZED_COUNT=0
+        docker exec $REDIS_CONTAINER redis-cli -p $REDIS_PORT --scan --pattern '*:*:finalized:*' 2>/dev/null | while read key; do
+            if [ ! -z "$key" ]; then
+                docker exec $REDIS_CONTAINER redis-cli -p $REDIS_PORT DEL "$key" >/dev/null 2>&1
+                FINALIZED_COUNT=$((FINALIZED_COUNT + 1))
+            fi
+        done
 
-        # Delete aggregated batches
-        AGG_COUNT=$(docker exec $REDIS_CONTAINER sh -c "redis-cli -p $REDIS_PORT --scan --pattern '*:*:batch:aggregated:*'" | wc -l)
-        docker exec $REDIS_CONTAINER sh -c "redis-cli -p $REDIS_PORT --scan --pattern '*:*:batch:aggregated:*' | xargs -r redis-cli -p $REDIS_PORT DEL" 2>/dev/null
+        # Delete aggregated batches using SCAN
+        AGG_COUNT=0
+        docker exec $REDIS_CONTAINER redis-cli -p $REDIS_PORT --scan --pattern '*:*:batch:aggregated:*' 2>/dev/null | while read key; do
+            if [ ! -z "$key" ]; then
+                docker exec $REDIS_CONTAINER redis-cli -p $REDIS_PORT DEL "$key" >/dev/null 2>&1
+                AGG_COUNT=$((AGG_COUNT + 1))
+            fi
+        done
 
-        # Delete batch parts
-        PARTS_COUNT=$(docker exec $REDIS_CONTAINER sh -c "redis-cli -p $REDIS_PORT --scan --pattern '*:*:batch:part:*'" | wc -l)
-        docker exec $REDIS_CONTAINER sh -c "redis-cli -p $REDIS_PORT --scan --pattern '*:*:batch:part:*' | xargs -r redis-cli -p $REDIS_PORT DEL" 2>/dev/null
+        # Delete batch parts using SCAN
+        PARTS_COUNT=0
+        docker exec $REDIS_CONTAINER redis-cli -p $REDIS_PORT --scan --pattern '*:*:batch:part:*' 2>/dev/null | while read key; do
+            if [ ! -z "$key" ]; then
+                docker exec $REDIS_CONTAINER redis-cli -p $REDIS_PORT DEL "$key" >/dev/null 2>&1
+                PARTS_COUNT=$((PARTS_COUNT + 1))
+            fi
+        done
 
-        # Clear aggregation queues
-        docker exec $REDIS_CONTAINER sh -c "redis-cli -p $REDIS_PORT DEL '*:*:aggregationQueue' '*:*:aggregation:queue'" 2>/dev/null
+        # Clear namespaced aggregation queues using SCAN
+        docker exec $REDIS_CONTAINER redis-cli -p $REDIS_PORT --scan --pattern '*:*:aggregationQueue' 2>/dev/null | while read key; do
+            [ ! -z "$key" ] && docker exec $REDIS_CONTAINER redis-cli -p $REDIS_PORT DEL "$key" >/dev/null 2>&1
+        done
+        docker exec $REDIS_CONTAINER redis-cli -p $REDIS_PORT --scan --pattern '*:*:aggregation:queue' 2>/dev/null | while read key; do
+            [ ! -z "$key" ] && docker exec $REDIS_CONTAINER redis-cli -p $REDIS_PORT DEL "$key" >/dev/null 2>&1
+        done
 
         print_color "$GREEN" "✓ Cache cleaned:"
         print_color "$GREEN" "  - Finalized batches: $FINALIZED_COUNT"
