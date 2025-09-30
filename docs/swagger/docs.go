@@ -180,6 +180,20 @@ const docTemplate = `{
                     "pipeline"
                 ],
                 "summary": "Pipeline overview",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",

@@ -213,6 +213,15 @@ paths:
   /pipeline/overview:
     get:
       description: Get overall pipeline status summary
+      parameters:
+      - description: Protocol state identifier
+        in: query
+        name: protocol
+        type: string
+      - description: Data market address
+        in: query
+        name: market
+        type: string
       produces:
       - application/json
       responses:
