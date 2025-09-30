@@ -328,11 +328,17 @@ docker compose -f docker-compose.separated.yml build
 The new `monitor-api` provides a comprehensive, professional monitoring solution with 11 REST endpoints and interactive Swagger UI:
 
 ```bash
-# Access monitor API
+# Access monitor API (default port 8080, configurable via MONITOR_API_PORT)
 http://localhost:8080/swagger/index.html
+
+# Or with custom port
+http://localhost:9090/swagger/index.html  # if MONITOR_API_PORT=9090
 
 # Swagger UI provides interactive documentation and testing
 ```
+
+**Configuration:**
+Set `MONITOR_API_PORT` in your `.env` file to customize the port (default: 8080).
 
 **Monitoring Endpoints:**
 1. `/api/v1/health`: Service health check
