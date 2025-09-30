@@ -122,51 +122,13 @@ show_status() {
 
 # Monitor pipeline
 monitor_pipeline() {
-    print_color "$BLUE" "📊 Pipeline Status"
-    echo ""
-
-    # Try to connect via docker
-    CONTAINER=$(docker ps --filter "name=redis" --format "{{.Names}}" | grep -E "redis-1|redis_1" | head -1)
-
-    if [ -z "$CONTAINER" ]; then
-        print_color "$RED" "Redis container not found"
+    # Use the comprehensive monitoring script
+    if [ -f "scripts/monitor_pipeline.sh" ]; then
+        bash scripts/monitor_pipeline.sh
+    else
+        print_color "$RED" "Error: scripts/monitor_pipeline.sh not found"
         return 1
     fi
-
-    # Get actual Redis port from environment or docker
-    REDIS_PORT=${REDIS_PORT:-6379}
-
-    # If Redis container exists, get its actual port
-    REDIS_CONTAINER_PORT=$(docker exec $CONTAINER printenv REDIS_PORT 2>/dev/null)
-    if [ ! -z "$REDIS_CONTAINER_PORT" ]; then
-        REDIS_PORT=$REDIS_CONTAINER_PORT
-    fi
-
-    # Active windows
-    print_color "$CYAN" "📂 Active Submission Windows:"
-    docker exec $CONTAINER redis-cli -p $REDIS_PORT --raw KEYS "epoch:*:*:window" | while read key; do
-        if [ ! -z "$key" ]; then
-            STATUS=$(docker exec $CONTAINER redis-cli -p $REDIS_PORT GET "$key")
-            TTL=$(docker exec $CONTAINER redis-cli -p $REDIS_PORT TTL "$key")
-            echo "  • $key: $STATUS (TTL: ${TTL}s)"
-        fi
-    done | head -5 || echo "  None"
-
-    # Queue depth
-    echo ""
-    print_color "$CYAN" "📥 Submission Queue:"
-    COUNT=$(docker exec $CONTAINER redis-cli -p $REDIS_PORT LLEN submissionQueue)
-    echo "  Pending: ${COUNT:-0} submissions"
-
-    # Finalized batches
-    echo ""
-    print_color "$CYAN" "✅ Recent Finalized Batches:"
-    docker exec $CONTAINER redis-cli -p $REDIS_PORT --raw KEYS "batch:finalized:*" | sort -rn | head -5 | while read key; do
-        if [ ! -z "$key" ]; then
-            EPOCH=${key##*:}
-            echo "  • Epoch $EPOCH"
-        fi
-    done || echo "  None"
 }
 
 # Clean everything

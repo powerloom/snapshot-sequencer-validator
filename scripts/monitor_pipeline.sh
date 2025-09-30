@@ -3,27 +3,6 @@
 # Comprehensive Batch Processing Pipeline Monitor
 # Shows detailed status of all pipeline stages from submission splitting to aggregation
 
-# Accept container name as parameter, or try to auto-detect
-CONTAINER="$1"
-
-if [ -z "$CONTAINER" ]; then
-    # Try to auto-detect container
-    CONTAINER=$(docker ps --filter "name=sequencer" --format "{{.Names}}" | head -1)
-    if [ -z "$CONTAINER" ]; then
-        CONTAINER=$(docker ps --filter "name=listener" --format "{{.Names}}" | head -1)
-    fi
-    if [ -z "$CONTAINER" ]; then
-        CONTAINER=$(docker ps --filter "name=dequeuer" --format "{{.Names}}" | head -1)
-    fi
-    
-    if [ -z "$CONTAINER" ]; then
-        echo "Error: No running sequencer containers found"
-        echo "Usage: $0 [container_name]"
-        echo "Or start the sequencer first with: ./dsv.sh sequencer or ./dsv.sh distributed"
-        exit 1
-    fi
-fi
-
 # Color definitions
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -37,12 +16,72 @@ echo -e "${CYAN}🔍 Comprehensive Pipeline Monitor${NC}"
 echo -e "${CYAN}══════════════════════════════════════════════════${NC}"
 echo ""
 
-# Execute comprehensive monitoring inside the container (no -it for script usage)
-docker exec $CONTAINER /bin/sh -c '
-    REDIS_HOST="${REDIS_HOST:-redis}"
-    REDIS_PORT="${REDIS_PORT:-6379}"
-    
-    echo "📊 Redis: $REDIS_HOST:$REDIS_PORT"
+# Function to find Redis container
+find_redis_container() {
+    # Method 1: Try current directory name pattern
+    local dir_name=$(basename "$PWD")
+    local redis_container="${dir_name}-redis-1"
+
+    if docker ps --format "{{.Names}}" | grep -q "^${redis_container}$"; then
+        echo "$redis_container"
+        return 0
+    fi
+
+    # Method 2: Find by exposed Redis port (6379)
+    local redis_by_port=$(docker ps --format "{{.Names}}" | while read container; do
+        if docker port "$container" 2>/dev/null | grep -q "6379"; then
+            echo "$container"
+            return 0
+        fi
+    done | head -1)
+
+    if [ ! -z "$redis_by_port" ]; then
+        echo "$redis_by_port"
+        return 0
+    fi
+
+    # Method 3: Find container with "redis" in name
+    local redis_by_name=$(docker ps --filter "name=redis" --format "{{.Names}}" | head -1)
+
+    if [ ! -z "$redis_by_name" ]; then
+        echo "$redis_by_name"
+        return 0
+    fi
+
+    return 1
+}
+
+# Find Redis container
+REDIS_CONTAINER=$(find_redis_container)
+
+if [ -z "$REDIS_CONTAINER" ]; then
+    echo -e "${RED}❌ Error: Could not find Redis container${NC}"
+    echo ""
+    echo "Tried:"
+    echo "  1. Directory-based name: $(basename "$PWD")-redis-1"
+    echo "  2. Containers with port 6379 exposed"
+    echo "  3. Containers with 'redis' in name"
+    echo ""
+    echo "Running containers:"
+    docker ps --format "table {{.Names}}\t{{.Ports}}"
+    exit 1
+fi
+
+echo -e "${GREEN}✅ Found Redis container: ${REDIS_CONTAINER}${NC}"
+echo ""
+
+# Test Redis connectivity
+if ! docker exec "$REDIS_CONTAINER" redis-cli ping >/dev/null 2>&1; then
+    echo -e "${RED}❌ Error: Redis container found but redis-cli not responding${NC}"
+    exit 1
+fi
+
+echo -e "${GREEN}✅ Redis connectivity confirmed${NC}"
+echo ""
+
+# Execute comprehensive monitoring inside the Redis container
+docker exec "$REDIS_CONTAINER" /bin/sh -c '
+    echo "📊 Redis Connection Established"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
     
@@ -50,55 +89,81 @@ docker exec $CONTAINER /bin/sh -c '
     echo "📥 STAGE 1: SUBMISSION COLLECTION"
     echo "─────────────────────────────────────"
     
-    # Active submission windows (Updated format: epoch:market:epochID:window)
+    # Detect key patterns first
+    echo "🔍 Key Pattern Detection:"
+    TOTAL_KEYS=$(redis-cli DBSIZE 2>/dev/null | grep -oE "[0-9]+" || echo "0")
+    echo "  Total Redis keys: $TOTAL_KEYS"
+
+    # Sample some key patterns
+    echo "  Sample key patterns:"
+    redis-cli KEYS "*" 2>/dev/null | head -5 | while read key; do
+        echo "    - $key"
+    done
+    echo ""
+
+    # Active submission windows (Check multiple patterns)
     echo "🔷 Active Submission Windows:"
     WINDOWS_FOUND=0
-    redis-cli -h $REDIS_HOST -p $REDIS_PORT KEYS "epoch:*:*:window" 2>/dev/null | while read window_key; do
+
+    # Try namespaced pattern first: {protocol}:{market}:epoch:{epochID}:window
+    redis-cli KEYS "*:*:epoch:*:window" 2>/dev/null | while read window_key; do
         if [ ! -z "$window_key" ]; then
-            STATUS=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT GET "$window_key" 2>/dev/null)
+            STATUS=$(redis-cli GET "$window_key" 2>/dev/null)
             if [ "$STATUS" = "open" ]; then
-                # Parse epoch:market:epochID:window format
-                MARKET=$(echo "$window_key" | sed "s/^epoch://;s/:.*:window$//" | sed "s/:.*//")
-                EPOCH_ID=$(echo "$window_key" | sed "s/^epoch:[^:]*://;s/:window$//" )
-                TTL=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT TTL "$window_key" 2>/dev/null)
+                # Extract epoch ID from key (last segment before :window)
+                EPOCH_ID=$(echo "$window_key" | sed "s/:window$//" | grep -oE "[0-9]+$")
+                TTL=$(redis-cli TTL "$window_key" 2>/dev/null)
                 
-                # Count submissions for this epoch using new format: protocol:market:epoch:epochID:processed
-                SUBMISSION_COUNT=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT SCARD "*:*:epoch:$EPOCH_ID:processed" 2>/dev/null | head -1)
-                
-                echo "  ✅ Market: $MARKET, Epoch: $EPOCH_ID"
+                # Count submissions for this epoch
+                SUBMISSION_COUNT=$(redis-cli KEYS "*:*:epoch:$EPOCH_ID:processed" 2>/dev/null | wc -l | tr -d " ")
+
+                echo "  ✅ Epoch: $EPOCH_ID"
                 echo "     Submissions: ${SUBMISSION_COUNT:-0} | TTL: ${TTL}s | Status: COLLECTING"
                 WINDOWS_FOUND=1
             fi
         fi
     done
-    
+
     if [ "$WINDOWS_FOUND" -eq 0 ]; then
         echo "  ⚫ No active windows"
     fi
-    
-    # Submission queue depth
+
+    # Submission queue depth (check both namespaced and non-namespaced)
     echo ""
     echo "📊 Submission Queue:"
-    QUEUE_DEPTH=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT LLEN "submissionQueue" 2>/dev/null)
-    if [ ! -z "$QUEUE_DEPTH" ] && [ "$QUEUE_DEPTH" -gt 0 ]; then
-        echo "  🔸 Pending: $QUEUE_DEPTH submissions"
+    QUEUE_DEPTH=$(redis-cli LLEN "submissionQueue" 2>/dev/null || echo "0")
+    NAMESPACED_QUEUES=$(redis-cli KEYS "*:*:submissionQueue" 2>/dev/null)
+
+    if [ ! -z "$NAMESPACED_QUEUES" ]; then
+        echo "$NAMESPACED_QUEUES" | while read queue_key; do
+            if [ ! -z "$queue_key" ]; then
+                DEPTH=$(redis-cli LLEN "$queue_key" 2>/dev/null)
+                if [ ! -z "$DEPTH" ] && [ "$DEPTH" -gt 0 ]; then
+                    echo "  🔸 $queue_key: $DEPTH submissions"
+                    QUEUE_DEPTH=$((QUEUE_DEPTH + DEPTH))
+                fi
+            fi
+        done
+    fi
+
+    if [ "$QUEUE_DEPTH" -gt 0 ]; then
         if [ "$QUEUE_DEPTH" -gt 100 ]; then
             echo "  ⚠️  WARNING: Queue backlog detected!"
         fi
     else
-        echo "  ✓ Queue empty"
+        echo "  ✓ All queues empty"
     fi
     
     # Processed submissions by project (vote tracking)
     echo ""
     echo "🗳️ Vote Distribution (per project):"
-    VOTE_KEYS=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT KEYS "powerloom-localnet:eth:epoch:*:project:*:votes" 2>/dev/null | head -5)
+    VOTE_KEYS=$(redis-cli KEYS "*:*:epoch:*:project:*:votes" 2>/dev/null | head -5)
     if [ ! -z "$VOTE_KEYS" ]; then
         echo "$VOTE_KEYS" | while read vote_key; do
             if [ ! -z "$vote_key" ]; then
                 PROJECT=$(echo "$vote_key" | grep -oE "project:[^:]+:" | sed "s/project://g" | sed "s/://g")
-                VOTES=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT HGETALL "$vote_key" 2>/dev/null)
-                echo "  📊 Project $PROJECT: Multiple CIDs with votes"
+                VOTE_COUNT=$(redis-cli HLEN "$vote_key" 2>/dev/null)
+                echo "  📊 Project $PROJECT: $VOTE_COUNT unique CID votes"
             fi
         done
     else
@@ -112,13 +177,13 @@ docker exec $CONTAINER /bin/sh -c '
     
     # Ready batches instead of batch metadata (actual data structure)
     echo "📦 Ready Batches (collected submissions):"
-    BATCH_META_KEYS=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT KEYS "*:*:batch:ready:*" 2>/dev/null | head -5)
+    BATCH_META_KEYS=$(redis-cli KEYS "*:*:batch:ready:*" 2>/dev/null | head -5)
     if [ ! -z "$BATCH_META_KEYS" ]; then
         echo "$BATCH_META_KEYS" | while read meta_key; do
             if [ ! -z "$meta_key" ]; then
                 # Extract epoch from key format: protocol:market:batch:ready:epochID
                 EPOCH_ID=$(echo "$meta_key" | grep -oE "[0-9]+$")
-                META_DATA=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT GET "$meta_key" 2>/dev/null)
+                META_DATA=$(redis-cli GET "$meta_key" 2>/dev/null)
                 if [ ! -z "$META_DATA" ]; then
                     # Count actual projects - check if jq is available
                     if command -v jq >/dev/null 2>&1; then
@@ -144,13 +209,13 @@ docker exec $CONTAINER /bin/sh -c '
     echo ""
     echo "⏳ Finalization Queue:"
     # Look for finalization queues with pattern protocol:market:finalizationQueue
-    FIN_QUEUES=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT KEYS "*:*:finalizationQueue" 2>/dev/null)
+    FIN_QUEUES=$(redis-cli KEYS "*:*:finalizationQueue" 2>/dev/null)
     TOTAL_BATCHES=0
     if [ ! -z "$FIN_QUEUES" ]; then
         echo "$FIN_QUEUES" | while read queue_key; do
             if [ ! -z "$queue_key" ]; then
                 MARKET=$(echo "$queue_key" | sed "s/:finalizationQueue$//" | sed "s/^[^:]*://")
-                QUEUE_DEPTH=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT LLEN "$queue_key" 2>/dev/null)
+                QUEUE_DEPTH=$(redis-cli LLEN "$queue_key" 2>/dev/null)
                 echo "  📦 Market $MARKET: $QUEUE_DEPTH batches waiting"
                 TOTAL_BATCHES=$((TOTAL_BATCHES + QUEUE_DEPTH))
                 
@@ -158,7 +223,7 @@ docker exec $CONTAINER /bin/sh -c '
                 if [ "$QUEUE_DEPTH" -gt 0 ]; then
                     echo "  📋 Next batches in $MARKET queue:"
                     for i in 0 1; do
-                        BATCH_DATA=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT LINDEX "$queue_key" $i 2>/dev/null)
+                        BATCH_DATA=$(redis-cli LINDEX "$queue_key" $i 2>/dev/null)
                         if [ ! -z "$BATCH_DATA" ]; then
                             BATCH_EPOCH=$(echo "$BATCH_DATA" | grep -o "\"epoch_id\":\"[^\"]*" | cut -d"\"" -f4)
                             BATCH_ID=$(echo "$BATCH_DATA" | grep -o "\"batch_id\":[0-9]*" | cut -d: -f2)
@@ -179,16 +244,16 @@ docker exec $CONTAINER /bin/sh -c '
     
     # Worker status tracking
     echo "👷 Finalizer Workers:"
-    WORKER_KEYS=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT KEYS "worker:finalizer:*:status" 2>/dev/null)
+    WORKER_KEYS=$(redis-cli KEYS "worker:finalizer:*:status" 2>/dev/null)
     if [ ! -z "$WORKER_KEYS" ]; then
         ACTIVE_COUNT=0
         IDLE_COUNT=0
         echo "$WORKER_KEYS" | while read worker_key; do
             if [ ! -z "$worker_key" ]; then
                 WORKER_ID=$(echo "$worker_key" | grep -oE "finalizer:[0-9]+" | cut -d: -f2)
-                STATUS=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT GET "$worker_key" 2>/dev/null)
+                STATUS=$(redis-cli GET "$worker_key" 2>/dev/null)
                 HEARTBEAT_KEY=$(echo "$worker_key" | sed "s/:status/:heartbeat/")
-                HEARTBEAT=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT GET "$HEARTBEAT_KEY" 2>/dev/null)
+                HEARTBEAT=$(redis-cli GET "$HEARTBEAT_KEY" 2>/dev/null)
                 
                 # Check if heartbeat is recent (within 60 seconds)
                 CURRENT_TIME=$(date +%s)
@@ -206,7 +271,7 @@ docker exec $CONTAINER /bin/sh -c '
                 # Get current batch if processing
                 if [ "$STATUS" = "processing" ]; then
                     BATCH_KEY=$(echo "$worker_key" | sed "s/:status/:current_batch/")
-                    CURRENT_BATCH=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT GET "$BATCH_KEY" 2>/dev/null)
+                    CURRENT_BATCH=$(redis-cli GET "$BATCH_KEY" 2>/dev/null)
                     echo "  Worker #$WORKER_ID: 🔄 PROCESSING - $CURRENT_BATCH | $HEALTH"
                     ACTIVE_COUNT=$((ACTIVE_COUNT + 1))
                 else
@@ -224,7 +289,7 @@ docker exec $CONTAINER /bin/sh -c '
     # Batch parts being processed
     echo ""
     echo "🔧 Batch Parts Status:"
-    BATCH_PART_KEYS=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT KEYS "batch:*:part:*:status" 2>/dev/null | head -10)
+    BATCH_PART_KEYS=$(redis-cli KEYS "batch:*:part:*:status" 2>/dev/null | head -10)
     if [ ! -z "$BATCH_PART_KEYS" ]; then
         COMPLETED=0
         PROCESSING=0
@@ -232,7 +297,7 @@ docker exec $CONTAINER /bin/sh -c '
         
         echo "$BATCH_PART_KEYS" | while read part_key; do
             if [ ! -z "$part_key" ]; then
-                STATUS=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT GET "$part_key" 2>/dev/null)
+                STATUS=$(redis-cli GET "$part_key" 2>/dev/null)
                 case "$STATUS" in
                     "completed") COMPLETED=$((COMPLETED + 1)) ;;
                     "processing") PROCESSING=$((PROCESSING + 1)) ;;
@@ -255,7 +320,7 @@ docker exec $CONTAINER /bin/sh -c '
     
     # Aggregation queue
     echo "📥 Aggregation Queue:"
-    AGG_QUEUE_DEPTH=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT LLEN "aggregationQueue" 2>/dev/null)
+    AGG_QUEUE_DEPTH=$(redis-cli LLEN "aggregationQueue" 2>/dev/null)
     if [ ! -z "$AGG_QUEUE_DEPTH" ] && [ "$AGG_QUEUE_DEPTH" -gt 0 ]; then
         echo "  📦 Epochs awaiting aggregation: $AGG_QUEUE_DEPTH"
     else
@@ -265,13 +330,13 @@ docker exec $CONTAINER /bin/sh -c '
     # Epochs ready for aggregation (all parts complete)
     echo ""
     echo "🎯 Epochs Ready for Aggregation:"
-    READY_EPOCHS=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT KEYS "epoch:*:parts:ready" 2>/dev/null)
+    READY_EPOCHS=$(redis-cli KEYS "epoch:*:parts:ready" 2>/dev/null)
     if [ ! -z "$READY_EPOCHS" ]; then
         echo "$READY_EPOCHS" | while read ready_key; do
             if [ ! -z "$ready_key" ]; then
                 EPOCH_ID=$(echo "$ready_key" | grep -oE "epoch:[0-9]+" | cut -d: -f2)
-                PARTS_COMPLETE=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT GET "epoch:$EPOCH_ID:parts:completed" 2>/dev/null)
-                PARTS_TOTAL=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT GET "epoch:$EPOCH_ID:parts:total" 2>/dev/null)
+                PARTS_COMPLETE=$(redis-cli GET "epoch:$EPOCH_ID:parts:completed" 2>/dev/null)
+                PARTS_TOTAL=$(redis-cli GET "epoch:$EPOCH_ID:parts:total" 2>/dev/null)
                 
                 if [ "$PARTS_COMPLETE" = "$PARTS_TOTAL" ]; then
                     echo "  ✅ Epoch $EPOCH_ID: ALL $PARTS_TOTAL parts complete - READY"
@@ -287,8 +352,8 @@ docker exec $CONTAINER /bin/sh -c '
     # Aggregation worker status
     echo ""
     echo "👷 Aggregation Worker:"
-    AGG_STATUS=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT GET "worker:aggregator:status" 2>/dev/null)
-    AGG_HEARTBEAT=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT GET "worker:aggregator:heartbeat" 2>/dev/null)
+    AGG_STATUS=$(redis-cli GET "worker:aggregator:status" 2>/dev/null)
+    AGG_HEARTBEAT=$(redis-cli GET "worker:aggregator:heartbeat" 2>/dev/null)
     
     if [ ! -z "$AGG_STATUS" ]; then
         CURRENT_TIME=$(date +%s)
@@ -304,14 +369,14 @@ docker exec $CONTAINER /bin/sh -c '
         fi
         
         if [ "$AGG_STATUS" = "processing" ]; then
-            CURRENT_EPOCH=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT GET "worker:aggregator:current_epoch" 2>/dev/null)
+            CURRENT_EPOCH=$(redis-cli GET "worker:aggregator:current_epoch" 2>/dev/null)
             echo "  Status: 🔄 PROCESSING epoch $CURRENT_EPOCH | $HEALTH"
         else
             echo "  Status: ⏸️ IDLE | $HEALTH"
         fi
         
         # Show what aggregator is waiting for
-        BLOCKING_PARTS=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT KEYS "batch:*:part:*:processing" 2>/dev/null | wc -l)
+        BLOCKING_PARTS=$(redis-cli KEYS "batch:*:part:*:processing" 2>/dev/null | wc -l)
         if [ "$BLOCKING_PARTS" -gt 0 ]; then
             echo "  ⏳ Waiting for: $BLOCKING_PARTS batch parts to complete"
         fi
@@ -324,29 +389,71 @@ docker exec $CONTAINER /bin/sh -c '
     echo "📤 STAGE 5: FINAL OUTPUT (IPFS + Validator Votes)"
     echo "─────────────────────────────────────"
     
-    # Finalized batches
+    # Finalized batches (check both namespaced and legacy patterns)
     echo "✅ Finalized Batches:"
-    FINALIZED=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT KEYS "batch:finalized:*" 2>/dev/null | head -5)
-    if [ ! -z "$FINALIZED" ]; then
-        echo "$FINALIZED" | while read final_key; do
+    FINALIZED_NAMESPACED=$(redis-cli KEYS "*:*:finalized:*" 2>/dev/null | head -5)
+    FINALIZED_LEGACY=$(redis-cli KEYS "batch:finalized:*" 2>/dev/null | head -5)
+    FINALIZED="$FINALIZED_NAMESPACED $FINALIZED_LEGACY"
+
+    if [ ! -z "$FINALIZED" ] && [ "$FINALIZED" != " " ]; then
+        echo "$FINALIZED" | tr ' ' '\n' | while read final_key; do
             if [ ! -z "$final_key" ]; then
                 EPOCH_ID=$(echo "$final_key" | grep -oE "[0-9]+$")
-                IPFS_CID=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT HGET "$final_key" "ipfs_cid" 2>/dev/null)
-                MERKLE_ROOT=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT HGET "$final_key" "merkle_root" 2>/dev/null)
-                
-                echo "  📦 Epoch $EPOCH_ID:"
-                echo "     IPFS: ${IPFS_CID:-pending}"
-                echo "     Merkle: ${MERKLE_ROOT:0:16}..."
+                # Try to get as JSON first (new format)
+                BATCH_DATA=$(redis-cli GET "$final_key" 2>/dev/null)
+                if [ ! -z "$BATCH_DATA" ]; then
+                    # Try to extract IPFS CID from JSON
+                    if command -v jq >/dev/null 2>&1; then
+                        IPFS_CID=$(echo "$BATCH_DATA" | jq -r '.batch_ipfs_cid // .BatchIPFSCID // empty' 2>/dev/null)
+                        PROJECT_COUNT=$(echo "$BATCH_DATA" | jq '.project_ids | length' 2>/dev/null || echo "?")
+                    else
+                        IPFS_CID=$(echo "$BATCH_DATA" | grep -o '"batch_ipfs_cid":"[^"]*"' | cut -d'"' -f4)
+                        PROJECT_COUNT="?"
+                    fi
+
+                    echo "  📦 Epoch $EPOCH_ID:"
+                    echo "     Projects: $PROJECT_COUNT"
+                    echo "     IPFS: ${IPFS_CID:-pending}"
+                else
+                    # Legacy hash format
+                    IPFS_CID=$(redis-cli HGET "$final_key" "ipfs_cid" 2>/dev/null)
+                    echo "  📦 Epoch $EPOCH_ID (legacy hash):"
+                    echo "     IPFS: ${IPFS_CID:-pending}"
+                fi
             fi
         done
     else
         echo "  ⚫ No finalized batches yet"
     fi
     
+    # Aggregated batches (network-wide consensus)
+    echo ""
+    echo "🌐 Aggregated Batches (Network Consensus):"
+    AGGREGATED=$(redis-cli KEYS "*:*:batch:aggregated:*" 2>/dev/null | head -5)
+    if [ ! -z "$AGGREGATED" ]; then
+        AGG_COUNT=$(echo "$AGGREGATED" | wc -l | tr -d " ")
+        echo "  ✅ $AGG_COUNT network-aggregated epochs found"
+        echo "$AGGREGATED" | while read agg_key; do
+            if [ ! -z "$agg_key" ]; then
+                EPOCH_ID=$(echo "$agg_key" | grep -oE "[0-9]+$")
+                BATCH_DATA=$(redis-cli GET "$agg_key" 2>/dev/null)
+                if [ ! -z "$BATCH_DATA" ] && command -v jq >/dev/null 2>&1; then
+                    VALIDATORS=$(echo "$BATCH_DATA" | jq '.validator_count // 1' 2>/dev/null)
+                    PROJECTS=$(echo "$BATCH_DATA" | jq '.project_votes | length' 2>/dev/null)
+                    echo "  📦 Epoch $EPOCH_ID: $VALIDATORS validators, $PROJECTS projects"
+                else
+                    echo "  📦 Epoch $EPOCH_ID"
+                fi
+            fi
+        done
+    else
+        echo "  ⚫ No aggregated batches yet"
+    fi
+
     # Validator votes broadcast status
     echo ""
     echo "🗳️ Validator Votes Broadcast:"
-    VOTES_BROADCAST=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT GET "validator:votes:last_broadcast" 2>/dev/null)
+    VOTES_BROADCAST=$(redis-cli GET "validator:votes:last_broadcast" 2>/dev/null)
     if [ ! -z "$VOTES_BROADCAST" ]; then
         echo "  Last broadcast: $VOTES_BROADCAST"
     else
@@ -361,9 +468,9 @@ docker exec $CONTAINER /bin/sh -c '
     echo "─────────────────────────────────────"
     
     # Calculate throughput
-    TOTAL_PROCESSED=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT GET "metrics:total_processed" 2>/dev/null)
-    PROCESSING_RATE=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT GET "metrics:processing_rate" 2>/dev/null)
-    AVG_LATENCY=$(redis-cli -h $REDIS_HOST -p $REDIS_PORT GET "metrics:avg_latency" 2>/dev/null)
+    TOTAL_PROCESSED=$(redis-cli GET "metrics:total_processed" 2>/dev/null)
+    PROCESSING_RATE=$(redis-cli GET "metrics:processing_rate" 2>/dev/null)
+    AVG_LATENCY=$(redis-cli GET "metrics:avg_latency" 2>/dev/null)
     
     echo "  Total Processed: ${TOTAL_PROCESSED:-0} submissions"
     echo "  Processing Rate: ${PROCESSING_RATE:-0} sub/min"

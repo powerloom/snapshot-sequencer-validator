@@ -287,7 +287,7 @@ func (a *Aggregator) aggregateEpoch(epochIDStr string) {
 		return
 	}
 	if exists > 0 {
-		log.WithField("epoch", epochIDStr).Debug("Epoch already aggregated, skipping")
+		log.WithField("epoch", epochIDStr).Info("✅ Epoch already aggregated, skipping re-aggregation")
 		return
 	}
 
@@ -343,6 +343,19 @@ func (a *Aggregator) aggregateEpoch(epochIDStr string) {
 		"total_validators": totalValidators,
 		"projects":         len(aggregatedBatch.ProjectVotes),
 	}).Info("Aggregator: Completed aggregation")
+
+	// CRITICAL: Clean up source finalized batch to prevent re-aggregation loop
+	keysToDelete := []string{ourBatchKey}
+	keysToDelete = append(keysToDelete, incomingKeys...)
+
+	if deleted, err := a.redisClient.Del(a.ctx, keysToDelete...).Result(); err != nil {
+		log.WithError(err).Warn("Failed to clean up source batches after aggregation")
+	} else {
+		log.WithFields(logrus.Fields{
+			"epoch": epochIDStr,
+			"keys_deleted": deleted,
+		}).Info("🗑️  Cleaned up source batches after successful aggregation")
+	}
 }
 
 func (a *Aggregator) createAggregatedBatch(ourBatch *consensus.FinalizedBatch, incomingKeys []string) consensus.FinalizedBatch {
@@ -450,14 +463,24 @@ func (a *Aggregator) createAggregatedBatch(ourBatch *consensus.FinalizedBatch, i
 
 func (a *Aggregator) monitorFinalizedBatches() {
 	// Watch for new finalized batches from our finalizer
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
+
+	queuedEpochs := make(map[string]bool)
+	lastCleanup := time.Now()
 
 	for {
 		select {
 		case <-a.ctx.Done():
 			return
 		case <-ticker.C:
+			// Periodic cleanup of queued tracking (every 5 minutes)
+			if time.Since(lastCleanup) > 5*time.Minute {
+				queuedEpochs = make(map[string]bool)
+				lastCleanup = time.Now()
+				log.Debug("Reset queued epochs tracking")
+			}
+
 			// Check for new finalized batches - namespaced
 			pattern := fmt.Sprintf("%s:%s:finalized:*", a.keyBuilder.ProtocolState, a.keyBuilder.DataMarket)
 			keys, err := a.redisClient.Keys(a.ctx, pattern).Result()
@@ -466,6 +489,7 @@ func (a *Aggregator) monitorFinalizedBatches() {
 				continue
 			}
 
+			newBatchesFound := 0
 			for _, key := range keys {
 				// Extract epoch ID from namespaced key
 				parts := strings.Split(key, ":")
@@ -474,10 +498,21 @@ func (a *Aggregator) monitorFinalizedBatches() {
 				}
 				epochID := parts[len(parts)-1]
 
+				// Skip if already queued this session
+				if queuedEpochs[epochID] {
+					continue
+				}
+
 				// Check if we've already processed this epoch - namespaced
 				aggregatedKey := a.keyBuilder.BatchAggregated(epochID)
 				exists, err := a.redisClient.Exists(a.ctx, aggregatedKey).Result()
-				if err != nil || exists > 0 {
+				if err != nil {
+					log.WithError(err).Warn("Failed to check aggregated status")
+					continue
+				}
+				if exists > 0 {
+					// Already aggregated, mark as queued to avoid re-checking
+					queuedEpochs[epochID] = true
 					continue
 				}
 
@@ -486,8 +521,18 @@ func (a *Aggregator) monitorFinalizedBatches() {
 				if err := a.redisClient.LPush(a.ctx, aggQueue, epochID).Err(); err != nil {
 					log.WithError(err).Error("Failed to queue epoch for aggregation")
 				} else {
-					log.WithField("epoch", epochID).Info("Aggregator: Queued epoch for aggregation")
+					queuedEpochs[epochID] = true
+					newBatchesFound++
+					log.WithField("epoch", epochID).Info("Aggregator: Queued NEW epoch for aggregation")
 				}
+			}
+
+			if len(keys) > 0 {
+				log.WithFields(logrus.Fields{
+					"finalized_batches": len(keys),
+					"new_queued": newBatchesFound,
+					"already_tracked": len(queuedEpochs) - newBatchesFound,
+				}).Debug("Monitor scan completed")
 			}
 		}
 	}
