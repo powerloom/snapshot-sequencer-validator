@@ -122,12 +122,11 @@ show_status() {
 
 # Monitor pipeline
 monitor_pipeline() {
-    # Use the comprehensive monitoring script
-    if [ -f "scripts/monitor_pipeline.sh" ]; then
-        bash scripts/monitor_pipeline.sh
+    if [ -f "scripts/monitor_api_client.sh" ]; then
+        bash scripts/monitor_api_client.sh
     else
-        print_color "$RED" "Error: scripts/monitor_pipeline.sh not found"
-        return 1
+        print_color "$CYAN" "Monitor API: http://localhost:\${MONITOR_API_PORT:-8080}/swagger/index.html"
+        print_color "$YELLOW" "Use the Monitor API service for pipeline monitoring"
     fi
 }
 
