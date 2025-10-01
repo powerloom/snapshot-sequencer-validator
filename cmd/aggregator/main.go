@@ -286,6 +286,10 @@ func (a *Aggregator) createFinalizedBatchFromParts(epochID uint64, projectSubmis
 								if signature, ok := metaMap["signature"].(string); ok {
 									metadata.Signature = []byte(signature)
 								}
+								if reportedBy, ok := metaMap["reported_by_validator"].(string); ok {
+									metadata.ReportedByValidator = reportedBy
+									metadata.ValidatorsConfirming = []string{reportedBy}
+								}
 								metadata.VoteCount = 1 // Each submission counts as 1 vote
 								projectMetadata = append(projectMetadata, metadata)
 							}
@@ -500,6 +504,31 @@ func (a *Aggregator) createAggregatedBatch(ourBatch *consensus.FinalizedBatch, i
 				aggregated.ProjectVotes[projectID] = batch.ProjectVotes[projectID]
 			}
 		}
+	}
+
+	// Merge duplicate submissions: combine validators_confirming for same submitter+CID
+	for projectID, subs := range aggregated.SubmissionDetails {
+		merged := make(map[string]*submissions.SubmissionMetadata) // key: submitter_id:snapshot_cid
+
+		for i := range subs {
+			sub := &subs[i]
+			key := sub.SubmitterID + ":" + sub.SnapshotCID
+
+			if existing, found := merged[key]; found {
+				// Same submission seen by multiple validators - merge validator lists
+				existing.ValidatorsConfirming = append(existing.ValidatorsConfirming, sub.ValidatorsConfirming...)
+				existing.VoteCount++
+			} else {
+				merged[key] = sub
+			}
+		}
+
+		// Replace with merged submissions
+		mergedList := make([]submissions.SubmissionMetadata, 0, len(merged))
+		for _, sub := range merged {
+			mergedList = append(mergedList, *sub)
+		}
+		aggregated.SubmissionDetails[projectID] = mergedList
 	}
 
 	// Build ProjectIds and SnapshotCids arrays from aggregated data

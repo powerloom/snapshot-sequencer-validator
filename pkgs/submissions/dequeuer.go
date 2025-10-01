@@ -90,22 +90,18 @@ func (d *Dequeuer) ProcessSubmission(submission *SnapshotSubmission, submissionI
 
 func (d *Dequeuer) validateSubmission(submission *SnapshotSubmission) error {
 	// Basic validation
-	if submission.Request.EpochId == 0 {
-		return fmt.Errorf("invalid epoch ID: 0")
-	}
-	
 	if submission.Request.SnapshotCid == "" {
 		return fmt.Errorf("empty snapshot CID")
 	}
-	
+
 	if submission.Request.ProjectId == "" {
 		return fmt.Errorf("empty project ID")
 	}
-	
+
 	if submission.DataMarket == "" {
 		return fmt.Errorf("empty data market address")
 	}
-	
+
 	return nil
 }
 

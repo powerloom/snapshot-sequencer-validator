@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"strings"
 	"sync"
 	"time"
 
@@ -607,17 +608,24 @@ func (wm *WindowManager) collectEpochSubmissions(dataMarket string, epochID *big
 		keys, _ := wm.scanKeys(ctx, pattern)
 		
 		for _, key := range keys {
+			// Extract validator ID from key: {protocol}:{market}:processed:{validator_id}:{submission_id}
+			keyParts := strings.Split(key, ":")
+			validatorID := ""
+			if len(keyParts) >= 5 {
+				validatorID = keyParts[3]
+			}
+
 			data, err := wm.redisClient.Get(ctx, key).Result()
 			if err != nil {
 				continue
 			}
-			
+
 			var submission map[string]interface{}
 			if err := json.Unmarshal([]byte(data), &submission); err != nil {
 				log.Errorf("Failed to unmarshal submission: %v", err)
 				continue
 			}
-			
+
 			if subData, ok := submission["Submission"].(map[string]interface{}); ok {
 				if request, ok := subData["request"].(map[string]interface{}); ok {
 					if projectID, ok := request["projectId"].(string); ok {
@@ -627,13 +635,13 @@ func (wm *WindowManager) collectEpochSubmissions(dataMarket string, epochID *big
 								projectVotes[projectID] = make(map[string]int)
 							}
 							projectVotes[projectID][snapshotCID]++
-							
+
 							// Track submission metadata for challenges/proofs
 							slotID := uint64(0)
 							if slot, ok := request["slotId"].(float64); ok {
 								slotID = uint64(slot)
 							}
-							
+
 							// Extract submitter info from submission
 							submitterID := ""
 							if snapshotterId, ok := submission["SnapshotterID"].(string); ok {
@@ -643,17 +651,18 @@ func (wm *WindowManager) collectEpochSubmissions(dataMarket string, epochID *big
 							if sig, ok := subData["signature"].(string); ok {
 								signature = sig
 							}
-							
+
 							metadata := map[string]interface{}{
-								"submitter_id": submitterID,
-								"snapshot_cid": snapshotCID,
-								"slot_id":      slotID,
-								"signature":    signature,
-								"timestamp":    time.Now().Unix(),
+								"submitter_id":          submitterID,
+								"snapshot_cid":          snapshotCID,
+								"slot_id":               slotID,
+								"signature":             signature,
+								"timestamp":             time.Now().Unix(),
+								"reported_by_validator": validatorID,
 							}
-							
+
 							submissionMetadata[projectID] = append(submissionMetadata[projectID], metadata)
-							log.Debugf("Found submission: project=%s, CID=%s, submitter=%s", projectID, snapshotCID, submitterID)
+							log.Debugf("Found submission: project=%s, CID=%s, submitter=%s, validator=%s", projectID, snapshotCID, submitterID, validatorID)
 						} else {
 							log.Warnf("No snapshotCid in request: %+v", request)
 						}
