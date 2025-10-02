@@ -126,14 +126,20 @@ func RecoverAddress(msgHash, signature []byte) (common.Address, error) {
 
 // VerifySignature verifies an EIP-712 signature and returns the signer's address
 func (v *EIP712Verifier) VerifySignature(request *SnapshotRequest, signatureStr string) (common.Address, error) {
-	// Decode signature from base64
-	signature, err := base64.StdEncoding.DecodeString(signatureStr)
-	if err != nil {
-		return common.Address{}, fmt.Errorf("base64 decode failed (len=%d): %w", len(signatureStr), err)
+	// Snapshotter sends hex-encoded signatures (with or without 0x prefix)
+	// Expected: 130 chars (65 bytes * 2) or 132 chars (with 0x prefix)
+	hexStr := signatureStr
+	if len(hexStr) >= 2 && hexStr[:2] == "0x" {
+		hexStr = hexStr[2:]
 	}
 
+	if len(hexStr) != 130 {
+		return common.Address{}, fmt.Errorf("invalid signature length: expected 130 hex chars (65 bytes), got %d chars", len(hexStr))
+	}
+
+	signature := common.FromHex(hexStr)
 	if len(signature) != 65 {
-		return common.Address{}, fmt.Errorf("decoded signature has wrong length: got %d bytes, expected 65", len(signature))
+		return common.Address{}, fmt.Errorf("hex decode produced wrong length: got %d bytes, expected 65", len(signature))
 	}
 
 	// Hash the request
