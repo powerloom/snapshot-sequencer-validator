@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/ethclient"
 	rpchelper "github.com/powerloom/go-rpc-helper"
 	"github.com/powerloom/go-rpc-helper/reporting"
 	log "github.com/sirupsen/logrus"
@@ -282,8 +284,18 @@ func loadRPCConfig() error {
 		SettingsObj.ArchiveRPCNodes[i] = strings.Trim(SettingsObj.ArchiveRPCNodes[i], "\" ")
 	}
 
-	// Set chain ID
-	SettingsObj.ChainID = int64(getEnvAsInt("CHAIN_ID", 1))
+	// Fetch chain ID from RPC if not provided
+	if len(SettingsObj.RPCNodes) > 0 {
+		if chainID, err := fetchChainIDFromRPC(SettingsObj.RPCNodes[0]); err == nil {
+			SettingsObj.ChainID = chainID
+			log.Infof("Chain ID fetched from RPC: %d", chainID)
+		} else {
+			log.Warnf("Failed to fetch chain ID from RPC, using default: %v", err)
+			SettingsObj.ChainID = int64(getEnvAsInt("CHAIN_ID", 1))
+		}
+	} else {
+		SettingsObj.ChainID = int64(getEnvAsInt("CHAIN_ID", 1))
+	}
 
 	return nil
 }
@@ -529,4 +541,23 @@ func (s *Settings) ToRPCConfig() *rpchelper.RPCConfig {
 	}
 
 	return config
+}
+
+// fetchChainIDFromRPC fetches the chain ID from an RPC endpoint
+func fetchChainIDFromRPC(rpcURL string) (int64, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	client, err := ethclient.DialContext(ctx, rpcURL)
+	if err != nil {
+		return 0, fmt.Errorf("failed to connect to RPC: %w", err)
+	}
+	defer client.Close()
+
+	chainID, err := client.ChainID(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("failed to fetch chain ID: %w", err)
+	}
+
+	return chainID.Int64(), nil
 }

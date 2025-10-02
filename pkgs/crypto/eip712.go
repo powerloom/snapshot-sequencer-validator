@@ -33,10 +33,14 @@ func NewEIP712Verifier(chainID int64, verifyingContract string) (*EIP712Verifier
 		return nil, fmt.Errorf("invalid verifying contract address: %s", verifyingContract)
 	}
 
-	return &EIP712Verifier{
+	verifier := &EIP712Verifier{
 		chainID:           big.NewInt(chainID),
 		verifyingContract: common.HexToAddress(verifyingContract),
-	}, nil
+	}
+
+	log.Infof("EIP712Verifier initialized: chainID=%d, verifyingContract=%s", chainID, verifier.verifyingContract.Hex())
+
+	return verifier, nil
 }
 
 // HashRequest creates the EIP-712 hash for a snapshot request
