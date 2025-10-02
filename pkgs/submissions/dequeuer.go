@@ -18,6 +18,8 @@ type Dequeuer struct {
 	redisClient          *redis.Client
 	sequencerID          string
 	eip712Verifier       *customcrypto.EIP712Verifier
+	slotValidator        *SlotValidator
+	enableSlotValidation bool
 	processedSubmissions map[string]*ProcessedSubmission
 	submissionsMutex     sync.RWMutex
 	stats                DequeuerStats
@@ -34,16 +36,20 @@ type DequeuerStats struct {
 }
 
 // NewDequeuer creates a new submission dequeuer
-func NewDequeuer(redisClient *redis.Client, sequencerID string, chainID int64, protocolStateContract string) (*Dequeuer, error) {
+func NewDequeuer(redisClient *redis.Client, sequencerID string, chainID int64, protocolStateContract string, enableSlotValidation bool) (*Dequeuer, error) {
 	verifier, err := customcrypto.NewEIP712Verifier(chainID, protocolStateContract)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create EIP-712 verifier: %w", err)
 	}
 
+	slotValidator := NewSlotValidator(redisClient)
+
 	return &Dequeuer{
 		redisClient:          redisClient,
 		sequencerID:          sequencerID,
 		eip712Verifier:       verifier,
+		slotValidator:        slotValidator,
+		enableSlotValidation: enableSlotValidation,
 		processedSubmissions: make(map[string]*ProcessedSubmission),
 	}, nil
 }
@@ -72,6 +78,18 @@ func (d *Dequeuer) ProcessSubmission(submission *SnapshotSubmission, submissionI
 	if err != nil {
 		d.updateStats(false, time.Since(startTime))
 		return fmt.Errorf("signature verification failed: %w", err)
+	}
+
+	// Validate snapshotter address against slot registration (if enabled)
+	if d.enableSlotValidation && snapshotterAddr != (common.Address{}) {
+		if err := d.slotValidator.ValidateSnapshotterForSlot(submission.Request.SlotId, snapshotterAddr); err != nil {
+			d.updateStats(false, time.Since(startTime))
+			log.Errorf("Slot validation failed for submission (epoch=%d, slot=%d, signer=%s): %v",
+				submission.Request.EpochId, submission.Request.SlotId, snapshotterAddr.Hex(), err)
+			return fmt.Errorf("slot validation failed: %w", err)
+		}
+		log.Debugf("Slot validation passed: slot %d is registered to %s",
+			submission.Request.SlotId, snapshotterAddr.Hex())
 	}
 
 	// Store in local state

@@ -95,6 +95,9 @@ type Settings struct {
 	// Aggregation Configuration
 	AggregationWindowDuration time.Duration // Time to wait for validator batches before aggregating (Level 2)
 
+	// Slot Validation Configuration
+	EnableSlotValidation bool // Validate snapshotter addresses against protocol state cache (requires protocol-state-cacher)
+
 	// IPFS Configuration
 	IPFSAPI string // IPFS API endpoint (e.g., "/ip4/127.0.0.1/tcp/5001")
 
@@ -190,6 +193,9 @@ func LoadConfig() error {
 
 		// Aggregation Configuration
 		AggregationWindowDuration: time.Duration(getEnvAsInt("AGGREGATION_WINDOW_SECONDS", 30)) * time.Second,
+
+		// Slot Validation Configuration
+		EnableSlotValidation: getBoolEnv("ENABLE_SLOT_VALIDATION", false),
 
 		// API Configuration
 		APIHost:      getEnv("API_HOST", "0.0.0.0"),

@@ -460,18 +460,88 @@ New dedicated log commands for each component support optional line count for in
 - Useful for quickly checking recent log history before monitoring live output
 - Combined log commands help debug issues across component boundaries
 
-**Enhanced Dequeuer Logging:**
-The dequeuer now logs detailed submission information:
-- Epoch ID
-- Project ID
-- Slot ID
-- Data Market
-- Submitter address
+**Enhanced Dequeuer Logging & EIP-712 Signature Verification:**
+The dequeuer now provides comprehensive logging and signature verification:
 
-Example log output:
+- **Submission Metadata**:
+  - Epoch ID
+  - Project ID
+  - Slot ID
+  - Data Market
+  - Submitter address
+  - EIP-712 signature verification status
+
+Example log output with EIP-712 verification:
 ```
-INFO[2025-09-08T10:30:15Z] Worker 2 processing: Epoch=172883, Project=uniswap_v3, Slot=1, Market=0x21cb57C1f2352ad215a463DD867b838749CD3b8f, Submitter=0xabc...
-INFO[2025-09-08T10:30:15Z] ✅ Queued submission: Epoch=172883, Project=uniswap_v3 from peer 12D3KooWFFRQCs9N
+INFO[2025-10-02T10:30:15Z] Verifying EIP-712 signature for submission
+INFO[2025-10-02T10:30:15Z] Worker 2 processing: Epoch=172883, Project=uniswap_v3, Slot=1, Market=0x21cb57C1f2352ad215a463DD867b838749CD3b8f
+INFO[2025-10-02T10:30:15Z] Signature Verification:
+  - Cryptographic Validation: ✅ PASSED
+  - Registered Address Match: ✅ PASSED
+  - Slot Authorization: ✅ PASSED
+INFO[2025-10-02T10:30:15Z] ✅ Queued submission: Epoch=172883, Project=uniswap_v3 from peer 12D3KooWFFRQCs9N
+```
+
+### EIP-712 Signature Verification
+
+#### Configuration
+Set `ENABLE_SLOT_VALIDATION` in `.env` to control signature authorization:
+
+- `false` (default): Basic cryptographic signature validation
+  - Checks signature matches the signing address
+  - Does NOT verify address against protocol state
+
+- `true`: Full authorization validation
+  - Cryptographic signature verification
+  - Checks signature against registered snapshotter address in protocol-state-cacher
+  - Validates signer is authorized for the specific slot
+
+#### Requirements
+- `protocol-state-cacher` must be running
+- Redis must be populated with `SlotInfo.{slotID}` keys
+- Submissions must include a valid EIP-712 signature
+
+#### Signature Verification Process
+1. **Cryptographic Validation**
+   - Verifies signature using secp256k1 curve
+   - Ensures message integrity and authentic origin
+   - Cryptographically proves message was signed by the claimed address
+
+2. **Address Verification**
+   - Cross-references signature signer with registered snapshotter address
+   - Prevents impersonation and unauthorized submissions
+   - Requires active protocol-state-cacher service
+
+3. **Slot Authorization**
+   - Checks if the verified address is authorized for the specific slot
+   - Prevents unauthorized submissions across different validator slots
+   - Dynamically updated from protocol state contract
+
+#### Recommended Production Setup
+- Always set `ENABLE_SLOT_VALIDATION=true`
+- Ensure stable connection to protocol-state-cacher
+- Implement monitoring for signature verification failures
+
+#### Troubleshooting Signature Verification
+
+**Common Issues:**
+- Signature does not match registered address
+- Slot authorization check fails
+- Protocol-state-cacher unavailable
+
+**Debugging Steps:**
+1. Check `protocol-state-cacher` logs
+2. Verify Redis `SlotInfo.*` keys are correctly populated
+3. Confirm EIP-712 signature is correctly formatted
+4. Review submitter's registered address in protocol state
+
+**Example Failure Logs:**
+```
+WARN[2025-10-02T10:31:00Z] Signature Verification Failed
+  - Reason: Signature signer (0xabc...) does not match registered snapshotter address
+  - Slot: 1
+  - Epoch: 172883
+  - Action: Submission Rejected
 ```
 
 ### scripts/check_batch_status.sh
@@ -986,6 +1056,27 @@ docker images | grep snapshot-sequencer
 docker exec <container> grep -A5 "RedisPassword" /app/main.go
 ```
 
+## Recent Updates (October 2, 2025)
+
+### New Features
+- ✅ EIP-712 Signature Verification Implementation
+  - Comprehensive cryptographic signature validation
+  - Address verification against protocol state cache
+  - Configurable slot authorization check
+  - Enhanced security for submission processing
+  - Added `ENABLE_SLOT_VALIDATION` configuration option
+- ✅ Updated submitter identification to use EVM addresses instead of slot IDs
+- ✅ Detailed logging for signature verification process
+
+### Security Enhancements
+- Prevent unauthorized submissions through multi-layer signature validation
+- Dynamic slot authorization from protocol state contract
+- Cryptographically secure submission verification
+
+### Configuration Updates
+- Added `ENABLE_SLOT_VALIDATION` environment variable
+- Enhanced `.env.example` with detailed signature verification configuration
+
 ## Recent Updates (September 22, 2025)
 
 ### Bug Fixes
@@ -1021,5 +1112,5 @@ docker exec <container> grep -A5 "RedisPassword" /app/main.go
 
 ---
 
-*Last Updated: September 9, 2025*
-*Version: 1.1.0*
+*Last Updated: October 2, 2025*
+*Version: 1.2.0*

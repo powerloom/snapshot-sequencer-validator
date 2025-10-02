@@ -334,7 +334,7 @@ func main() {
 
 	// Initialize components based on flags
 	if enableDequeuer && redisClient != nil {
-		dequeuer, err := submissions.NewDequeuer(redisClient, sequencerID, cfg.ChainID, cfg.ProtocolStateContract)
+		dequeuer, err := submissions.NewDequeuer(redisClient, sequencerID, cfg.ChainID, cfg.ProtocolStateContract, cfg.EnableSlotValidation)
 		if err != nil {
 			log.Fatalf("Failed to create dequeuer: %v", err)
 		}
