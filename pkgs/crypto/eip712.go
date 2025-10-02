@@ -38,7 +38,8 @@ func NewEIP712Verifier(chainID int64, verifyingContract string) (*EIP712Verifier
 		verifyingContract: common.HexToAddress(verifyingContract),
 	}
 
-	log.Infof("EIP712Verifier initialized: chainID=%d, verifyingContract=%s", chainID, verifier.verifyingContract.Hex())
+	log.Infof("EIP712Verifier initialized: chainID=%d, verifyingContract=%s (domain: name=PowerloomProtocolContract, version=0.1)",
+		chainID, verifier.verifyingContract.Hex())
 
 	return verifier, nil
 }
