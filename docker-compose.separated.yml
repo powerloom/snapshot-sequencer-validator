@@ -76,6 +76,7 @@ services:
       # Protocol/Market config
       - PROTOCOL_STATE_CONTRACT=${PROTOCOL_STATE_CONTRACT}
       - DATA_MARKET_ADDRESSES=${DATA_MARKET_ADDRESSES}
+      - POWERLOOM_RPC_NODES=${POWERLOOM_RPC_NODES}
     depends_on:
       redis:
         condition: service_healthy
