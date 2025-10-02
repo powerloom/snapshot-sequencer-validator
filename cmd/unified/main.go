@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -976,7 +975,7 @@ func (s *UnifiedSequencer) runFinalizationWorker(workerID int) {
 	}
 }
 
-func (s *UnifiedSequencer) processBatchPart(epochID uint64, batchID int, totalBatches int, projects map[string]interface{}, monitor *workers.WorkerMonitor) error {
+func (s *UnifiedSequencer) processBatchPart(epochID uint64, batchID int, totalBatches int, projects map[string]interface{}, _ *workers.WorkerMonitor) error {
 	ctx := context.Background()
 
 	// Track batch part as processing
@@ -1102,6 +1101,10 @@ func (s *UnifiedSequencer) processBatchPart(epochID uint64, batchID int, totalBa
 	return nil
 }
 
+// DEPRECATED: Legacy functions below are no longer used - aggregator component handles this now
+// Kept for reference only, can be removed in future cleanup
+
+/*
 func (s *UnifiedSequencer) runAggregationWorker() {
 	log.Info("Aggregation worker started")
 
@@ -1393,6 +1396,7 @@ func (s *UnifiedSequencer) createFinalizedBatch(epochID uint64, projectSubmissio
 
 	return nil
 }
+*/
 
 func (s *UnifiedSequencer) runBatchAggregation() {
 	// If P2P batch aggregation is enabled, it handles collection of finalized batches from peers
