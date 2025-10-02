@@ -638,18 +638,20 @@ func (wm *WindowManager) collectEpochSubmissions(dataMarket string, epochID *big
 							}
 
 							// Extract submitter info from submission
-							// TODO: Implement EIP-712 signature verification to extract snapshotter EVM address
-							// Reference implementations:
-							//   - Signing: snapshotter-lite-v2/generic_worker.py
-							//   - Extraction: sequencer-dequeuer/decoders.go (legacy)
-							// Process:
-							//   1. Decode base64 signature from subData["signature"]
-							//   2. Recover public key from EIP-712 signature + message hash
-							//   3. Derive EVM address from public key
-							//   4. Set submitterID = recovered EVM address (0x...)
-							// NOTE: Multiple slot IDs can submit same CID - identify by signer address
-							// For now, use slot ID as placeholder
-							submitterID := fmt.Sprintf("slot_%d", slotID)
+							// EIP-712 signature verification is done by dequeuer during processing
+							// The verified snapshotter EVM address is stored in SnapshotterAddr field
+							submitterID := ""
+							if addr, ok := submission["SnapshotterAddr"].(string); ok && addr != "" {
+								submitterID = addr
+							} else {
+								// Missing SnapshotterAddr indicates signature verification failed in dequeuer
+								// This submission should not have been processed - log error and skip
+								log.Errorf("Missing SnapshotterAddr for submission %s (epoch=%d, project=%s, CID=%s) - signature verification may have failed",
+									submissionID, submission["Submission"].(map[string]interface{})["request"].(map[string]interface{})["epochId"],
+									projectID, snapshotCID)
+								continue
+							}
+
 							signature := ""
 							if sig, ok := subData["signature"].(string); ok {
 								signature = sig

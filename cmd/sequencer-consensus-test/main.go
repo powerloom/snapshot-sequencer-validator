@@ -198,7 +198,13 @@ func main() {
 	}
 
 	// Initialize dequeuer
-	dequeuer := submissions.NewDequeuer(redisClient, sequencerID)
+	// Using placeholder values for testing - in production these come from config
+	chainID := int64(11155111) // Sepolia testnet
+	protocolStateContract := "0xE88E5f64AEB483d7057645326AdDFA24A3B312DF"
+	dequeuer, err := submissions.NewDequeuer(redisClient, sequencerID, chainID, protocolStateContract)
+	if err != nil {
+		log.Fatalf("Failed to create dequeuer: %v", err)
+	}
 
 	validator := &Validator{
 		host:        host,

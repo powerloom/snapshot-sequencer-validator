@@ -334,7 +334,11 @@ func main() {
 
 	// Initialize components based on flags
 	if enableDequeuer && redisClient != nil {
-		sequencer.dequeuer = submissions.NewDequeuer(redisClient, sequencerID)
+		dequeuer, err := submissions.NewDequeuer(redisClient, sequencerID, cfg.ChainID, cfg.ProtocolStateContract)
+		if err != nil {
+			log.Fatalf("Failed to create dequeuer: %v", err)
+		}
+		sequencer.dequeuer = dequeuer
 	}
 
 	if enableBatchAggregation {

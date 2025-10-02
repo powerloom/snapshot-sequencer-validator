@@ -7,18 +7,21 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-redis/redis/v8"
+	customcrypto "github.com/powerloom/snapshot-sequencer-validator/pkgs/crypto"
 	log "github.com/sirupsen/logrus"
 )
 
 // Dequeuer handles processing of queued submissions
 type Dequeuer struct {
-	redisClient         *redis.Client
-	sequencerID         string
+	redisClient          *redis.Client
+	sequencerID          string
+	eip712Verifier       *customcrypto.EIP712Verifier
 	processedSubmissions map[string]*ProcessedSubmission
 	submissionsMutex     sync.RWMutex
-	stats               DequeuerStats
-	statsMutex          sync.RWMutex
+	stats                DequeuerStats
+	statsMutex           sync.RWMutex
 }
 
 // DequeuerStats tracks processing metrics
@@ -31,12 +34,18 @@ type DequeuerStats struct {
 }
 
 // NewDequeuer creates a new submission dequeuer
-func NewDequeuer(redisClient *redis.Client, sequencerID string) *Dequeuer {
+func NewDequeuer(redisClient *redis.Client, sequencerID string, chainID int64, protocolStateContract string) (*Dequeuer, error) {
+	verifier, err := customcrypto.NewEIP712Verifier(chainID, protocolStateContract)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create EIP-712 verifier: %w", err)
+	}
+
 	return &Dequeuer{
 		redisClient:          redisClient,
 		sequencerID:          sequencerID,
+		eip712Verifier:       verifier,
 		processedSubmissions: make(map[string]*ProcessedSubmission),
-	}
+	}, nil
 }
 
 // ProcessSubmission validates and stores a submission
@@ -57,14 +66,22 @@ func (d *Dequeuer) ProcessSubmission(submission *SnapshotSubmission, submissionI
 		d.updateStats(false, time.Since(startTime))
 		return fmt.Errorf("validation failed: %w", err)
 	}
-	
+
+	// Verify signature and extract snapshotter address
+	snapshotterAddr, err := d.verifySignature(submission)
+	if err != nil {
+		d.updateStats(false, time.Since(startTime))
+		return fmt.Errorf("signature verification failed: %w", err)
+	}
+
 	// Store in local state
 	processed := &ProcessedSubmission{
-		ID:             submissionID,
-		Submission:     submission,
-		DataMarketAddr: submission.DataMarket,
-		ProcessedAt:    time.Now(),
-		ValidatorID:    d.sequencerID,
+		ID:              submissionID,
+		Submission:      submission,
+		SnapshotterAddr: snapshotterAddr.Hex(),
+		DataMarketAddr:  submission.DataMarket,
+		ProcessedAt:     time.Now(),
+		ValidatorID:     d.sequencerID,
 	}
 	
 	d.submissionsMutex.Lock()
@@ -109,6 +126,43 @@ func (d *Dequeuer) validateSubmission(submission *SnapshotSubmission) error {
 	}
 
 	return nil
+}
+
+func (d *Dequeuer) verifySignature(submission *SnapshotSubmission) (common.Address, error) {
+	// Skip signature verification for epoch 0 heartbeats
+	if submission.Request.EpochId == 0 && submission.Request.SnapshotCid == "" {
+		return common.Address{}, nil
+	}
+
+	// Check signature exists
+	if submission.Signature == "" {
+		log.Errorf("EIP-712 verification failed: empty signature (epoch=%d, project=%s, CID=%s, slot=%d)",
+			submission.Request.EpochId, submission.Request.ProjectId, submission.Request.SnapshotCid, submission.Request.SlotId)
+		return common.Address{}, fmt.Errorf("empty signature")
+	}
+
+	// Create EIP-712 request from submission
+	request := &customcrypto.SnapshotRequest{
+		SlotId:      submission.Request.SlotId,
+		Deadline:    submission.Request.Deadline,
+		SnapshotCid: submission.Request.SnapshotCid,
+		EpochId:     submission.Request.EpochId,
+		ProjectId:   submission.Request.ProjectId,
+	}
+
+	// Verify signature and recover signer address
+	signerAddr, err := d.eip712Verifier.VerifySignature(request, submission.Signature)
+	if err != nil {
+		log.Errorf("EIP-712 verification failed: %v (epoch=%d, project=%s, CID=%s, slot=%d, signature=%s)",
+			err, submission.Request.EpochId, submission.Request.ProjectId,
+			submission.Request.SnapshotCid, submission.Request.SlotId, submission.Signature[:20]+"...")
+		return common.Address{}, fmt.Errorf("signature verification failed: %w", err)
+	}
+
+	log.Infof("EIP-712 signature verified successfully: epoch=%d, project=%s, signer=%s, CID=%s",
+		submission.Request.EpochId, submission.Request.ProjectId, signerAddr.Hex(), submission.Request.SnapshotCid)
+
+	return signerAddr, nil
 }
 
 func (d *Dequeuer) storeProcessingResult(submissionID string, processed *ProcessedSubmission) {
