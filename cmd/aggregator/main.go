@@ -631,12 +631,16 @@ func (a *Aggregator) createAggregatedBatch(ourBatch *consensus.FinalizedBatch, i
 	// Store aggregated batch to IPFS if available
 	if a.ipfsClient != nil {
 		if cid, err := a.ipfsClient.StoreFinalizedBatch(a.ctx, &aggregated); err == nil {
+			aggregated.BatchIPFSCID = cid // Store CID in batch for monitoring
 			log.WithFields(logrus.Fields{
 				"epoch": aggregated.EpochId,
 				"cid":   cid,
 			}).Info("Aggregator: Stored aggregated batch to IPFS")
 		}
 	}
+
+	// Set validator count
+	aggregated.ValidatorCount = len(validatorViews)
 
 	// NOTE: Broadcasting is now handled by the unified sequencer after Level 1 aggregation
 	// The aggregator component only performs Level 2 network-wide aggregation

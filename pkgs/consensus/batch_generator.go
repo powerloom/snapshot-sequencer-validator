@@ -133,4 +133,6 @@ type FinalizedBatch struct {
 	ProjectVotes      map[string]uint32                            `json:"ProjectVotes"`
 	SubmissionDetails map[string][]submissions.SubmissionMetadata `json:"submission_details"`  // project→submissions mapping with snapshotter attribution (enables challenges/proofs)
 	ValidatorBatches  map[string]string                            `json:"ValidatorBatches,omitempty"`   // Attribution tracking: validator_id → ipfs_cid of their individual Level 1 finalization
+	BatchIPFSCID      string                                       `json:"batch_ipfs_cid,omitempty"`      // IPFS CID of this aggregated batch (Level 2)
+	ValidatorCount    int                                          `json:"ValidatorCount,omitempty"`      // Number of validators who contributed
 }

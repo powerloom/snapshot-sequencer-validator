@@ -1,17 +1,38 @@
 basePath: /api/v1
 definitions:
-  cmd_monitor-api.AggregatedBatch:
+  main.AggregatedBatch:
     properties:
+      batch_ipfs_cid:
+        description: IPFS CID of the final Level 2 aggregated batch
+        type: string
       epoch_id:
+        type: string
+      merkle_root:
+        description: Merkle root as base64 string
         type: string
       project_count:
         type: integer
+      project_ids:
+        description: Array of project IDs that were aggregated
+        items:
+          type: string
+        type: array
       timestamp:
         type: string
+      validator_batches:
+        additionalProperties:
+          type: string
+        description: validator_id → their individual Level 1 batch IPFS CID
+        type: object
       validator_count:
         type: integer
+      validator_ids:
+        description: Array of validator IDs that contributed
+        items:
+          type: string
+        type: array
     type: object
-  cmd_monitor-api.BatchPart:
+  main.BatchPart:
     properties:
       epoch_id:
         type: string
@@ -20,7 +41,7 @@ definitions:
       project_count:
         type: integer
     type: object
-  cmd_monitor-api.FinalizedBatch:
+  main.FinalizedBatch:
     properties:
       epoch_id:
         type: string
@@ -35,7 +56,7 @@ definitions:
       vote_count:
         type: integer
     type: object
-  cmd_monitor-api.PipelineOverview:
+  main.PipelineOverview:
     properties:
       active_windows:
         type: integer
@@ -44,28 +65,28 @@ definitions:
       aggregated_batches:
         type: integer
       aggregation_queue:
-        $ref: '#/definitions/cmd_monitor-api.QueueStatus'
+        $ref: '#/definitions/main.QueueStatus'
       completed_parts:
         type: integer
       finalization_queue:
-        $ref: '#/definitions/cmd_monitor-api.QueueStatus'
+        $ref: '#/definitions/main.QueueStatus'
       finalized_batches:
         type: integer
       ready_batches:
         type: integer
       submission_queue:
-        $ref: '#/definitions/cmd_monitor-api.QueueStatus'
+        $ref: '#/definitions/main.QueueStatus'
       timestamp:
         type: string
     type: object
-  cmd_monitor-api.QueueStatus:
+  main.QueueStatus:
     properties:
       depth:
         type: integer
       status:
         type: string
     type: object
-  cmd_monitor-api.ReadyBatch:
+  main.ReadyBatch:
     properties:
       epoch_id:
         type: string
@@ -74,7 +95,7 @@ definitions:
       project_count:
         type: integer
     type: object
-  cmd_monitor-api.SubmissionWindow:
+  main.SubmissionWindow:
     properties:
       closed_at:
         type: string
@@ -87,7 +108,7 @@ definitions:
       ttl_seconds:
         type: integer
     type: object
-  cmd_monitor-api.WorkerStatus:
+  main.WorkerStatus:
     properties:
       epoch_id:
         type: string
@@ -133,7 +154,7 @@ paths:
       - aggregation
   /aggregation/results:
     get:
-      description: Get network-wide aggregated batches
+      description: Get network-wide aggregated batches with complete batch information
       parameters:
       - description: Protocol state identifier
         in: query
@@ -150,7 +171,7 @@ paths:
           description: OK
           schema:
             items:
-              $ref: '#/definitions/cmd_monitor-api.AggregatedBatch'
+              $ref: '#/definitions/main.AggregatedBatch'
             type: array
       summary: Aggregated batches
       tags:
@@ -197,7 +218,7 @@ paths:
           description: OK
           schema:
             items:
-              $ref: '#/definitions/cmd_monitor-api.FinalizedBatch'
+              $ref: '#/definitions/main.FinalizedBatch'
             type: array
       summary: Finalized batches
       tags:
@@ -221,7 +242,7 @@ paths:
           description: OK
           schema:
             items:
-              $ref: '#/definitions/cmd_monitor-api.BatchPart'
+              $ref: '#/definitions/main.BatchPart'
             type: array
       summary: Batch parts
       tags:
@@ -245,7 +266,7 @@ paths:
           description: OK
           schema:
             items:
-              $ref: '#/definitions/cmd_monitor-api.ReadyBatch'
+              $ref: '#/definitions/main.ReadyBatch'
             type: array
       summary: Ready batches
       tags:
@@ -282,7 +303,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/cmd_monitor-api.PipelineOverview'
+            $ref: '#/definitions/main.PipelineOverview'
       summary: Pipeline overview
       tags:
       - pipeline
@@ -319,7 +340,7 @@ paths:
           description: OK
           schema:
             items:
-              $ref: '#/definitions/cmd_monitor-api.SubmissionWindow'
+              $ref: '#/definitions/main.SubmissionWindow'
             type: array
       summary: Submission windows
       tags:
@@ -343,7 +364,7 @@ paths:
           description: OK
           schema:
             items:
-              $ref: '#/definitions/cmd_monitor-api.WorkerStatus'
+              $ref: '#/definitions/main.WorkerStatus'
             type: array
       summary: Worker status
       tags:

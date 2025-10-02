@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -91,9 +92,13 @@ type FinalizedBatch struct {
 
 type AggregatedBatch struct {
 	EpochID          string            `json:"epoch_id"`
+	BatchIPFSCid     string            `json:"batch_ipfs_cid,omitempty"`     // IPFS CID of the final Level 2 aggregated batch
+	MerkleRoot       string            `json:"merkle_root,omitempty"`        // Merkle root as base64 string
+	ProjectIDs       []string          `json:"project_ids"`                  // Array of project IDs that were aggregated
 	ProjectCount     int               `json:"project_count"`
+	ValidatorIDs     []string          `json:"validator_ids"`                // Array of validator IDs that contributed
 	ValidatorCount   int               `json:"validator_count"`
-	ValidatorBatches map[string]string `json:"validator_batches,omitempty"` // validator_id → ipfs_cid
+	ValidatorBatches map[string]string `json:"validator_batches,omitempty"`  // validator_id → their individual Level 1 batch IPFS CID
 	Timestamp        time.Time         `json:"timestamp"`
 }
 
@@ -550,7 +555,7 @@ func (m *MonitorAPI) AggregationQueue(c *gin.Context) {
 }
 
 // @Summary Aggregated batches
-// @Description Get network-wide aggregated batches
+// @Description Get network-wide aggregated batches with complete batch information
 // @Tags aggregation
 // @Produce json
 // @Success 200 {object} []AggregatedBatch
@@ -579,23 +584,59 @@ func (m *MonitorAPI) AggregatedBatches(c *gin.Context) {
 			EpochID: fmt.Sprintf("%v", batchData["EpochId"]),
 		}
 
+		// Extract IPFS CID if available
+		if batchCid, ok := batchData["BatchIPFSCID"].(string); ok {
+			batch.BatchIPFSCid = batchCid
+		}
+
+		// Extract and encode Merkle Root as base64
+		if merkleRoot, ok := batchData["MerkleRoot"]; ok {
+			switch v := merkleRoot.(type) {
+			case string:
+				// If it's already a string (base64), use it directly
+				batch.MerkleRoot = v
+			case []interface{}:
+				// If it's an array of bytes, convert to byte slice and encode
+				bytes := make([]byte, len(v))
+				for i, b := range v {
+					if byteVal, ok := b.(float64); ok {
+						bytes[i] = byte(byteVal)
+					}
+				}
+				batch.MerkleRoot = base64.StdEncoding.EncodeToString(bytes)
+			}
+		}
+
+		// Extract Project IDs
 		if projectIds, ok := batchData["ProjectIds"].([]interface{}); ok {
 			batch.ProjectCount = len(projectIds)
-		}
-
-		if validatorCount, ok := batchData["ValidatorCount"].(float64); ok {
-			batch.ValidatorCount = int(validatorCount)
-		}
-
-		if validatorBatches, ok := batchData["ValidatorBatches"].(map[string]interface{}); ok {
-			batch.ValidatorBatches = make(map[string]string)
-			for k, v := range validatorBatches {
-				if cid, ok := v.(string); ok {
-					batch.ValidatorBatches[k] = cid
+			batch.ProjectIDs = make([]string, 0, len(projectIds))
+			for _, pid := range projectIds {
+				if projectID, ok := pid.(string); ok {
+					batch.ProjectIDs = append(batch.ProjectIDs, projectID)
 				}
 			}
 		}
 
+		// Extract Validator Count and build Validator IDs list
+		if validatorCount, ok := batchData["ValidatorCount"].(float64); ok {
+			batch.ValidatorCount = int(validatorCount)
+		}
+
+		// Extract Validator Batches and build Validator IDs list
+		if validatorBatches, ok := batchData["ValidatorBatches"].(map[string]interface{}); ok {
+			batch.ValidatorBatches = make(map[string]string)
+			batch.ValidatorIDs = make([]string, 0, len(validatorBatches))
+
+			for validatorID, cidValue := range validatorBatches {
+				if cid, ok := cidValue.(string); ok {
+					batch.ValidatorBatches[validatorID] = cid
+					batch.ValidatorIDs = append(batch.ValidatorIDs, validatorID)
+				}
+			}
+		}
+
+		// Extract timestamp
 		if ts, ok := batchData["Timestamp"].(float64); ok {
 			batch.Timestamp = time.Unix(int64(ts), 0)
 		}

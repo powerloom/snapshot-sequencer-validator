@@ -52,7 +52,7 @@ const docTemplate = `{
         },
         "/aggregation/results": {
             "get": {
-                "description": "Get network-wide aggregated batches",
+                "description": "Get network-wide aggregated batches with complete batch information",
                 "produces": [
                     "application/json"
                 ],
@@ -80,7 +80,7 @@ const docTemplate = `{
                         "schema": {
                             "type": "array",
                             "items": {
-                                "$ref": "#/definitions/cmd_monitor-api.AggregatedBatch"
+                                "$ref": "#/definitions/main.AggregatedBatch"
                             }
                         }
                     }
@@ -152,7 +152,7 @@ const docTemplate = `{
                         "schema": {
                             "type": "array",
                             "items": {
-                                "$ref": "#/definitions/cmd_monitor-api.FinalizedBatch"
+                                "$ref": "#/definitions/main.FinalizedBatch"
                             }
                         }
                     }
@@ -189,7 +189,7 @@ const docTemplate = `{
                         "schema": {
                             "type": "array",
                             "items": {
-                                "$ref": "#/definitions/cmd_monitor-api.BatchPart"
+                                "$ref": "#/definitions/main.BatchPart"
                             }
                         }
                     }
@@ -226,7 +226,7 @@ const docTemplate = `{
                         "schema": {
                             "type": "array",
                             "items": {
-                                "$ref": "#/definitions/cmd_monitor-api.ReadyBatch"
+                                "$ref": "#/definitions/main.ReadyBatch"
                             }
                         }
                     }
@@ -282,7 +282,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/cmd_monitor-api.PipelineOverview"
+                            "$ref": "#/definitions/main.PipelineOverview"
                         }
                     }
                 }
@@ -339,7 +339,7 @@ const docTemplate = `{
                         "schema": {
                             "type": "array",
                             "items": {
-                                "$ref": "#/definitions/cmd_monitor-api.SubmissionWindow"
+                                "$ref": "#/definitions/main.SubmissionWindow"
                             }
                         }
                     }
@@ -376,7 +376,7 @@ const docTemplate = `{
                         "schema": {
                             "type": "array",
                             "items": {
-                                "$ref": "#/definitions/cmd_monitor-api.WorkerStatus"
+                                "$ref": "#/definitions/main.WorkerStatus"
                             }
                         }
                     }
@@ -385,24 +385,53 @@ const docTemplate = `{
         }
     },
     "definitions": {
-        "cmd_monitor-api.AggregatedBatch": {
+        "main.AggregatedBatch": {
             "type": "object",
             "properties": {
+                "batch_ipfs_cid": {
+                    "description": "IPFS CID of the final Level 2 aggregated batch",
+                    "type": "string"
+                },
                 "epoch_id": {
+                    "type": "string"
+                },
+                "merkle_root": {
+                    "description": "Merkle root as base64 string",
                     "type": "string"
                 },
                 "project_count": {
                     "type": "integer"
                 },
+                "project_ids": {
+                    "description": "Array of project IDs that were aggregated",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "timestamp": {
                     "type": "string"
                 },
+                "validator_batches": {
+                    "description": "validator_id → their individual Level 1 batch IPFS CID",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
                 "validator_count": {
                     "type": "integer"
+                },
+                "validator_ids": {
+                    "description": "Array of validator IDs that contributed",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         },
-        "cmd_monitor-api.BatchPart": {
+        "main.BatchPart": {
             "type": "object",
             "properties": {
                 "epoch_id": {
@@ -416,7 +445,7 @@ const docTemplate = `{
                 }
             }
         },
-        "cmd_monitor-api.FinalizedBatch": {
+        "main.FinalizedBatch": {
             "type": "object",
             "properties": {
                 "epoch_id": {
@@ -439,7 +468,7 @@ const docTemplate = `{
                 }
             }
         },
-        "cmd_monitor-api.PipelineOverview": {
+        "main.PipelineOverview": {
             "type": "object",
             "properties": {
                 "active_windows": {
@@ -452,13 +481,13 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "aggregation_queue": {
-                    "$ref": "#/definitions/cmd_monitor-api.QueueStatus"
+                    "$ref": "#/definitions/main.QueueStatus"
                 },
                 "completed_parts": {
                     "type": "integer"
                 },
                 "finalization_queue": {
-                    "$ref": "#/definitions/cmd_monitor-api.QueueStatus"
+                    "$ref": "#/definitions/main.QueueStatus"
                 },
                 "finalized_batches": {
                     "type": "integer"
@@ -467,14 +496,14 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "submission_queue": {
-                    "$ref": "#/definitions/cmd_monitor-api.QueueStatus"
+                    "$ref": "#/definitions/main.QueueStatus"
                 },
                 "timestamp": {
                     "type": "string"
                 }
             }
         },
-        "cmd_monitor-api.QueueStatus": {
+        "main.QueueStatus": {
             "type": "object",
             "properties": {
                 "depth": {
@@ -485,7 +514,7 @@ const docTemplate = `{
                 }
             }
         },
-        "cmd_monitor-api.ReadyBatch": {
+        "main.ReadyBatch": {
             "type": "object",
             "properties": {
                 "epoch_id": {
@@ -499,7 +528,7 @@ const docTemplate = `{
                 }
             }
         },
-        "cmd_monitor-api.SubmissionWindow": {
+        "main.SubmissionWindow": {
             "type": "object",
             "properties": {
                 "closed_at": {
@@ -519,7 +548,7 @@ const docTemplate = `{
                 }
             }
         },
-        "cmd_monitor-api.WorkerStatus": {
+        "main.WorkerStatus": {
             "type": "object",
             "properties": {
                 "epoch_id": {
