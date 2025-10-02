@@ -41,9 +41,11 @@ The Powerloom Decentralized Sequencer Validator uses a separated architecture fo
      - Stores to IPFS
      - Broadcasts complete local view to network
    - **Level 2 (Network)**:
-     - Receives other validators' complete batches
-     - Combines local + remote batches
-     - Creates network-wide consensus view
+     - **Aggregation Window**: Waits `AGGREGATION_WINDOW_SECONDS` (default 30s)
+     - First remote batch arrival starts timer
+     - Collects additional validator batches during window
+     - Window expiration triggers final aggregation
+     - Combines local + remote batches into network-wide consensus view
 
 3. **Finalizer Workers (Multiple/Auto-scaled)**
    - **Binary**: Part of `cmd/unified/main.go`
@@ -214,6 +216,11 @@ MAX_SUBMISSIONS_PER_EPOCH=100
 # Production should typically match contract settings, but this allows shorter windows for testing
 SUBMISSION_WINDOW_DURATION=60  # seconds
 MAX_CONCURRENT_WINDOWS=100
+
+# Level 2 Aggregation Window
+# Time to wait for validator finalizations before aggregating network consensus
+# First remote batch starts timer, additional batches collected until expiration
+AGGREGATION_WINDOW_SECONDS=30  # seconds (default: 30s)
 
 # Event monitoring
 EVENT_POLL_INTERVAL=12

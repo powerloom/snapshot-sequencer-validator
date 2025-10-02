@@ -92,6 +92,9 @@ type Settings struct {
 	FinalizerWorkers      int
 	FinalizationBatchSize int
 
+	// Aggregation Configuration
+	AggregationWindowDuration time.Duration // Time to wait for validator batches before aggregating (Level 2)
+
 	// IPFS Configuration
 	IPFSAPI string // IPFS API endpoint (e.g., "/ip4/127.0.0.1/tcp/5001")
 
@@ -184,6 +187,9 @@ func LoadConfig() error {
 		// Finalizer Configuration
 		FinalizerWorkers:      getEnvAsInt("FINALIZER_WORKERS", 5),
 		FinalizationBatchSize: getEnvAsInt("FINALIZATION_BATCH_SIZE", 20),
+
+		// Aggregation Configuration
+		AggregationWindowDuration: time.Duration(getEnvAsInt("AGGREGATION_WINDOW_SECONDS", 30)) * time.Second,
 
 		// API Configuration
 		APIHost:      getEnv("API_HOST", "0.0.0.0"),

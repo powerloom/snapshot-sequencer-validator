@@ -34,6 +34,7 @@ type Aggregator struct {
 
 	// Track aggregation state
 	epochBatches map[uint64]map[string]*consensus.FinalizedBatch // epochID -> validatorID -> batch
+	epochTimers  map[uint64]*time.Timer                          // epochID -> aggregation window timer
 	mu           sync.RWMutex
 }
 
@@ -106,6 +107,7 @@ func NewAggregator(cfg *config.Settings) (*Aggregator, error) {
 		config:       cfg,
 		keyBuilder:   keyBuilder,
 		epochBatches: make(map[uint64]map[string]*consensus.FinalizedBatch),
+		epochTimers:  make(map[uint64]*time.Timer),
 	}, nil
 }
 
@@ -156,12 +158,54 @@ func (a *Aggregator) processAggregationQueue() {
 			}
 
 			epochID := result[1]
-			log.WithField("epoch", epochID).Info("🌐 LEVEL 2: Aggregating network-wide validator batches")
+			log.WithField("epoch", epochID).Info("🌐 LEVEL 2: Starting aggregation window for network-wide validator batches")
 
-			// Process Level 2 network aggregation
-			a.aggregateEpoch(epochID)
+			// Start or extend aggregation window for this epoch
+			a.startAggregationWindow(epochID)
 		}
 	}
+}
+
+// startAggregationWindow initiates or extends the aggregation window for Level 2
+func (a *Aggregator) startAggregationWindow(epochIDStr string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	// Convert to uint64 for map key
+	epochID, err := strconv.ParseUint(epochIDStr, 10, 64)
+	if err != nil {
+		log.WithError(err).Error("Failed to parse epoch ID for aggregation window")
+		return
+	}
+
+	// Check if timer already exists
+	if _, exists := a.epochTimers[epochID]; exists {
+		// Window already started - just log that we received another batch
+		log.WithField("epoch", epochID).Info("⏱️  Additional validator batch received during aggregation window")
+		return
+	}
+
+	// Start new aggregation window timer
+	timer := time.AfterFunc(a.config.AggregationWindowDuration, func() {
+		log.WithFields(logrus.Fields{
+			"epoch":   epochID,
+			"window":  a.config.AggregationWindowDuration,
+		}).Info("⏰ Aggregation window expired - finalizing Level 2 aggregation")
+
+		// Perform aggregation after window expires
+		a.aggregateEpoch(epochIDStr)
+
+		// Clean up timer
+		a.mu.Lock()
+		delete(a.epochTimers, epochID)
+		a.mu.Unlock()
+	})
+
+	a.epochTimers[epochID] = timer
+	log.WithFields(logrus.Fields{
+		"epoch":   epochID,
+		"window":  a.config.AggregationWindowDuration,
+	}).Info("⏱️  Started Level 2 aggregation window - collecting validator batches")
 }
 
 func (a *Aggregator) aggregateWorkerParts(epochIDStr string, totalParts int) {
@@ -286,10 +330,8 @@ func (a *Aggregator) createFinalizedBatchFromParts(epochID uint64, projectSubmis
 								if signature, ok := metaMap["signature"].(string); ok {
 									metadata.Signature = []byte(signature)
 								}
-								if reportedBy, ok := metaMap["reported_by_validator"].(string); ok {
-									metadata.ReportedByValidator = reportedBy
-									metadata.ValidatorsConfirming = []string{reportedBy}
-								}
+								// Initialize validators_confirming with this validator's ID
+								metadata.ValidatorsConfirming = []string{a.config.SequencerID}
 								metadata.VoteCount = 1 // Each submission counts as 1 vote
 								projectMetadata = append(projectMetadata, metadata)
 							}
@@ -570,8 +612,7 @@ func (a *Aggregator) createAggregatedBatch(ourBatch *consensus.FinalizedBatch, i
 	hash := sha256.Sum256([]byte(combined))
 	aggregated.MerkleRoot = hash[:]
 
-	// Store validator count and IPFS CIDs for monitoring
-	aggregated.ValidatorCount = len(validatorViews)
+	// Store validator batch IPFS CIDs for attribution tracking
 	aggregated.ValidatorBatches = validatorBatchCIDs
 
 	// Log aggregation summary

@@ -807,7 +807,12 @@ func (s *UnifiedSequencer) runDequeuerWorker(workerID int) {
 					// Process and store the submission
 					if s.dequeuer != nil {
 						if err := s.dequeuer.ProcessSubmission(submission, submissionID); err != nil {
-							log.Errorf("Worker %d: Failed to process submission %s: %v", workerID, submissionID, err)
+							// Epoch 0 heartbeats are expected to fail validation - log as debug, not error
+							if strings.Contains(err.Error(), "epoch 0 heartbeat") {
+								log.Debugf("Worker %d: Skipped epoch 0 heartbeat (P2P mesh maintenance)", workerID)
+							} else {
+								log.Errorf("Worker %d: Failed to process submission %s: %v", workerID, submissionID, err)
+							}
 						} else {
 							log.Debugf("Worker %d: Successfully processed and stored submission %s", workerID, submissionID)
 						}
@@ -837,7 +842,12 @@ func (s *UnifiedSequencer) runDequeuerWorker(workerID int) {
 				// Process and store the submission
 				if s.dequeuer != nil {
 					if err := s.dequeuer.ProcessSubmission(&submission, submissionID); err != nil {
-						log.Errorf("Worker %d: Failed to process submission %s: %v", workerID, submissionID, err)
+						// Epoch 0 heartbeats are expected to fail validation - log as debug, not error
+						if strings.Contains(err.Error(), "epoch 0 heartbeat") {
+							log.Debugf("Worker %d: Skipped epoch 0 heartbeat (P2P mesh maintenance)", workerID)
+						} else {
+							log.Errorf("Worker %d: Failed to process submission %s: %v", workerID, submissionID, err)
+						}
 					} else {
 						log.Debugf("Worker %d: Successfully processed and stored submission %s", workerID, submissionID)
 					}

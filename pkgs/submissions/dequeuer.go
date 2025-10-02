@@ -89,7 +89,13 @@ func (d *Dequeuer) ProcessSubmission(submission *SnapshotSubmission, submissionI
 }
 
 func (d *Dequeuer) validateSubmission(submission *SnapshotSubmission) error {
-	// Basic validation
+	// Epoch 0 heartbeat handling: Skip validation for epoch 0 with empty CID
+	// These are P2P mesh maintenance messages from Go local collector, not actual submissions
+	if submission.Request.EpochId == 0 && submission.Request.SnapshotCid == "" {
+		return fmt.Errorf("epoch 0 heartbeat: skipping")
+	}
+
+	// Basic validation for real submissions
 	if submission.Request.SnapshotCid == "" {
 		return fmt.Errorf("empty snapshot CID")
 	}
