@@ -177,8 +177,9 @@ func (d *Dequeuer) verifySignature(submission *SnapshotSubmission) (common.Addre
 		return common.Address{}, fmt.Errorf("signature verification failed: %w", err)
 	}
 
-	log.Infof("EIP-712 signature verified successfully: epoch=%d, slot=%d, project=%s, signer=%s, CID=%s",
-		submission.Request.EpochId, submission.Request.SlotId, submission.Request.ProjectId, signerAddr.Hex(), submission.Request.SnapshotCid)
+	log.Infof("EIP-712 signature verified: epoch=%d, slot=%d, deadline=%d, project=%s, signer=%s, CID=%s",
+		submission.Request.EpochId, submission.Request.SlotId, submission.Request.Deadline,
+		submission.Request.ProjectId, signerAddr.Hex(), submission.Request.SnapshotCid)
 
 	return signerAddr, nil
 }

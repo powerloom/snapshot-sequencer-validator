@@ -143,6 +143,9 @@ func (v *EIP712Verifier) VerifySignature(request *SnapshotRequest, signatureStr 
 		return common.Address{}, fmt.Errorf("hex decode produced wrong length: got %d bytes, expected 65", len(signature))
 	}
 
+	log.Debugf("EIP-712 signature decode: hex_input=%s, r=%x, s=%x, v=%d",
+		hexStr[:20]+"...", signature[0:4], signature[32:36], signature[64])
+
 	// Hash the request
 	msgHash, err := v.HashRequest(request)
 	if err != nil {
