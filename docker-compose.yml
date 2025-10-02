@@ -28,6 +28,11 @@ services:
       # Debug options
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - DEBUG_MODE=${DEBUG_MODE:-false}
+
+      # EIP-712 Signature Verification
+      - POWERLOOM_RPC_NODES=${POWERLOOM_RPC_NODES:-http://localhost:8545}
+      - CHAIN_ID=${CHAIN_ID:-31337}
+      - ENABLE_SLOT_VALIDATION=${ENABLE_SLOT_VALIDATION:-false}
     networks:
       - snapshot-sequencer
       - dsv-internal-network
