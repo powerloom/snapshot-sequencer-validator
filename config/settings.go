@@ -132,7 +132,7 @@ func LoadConfig() error {
 		SequencerID: getEnv("SEQUENCER_ID", "unified-sequencer-1"),
 
 		// Ethereum RPC Configuration
-		ChainID: int64(getEnvAsInt("CHAIN_ID", 1)),
+		// ChainID will be set by loadRPCConfig() from RPC or env var
 
 		// Redis Configuration - Read directly from env
 		RedisHost:     getEnv("REDIS_HOST", "localhost"),
@@ -284,18 +284,22 @@ func loadRPCConfig() error {
 		SettingsObj.ArchiveRPCNodes[i] = strings.Trim(SettingsObj.ArchiveRPCNodes[i], "\" ")
 	}
 
-	// Fetch chain ID from RPC if not provided
+	// Fetch chain ID from RPC if nodes are configured
 	if len(SettingsObj.RPCNodes) > 0 {
+		log.Infof("Fetching chain ID from RPC: %s", SettingsObj.RPCNodes[0])
 		if chainID, err := fetchChainIDFromRPC(SettingsObj.RPCNodes[0]); err == nil {
 			SettingsObj.ChainID = chainID
-			log.Infof("Chain ID fetched from RPC: %d", chainID)
+			log.Infof("✅ Chain ID fetched from RPC: %d", chainID)
 		} else {
-			log.Warnf("Failed to fetch chain ID from RPC, using default: %v", err)
+			log.Warnf("❌ Failed to fetch chain ID from RPC (%v), falling back to CHAIN_ID env var", err)
 			SettingsObj.ChainID = int64(getEnvAsInt("CHAIN_ID", 1))
 		}
 	} else {
+		log.Warnf("No RPC nodes configured (POWERLOOM_RPC_NODES empty), using CHAIN_ID env var")
 		SettingsObj.ChainID = int64(getEnvAsInt("CHAIN_ID", 1))
 	}
+
+	log.Infof("Final Chain ID for EIP-712: %d", SettingsObj.ChainID)
 
 	return nil
 }
