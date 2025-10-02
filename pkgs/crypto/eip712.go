@@ -9,6 +9,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/signer/core/apitypes"
+	log "github.com/sirupsen/logrus"
 )
 
 // SnapshotRequest represents the EIP-712 request structure
@@ -151,9 +152,13 @@ func (v *EIP712Verifier) VerifySignature(request *SnapshotRequest, signatureStr 
 	// Recover signer address
 	signerAddr, err := RecoverAddress(msgHash, signature)
 	if err != nil {
-		return common.Address{}, fmt.Errorf("address recovery failed (msgHash=%x, sig_v=%d): %w",
-			msgHash[:8], signature[64], err)
+		return common.Address{}, fmt.Errorf("address recovery failed (msgHash=0x%x, sig_v=%d): %w",
+			msgHash, signature[64], err)
 	}
+
+	// Debug logging to trace signature verification
+	log.Debugf("EIP-712 verification details: slotId=%d, deadline=%d, epochId=%d, projectId=%s, CID=%s, msgHash=0x%x, signer=%s",
+		request.SlotId, request.Deadline, request.EpochId, request.ProjectId, request.SnapshotCid, msgHash, signerAddr.Hex())
 
 	return signerAddr, nil
 }
