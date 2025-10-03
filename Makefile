@@ -1,4 +1,4 @@
-.PHONY: all build clean test aggregator monitor-api unified p2p-gateway dequeuer event-monitor
+.PHONY: all build clean test aggregator monitor-api unified p2p-gateway dequeuer event-monitor state-tracker event-emitter metrics-server
 
 # Build output directory
 BIN_DIR := bin
@@ -6,7 +6,7 @@ BIN_DIR := bin
 # Build all binaries
 all: build
 
-build: aggregator monitor-api unified p2p-gateway
+build: aggregator monitor-api unified p2p-gateway state-tracker event-emitter metrics-server
 
 # Individual component builds
 aggregator:
@@ -28,6 +28,21 @@ p2p-gateway:
 	@echo "Building p2p-gateway..."
 	@mkdir -p $(BIN_DIR)
 	@go build -o $(BIN_DIR)/p2p-gateway ./cmd/p2p-gateway
+
+state-tracker:
+	@echo "Building state-tracker..."
+	@mkdir -p $(BIN_DIR)
+	@go build -o $(BIN_DIR)/state-tracker ./cmd/state-tracker
+
+event-emitter:
+	@echo "Building event-emitter..."
+	@mkdir -p $(BIN_DIR)
+	@go build -o $(BIN_DIR)/event-emitter ./cmd/event-emitter
+
+metrics-server:
+	@echo "Building metrics-server..."
+	@mkdir -p $(BIN_DIR)
+	@go build -o $(BIN_DIR)/metrics-server ./cmd/metrics-server
 
 # Aliases for unified sequencer components
 dequeuer: unified
@@ -57,6 +72,9 @@ build-prod:
 	@go build -ldflags="-s -w" -o $(BIN_DIR)/monitor-api ./cmd/monitor-api
 	@go build -ldflags="-s -w" -o $(BIN_DIR)/unified ./cmd/unified
 	@go build -ldflags="-s -w" -o $(BIN_DIR)/p2p-gateway ./cmd/p2p-gateway
+	@go build -ldflags="-s -w" -o $(BIN_DIR)/state-tracker ./cmd/state-tracker
+	@go build -ldflags="-s -w" -o $(BIN_DIR)/event-emitter ./cmd/event-emitter
+	@go build -ldflags="-s -w" -o $(BIN_DIR)/metrics-server ./cmd/metrics-server
 	@echo "Production builds complete in $(BIN_DIR)/"
 
 # Install dependencies
@@ -84,6 +102,9 @@ help:
 	@echo "  make monitor-api   - Build monitoring API"
 	@echo "  make unified       - Build unified sequencer"
 	@echo "  make p2p-gateway   - Build P2P gateway"
+	@echo "  make state-tracker - Build state tracker service"
+	@echo "  make event-emitter - Build event emitter service"
+	@echo "  make metrics-server- Build metrics server"
 	@echo "  make clean         - Remove build artifacts"
 	@echo "  make test          - Run tests"
 	@echo "  make test-race     - Run tests with race detection"

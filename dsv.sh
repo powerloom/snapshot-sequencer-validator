@@ -43,8 +43,15 @@ show_usage() {
     echo "  status        - Show service status"
     echo "  clean         - Stop and remove all containers/volumes"
     echo ""
+    echo "Monitoring Stack:"
+    echo "  monitor-start - Start monitoring services (State Tracker + Enhanced API)"
+    echo "  monitor-stop  - Stop monitoring services"
+    echo "  monitor-status - Show monitoring services status"
+    echo "  monitor-logs  - Show monitoring services logs"
+    echo ""
     echo "Monitoring:"
-    echo "  monitor       - Monitor pipeline status"
+    echo "  monitor       - Show pipeline status (legacy)"
+    echo "  dashboard     - Open dashboard in browser (http://localhost:8080/swagger)"
     echo "  logs          - Show all logs"
     echo "  p2p-logs      - P2P Gateway logs"
     echo "  aggregator-logs - Aggregator logs"
@@ -89,7 +96,8 @@ start_services() {
         echo "  • Dequeuer (submission processing)"
         echo "  • Event Monitor (epoch tracking)"
         echo ""
-        echo "Monitor: ./dsv.sh monitor"
+        echo "Start monitoring: ./dsv.sh monitor-start"
+        echo "View dashboard: ./dsv.sh dashboard"
         echo "Logs: ./dsv.sh logs"
     else
         print_color "$RED" "❌ Failed to start services"
@@ -107,6 +115,18 @@ stop_services() {
         $DOCKER_COMPOSE_CMD down 2>/dev/null || true
     fi
     print_color "$GREEN" "✓ Services stopped"
+
+    # Ask about monitoring stack
+    if [ -f docker-compose.monitoring.yml ]; then
+        if $DOCKER_COMPOSE_CMD -f docker-compose.monitoring.yml ps --services 2>/dev/null | grep -q monitor-api; then
+            print_color "$YELLOW" "Monitoring stack is running. Stop it too? (y/N)"
+            read -p "" -n 1 -r
+            echo
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                stop_monitoring
+            fi
+        fi
+    fi
 }
 
 # Show status
@@ -117,6 +137,100 @@ show_status() {
         $DOCKER_COMPOSE_CMD -f docker-compose.separated.yml ps
     else
         print_color "$YELLOW" "No services running"
+    fi
+}
+
+# Start monitoring stack
+start_monitoring() {
+    print_color "$GREEN" "🔍 Starting Monitoring Stack"
+
+    if [ ! -f docker-compose.monitoring.yml ]; then
+        print_color "$RED" "Error: docker-compose.monitoring.yml not found"
+        exit 1
+    fi
+
+    # Check if main services are running
+    if ! is_separated_running; then
+        print_color "$YELLOW" "Warning: Main DSV services are not running"
+        print_color "$YELLOW" "Start them first with: ./dsv.sh start"
+        echo ""
+    fi
+
+    $DOCKER_COMPOSE_CMD -f docker-compose.monitoring.yml up -d state-tracker monitor-api
+
+    if [ $? -eq 0 ]; then
+        print_color "$GREEN" "✅ Monitoring stack started"
+        echo ""
+        print_color "$CYAN" "Services:"
+        echo "  • State Tracker (tracks epoch/submission/validator states)"
+        echo "  • Enhanced Monitor API (dashboard endpoints)"
+        echo ""
+        echo "Dashboard: http://localhost:8080/swagger/index.html"
+        echo "New endpoints:"
+        echo "  • /api/v1/dashboard/summary - Overall health & performance"
+        echo "  • /api/v1/epochs/timeline - Epoch progression tracking"
+        echo "  • /api/v1/validator/performance - Validator metrics"
+        echo "  • /api/v1/queues/analytics - Queue bottleneck detection"
+        echo "  • /api/v1/network/consensus - Network consensus view"
+    else
+        print_color "$RED" "❌ Failed to start monitoring stack"
+        exit 1
+    fi
+}
+
+# Stop monitoring stack
+stop_monitoring() {
+    print_color "$YELLOW" "Stopping monitoring stack..."
+    if [ -f docker-compose.monitoring.yml ]; then
+        $DOCKER_COMPOSE_CMD -f docker-compose.monitoring.yml down
+        print_color "$GREEN" "✓ Monitoring stack stopped"
+    else
+        print_color "$RED" "Error: docker-compose.monitoring.yml not found"
+    fi
+}
+
+# Show monitoring status
+monitoring_status() {
+    print_color "$BLUE" "Monitoring Stack Status:"
+    echo ""
+    if [ -f docker-compose.monitoring.yml ]; then
+        $DOCKER_COMPOSE_CMD -f docker-compose.monitoring.yml ps
+    else
+        print_color "$RED" "Error: docker-compose.monitoring.yml not found"
+    fi
+}
+
+# Show monitoring logs
+monitoring_logs() {
+    if [ -f docker-compose.monitoring.yml ]; then
+        $DOCKER_COMPOSE_CMD -f docker-compose.monitoring.yml logs -f ${1:+--tail=$1}
+    else
+        print_color "$RED" "Error: docker-compose.monitoring.yml not found"
+    fi
+}
+
+# Open dashboard
+open_dashboard() {
+    MONITOR_PORT="${MONITOR_API_PORT:-8080}"
+    URL="http://localhost:${MONITOR_PORT}/swagger/index.html"
+
+    print_color "$CYAN" "Opening dashboard at: $URL"
+
+    # Check if monitor API is running
+    if curl -s -o /dev/null -w "%{http_code}" "http://localhost:${MONITOR_PORT}/api/v1/health" | grep -q "200"; then
+        print_color "$GREEN" "✓ Monitor API is running"
+
+        # Try to open in browser
+        if command -v open > /dev/null 2>&1; then
+            open "$URL"
+        elif command -v xdg-open > /dev/null 2>&1; then
+            xdg-open "$URL"
+        else
+            print_color "$YELLOW" "Please open in your browser: $URL"
+        fi
+    else
+        print_color "$YELLOW" "Monitor API is not running"
+        print_color "$YELLOW" "Start it with: ./dsv.sh monitor-start"
     fi
 }
 
@@ -210,9 +324,13 @@ clean_all() {
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         stop_services
+        stop_monitoring
         # Only remove volumes belonging to this project
         if is_separated_running || docker ps | grep -q snapshot-sequencer; then
             $DOCKER_COMPOSE_CMD -f docker-compose.separated.yml down -v 2>/dev/null || true
+        fi
+        if [ -f docker-compose.monitoring.yml ]; then
+            $DOCKER_COMPOSE_CMD -f docker-compose.monitoring.yml down -v 2>/dev/null || true
         fi
         print_color "$GREEN" "✓ Cleanup complete"
     else
@@ -261,6 +379,21 @@ case "${1:-}" in
         ;;
     monitor)
         monitor_pipeline
+        ;;
+    monitor-start)
+        start_monitoring
+        ;;
+    monitor-stop)
+        stop_monitoring
+        ;;
+    monitor-status)
+        monitoring_status
+        ;;
+    monitor-logs)
+        monitoring_logs "$2"
+        ;;
+    dashboard)
+        open_dashboard
         ;;
     clean-cache)
         clean_cache

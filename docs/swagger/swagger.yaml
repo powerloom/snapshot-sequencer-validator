@@ -32,6 +32,40 @@ definitions:
           type: string
         type: array
     type: object
+  main.AggregationMetrics:
+    properties:
+      consensus_alignment_rate:
+        type: number
+      level1_contributions:
+        type: integer
+      level2_participations:
+        type: integer
+      validator_weight:
+        type: number
+    type: object
+  main.AggregationSummary:
+    properties:
+      batch_ipfs_cid:
+        type: string
+      merkle_root:
+        type: string
+      projects_finalized:
+        type: integer
+      timestamp:
+        type: string
+    type: object
+  main.Alert:
+    properties:
+      message:
+        type: string
+      severity:
+        description: info|warning|critical
+        type: string
+      timestamp:
+        type: string
+      type:
+        type: string
+    type: object
   main.BatchPart:
     properties:
       epoch_id:
@@ -40,6 +74,99 @@ definitions:
         type: integer
       project_count:
         type: integer
+    type: object
+  main.Bottleneck:
+    properties:
+      detected_at:
+        type: string
+      duration_s:
+        type: integer
+      peak_depth:
+        type: integer
+      queue:
+        type: string
+      severity:
+        description: low|medium|high
+        type: string
+    type: object
+  main.CurrentEpochInfo:
+    properties:
+      expected_submissions:
+        type: integer
+      id:
+        type: integer
+      local_submissions:
+        type: integer
+      phase:
+        description: submission|finalization|aggregation|complete
+        type: string
+      time_remaining:
+        type: integer
+    type: object
+  main.DashboardSummary:
+    properties:
+      alerts:
+        items:
+          $ref: '#/definitions/main.Alert'
+        type: array
+      current_epoch:
+        $ref: '#/definitions/main.CurrentEpochInfo'
+      health:
+        $ref: '#/definitions/main.HealthStatus'
+      performance_24h:
+        $ref: '#/definitions/main.Performance24H'
+      validator_id:
+        type: string
+    type: object
+  main.EpochDetail:
+    properties:
+      epoch_id:
+        type: integer
+      metrics:
+        $ref: '#/definitions/main.EpochMetrics'
+      phases:
+        $ref: '#/definitions/main.EpochPhases'
+      status:
+        description: complete|processing|missed
+        type: string
+    type: object
+  main.EpochMetrics:
+    properties:
+      queue_max_depth:
+        type: integer
+      total_duration_ms:
+        type: integer
+      worker_utilization:
+        type: number
+    type: object
+  main.EpochPhases:
+    properties:
+      aggregation:
+        $ref: '#/definitions/main.PhaseInfo'
+      finalization:
+        $ref: '#/definitions/main.PhaseInfo'
+      submission:
+        $ref: '#/definitions/main.PhaseInfo'
+    type: object
+  main.EpochTimelineResponse:
+    properties:
+      epochs:
+        items:
+          $ref: '#/definitions/main.EpochDetail'
+        type: array
+      summary:
+        $ref: '#/definitions/main.TimelineSummary'
+    type: object
+  main.FinalizationMetrics:
+    properties:
+      average_finalization_time_ms:
+        type: integer
+      average_projects_per_batch:
+        type: number
+      batches_created:
+        type: integer
+      ipfs_success_rate:
+        type: number
     type: object
   main.FinalizedBatch:
     properties:
@@ -54,6 +181,116 @@ definitions:
       timestamp:
         type: string
       vote_count:
+        type: integer
+    type: object
+  main.HealthStatus:
+    properties:
+      components:
+        additionalProperties:
+          type: string
+        type: object
+      last_activity:
+        type: string
+      overall_status:
+        description: healthy|degraded|critical
+        type: string
+    type: object
+  main.NetworkAverages:
+    properties:
+      consensus_alignment_rate:
+        type: number
+      participation_rate:
+        type: number
+      processing_rate:
+        type: number
+    type: object
+  main.NetworkComparison:
+    properties:
+      network_average:
+        $ref: '#/definitions/main.NetworkAverages'
+      percentile_rank:
+        type: integer
+    type: object
+  main.NetworkConsensusView:
+    properties:
+      aggregation:
+        $ref: '#/definitions/main.AggregationSummary'
+      consensus_status:
+        description: achieved|pending|failed
+        type: string
+      epoch_id:
+        type: integer
+      project_consensus:
+        additionalProperties:
+          $ref: '#/definitions/main.ProjectVotes'
+        type: object
+      validator_contributions:
+        items:
+          $ref: '#/definitions/main.ValidatorContribution'
+        type: array
+      validators:
+        $ref: '#/definitions/main.ValidatorSummary'
+    type: object
+  main.ParticipationMetrics:
+    properties:
+      epochs_participated:
+        type: integer
+      epochs_total:
+        type: integer
+      participation_rate:
+        type: number
+      streak_current:
+        type: integer
+      streak_longest:
+        type: integer
+    type: object
+  main.Performance24H:
+    properties:
+      aggregations_contributed:
+        type: integer
+      epochs_participated:
+        type: integer
+      epochs_total:
+        type: integer
+      finalizations_completed:
+        type: integer
+      participation_rate:
+        type: number
+      submissions_processed:
+        type: integer
+    type: object
+  main.PerformanceMetrics:
+    properties:
+      aggregation:
+        $ref: '#/definitions/main.AggregationMetrics'
+      finalization:
+        $ref: '#/definitions/main.FinalizationMetrics'
+      participation:
+        $ref: '#/definitions/main.ParticipationMetrics'
+      submissions:
+        $ref: '#/definitions/main.SubmissionMetrics'
+    type: object
+  main.PhaseInfo:
+    properties:
+      batch_created:
+        type: boolean
+      consensus_achieved:
+        type: boolean
+      end:
+        type: string
+      ipfs_cid:
+        type: string
+      merkle_root:
+        type: string
+      projects_finalized:
+        type: integer
+      start:
+        type: string
+      submissions_processed:
+        type: integer
+      submissions_received:
+        type: integer
+      validators_participated:
         type: integer
     type: object
   main.PipelineOverview:
@@ -79,6 +316,47 @@ definitions:
       timestamp:
         type: string
     type: object
+  main.ProjectVotes:
+    properties:
+      consensus_cid:
+        type: string
+      validators_agreed:
+        type: integer
+      vote_distribution:
+        additionalProperties:
+          type: integer
+        type: object
+    type: object
+  main.QueueAnalytics:
+    properties:
+      bottlenecks:
+        items:
+          $ref: '#/definitions/main.Bottleneck'
+        type: array
+      queues:
+        additionalProperties:
+          $ref: '#/definitions/main.QueueMetrics'
+        type: object
+      recommendations:
+        items:
+          type: string
+        type: array
+      timestamp:
+        type: string
+    type: object
+  main.QueueMetrics:
+    properties:
+      average_depth_1h:
+        type: number
+      current_depth:
+        type: integer
+      estimated_clear_time_s:
+        type: number
+      max_depth_1h:
+        type: integer
+      processing_rate:
+        type: number
+    type: object
   main.QueueStatus:
     properties:
       depth:
@@ -95,6 +373,21 @@ definitions:
       project_count:
         type: integer
     type: object
+  main.SubmissionMetrics:
+    properties:
+      average_per_epoch:
+        type: number
+      by_project:
+        additionalProperties:
+          type: integer
+        type: object
+      processing_rate:
+        type: number
+      total_processed:
+        type: integer
+      total_received:
+        type: integer
+    type: object
   main.SubmissionWindow:
     properties:
       closed_at:
@@ -106,6 +399,50 @@ definitions:
       status:
         type: string
       ttl_seconds:
+        type: integer
+    type: object
+  main.TimelineSummary:
+    properties:
+      average_duration_ms:
+        type: integer
+      missed:
+        type: integer
+      successful:
+        type: integer
+      total_epochs:
+        type: integer
+    type: object
+  main.ValidatorContribution:
+    properties:
+      batch_cid:
+        type: string
+      contribution_weight:
+        type: number
+      projects_count:
+        type: integer
+      submission_count:
+        type: integer
+      validator_id:
+        type: string
+    type: object
+  main.ValidatorPerformance:
+    properties:
+      comparison:
+        $ref: '#/definitions/main.NetworkComparison'
+      metrics:
+        $ref: '#/definitions/main.PerformanceMetrics'
+      period:
+        type: string
+      validator_id:
+        type: string
+    type: object
+  main.ValidatorSummary:
+    properties:
+      participated:
+        type: integer
+      pending:
+        type: integer
+      total:
         type: integer
     type: object
   main.WorkerStatus:
@@ -271,6 +608,42 @@ paths:
       summary: Ready batches
       tags:
       - batches
+  /dashboard/summary:
+    get:
+      description: Get overall validator health and performance summary
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/main.DashboardSummary'
+      summary: Dashboard summary
+      tags:
+      - dashboard
+  /epochs/timeline:
+    get:
+      description: Get timeline of recent epochs with phase progression
+      parameters:
+      - default: 50
+        description: Number of epochs to return
+        in: query
+        name: limit
+        type: integer
+      - description: Starting epoch ID
+        in: query
+        name: from_epoch
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/main.EpochTimelineResponse'
+      summary: Epoch timeline
+      tags:
+      - epochs
   /health:
     get:
       description: Check if the API is running and can connect to Redis
@@ -285,6 +658,24 @@ paths:
       summary: Health check
       tags:
       - health
+  /network/consensus:
+    get:
+      description: Get network-wide consensus information for an epoch
+      parameters:
+      - description: Epoch ID to query
+        in: query
+        name: epoch_id
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/main.NetworkConsensusView'
+      summary: Network consensus view
+      tags:
+      - network
   /pipeline/overview:
     get:
       description: Get overall pipeline status summary
@@ -307,6 +698,19 @@ paths:
       summary: Pipeline overview
       tags:
       - pipeline
+  /queues/analytics:
+    get:
+      description: Get real-time queue analytics and bottleneck detection
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/main.QueueAnalytics'
+      summary: Queue analytics
+      tags:
+      - queues
   /submissions/queue:
     get:
       description: Get submission queue depth and sample entries
@@ -345,6 +749,25 @@ paths:
       summary: Submission windows
       tags:
       - submissions
+  /validator/performance:
+    get:
+      description: Get validator performance metrics
+      parameters:
+      - default: '"24h"'
+        description: Time period (24h|7d|30d)
+        in: query
+        name: period
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/main.ValidatorPerformance'
+      summary: Validator performance
+      tags:
+      - validator
   /workers/status:
     get:
       description: Get status of all finalization workers

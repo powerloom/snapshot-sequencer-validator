@@ -13,6 +13,8 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/powerloom/snapshot-sequencer-validator/config"
+	"github.com/powerloom/snapshot-sequencer-validator/pkgs/events"
+	"github.com/powerloom/snapshot-sequencer-validator/pkgs/metrics"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/p2p"
 	rediskeys "github.com/powerloom/snapshot-sequencer-validator/pkgs/redis"
 	"github.com/go-redis/redis/v8"
@@ -38,6 +40,11 @@ type P2PGateway struct {
 	submissionTopic *pubsub.Topic
 	batchTopic      *pubsub.Topic
 	presenceTopic   *pubsub.Topic
+
+	// Event and metrics
+	eventEmitter   *events.Emitter
+	eventPublisher *events.Publisher
+	metricsRegistry *metrics.Registry
 }
 
 func NewP2PGateway(cfg *config.Settings) (*P2PGateway, error) {
@@ -74,13 +81,48 @@ func NewP2PGateway(cfg *config.Settings) (*P2PGateway, error) {
 	}
 	keyBuilder := rediskeys.NewKeyBuilder(cfg.ProtocolStateContract, dataMarket)
 
+	// Initialize event emitter
+	emitterConfig := events.DefaultConfig()
+	emitterConfig.BufferSize = 1000
+	emitterConfig.SequencerID = "p2p-gateway"
+	emitterConfig.Protocol = cfg.ProtocolStateContract
+	emitterConfig.DataMarket = dataMarket
+	eventEmitter := events.NewEmitter(emitterConfig)
+	eventEmitter.Start()
+
+	// Initialize event publisher for Redis
+	publisherConfig := &events.PublisherConfig{
+		RedisClient:   redisClient,
+		ChannelPrefix: "events",
+	}
+	eventPublisher, err := events.NewPublisher(publisherConfig)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("failed to create event publisher: %w", err)
+	}
+	eventPublisher.Start()
+
+	// Subscribe emitter events to publisher
+	eventEmitter.Subscribe(&events.Subscriber{
+		ID: "redis-publisher",
+		Handler: func(event *events.Event) error {
+			return eventPublisher.Publish(event)
+		},
+	})
+
+	// Initialize metrics registry
+	metricsRegistry := metrics.NewRegistry()
+
 	gateway := &P2PGateway{
-		ctx:         ctx,
-		cancel:      cancel,
-		p2pHost:     p2pHost,
-		redisClient: redisClient,
-		keyBuilder:  keyBuilder,
-		config:      cfg,
+		ctx:            ctx,
+		cancel:         cancel,
+		p2pHost:        p2pHost,
+		redisClient:    redisClient,
+		keyBuilder:     keyBuilder,
+		config:         cfg,
+		eventEmitter:   eventEmitter,
+		eventPublisher: eventPublisher,
+		metricsRegistry: metricsRegistry,
 	}
 
 	// Setup topic subscriptions
@@ -182,12 +224,48 @@ func (g *P2PGateway) handleSubmissionMessages(sub *pubsub.Subscription, topicNam
 		log.Infof("📨 RECEIVED %s on %s from peer %s (size: %d bytes)",
 			topicLabel, topicName, msg.ReceivedFrom.ShortString(), len(msg.Data))
 
+		// Emit submission received event
+		payload, _ := json.Marshal(map[string]interface{}{
+			"peer_id":    msg.ReceivedFrom.String(),
+			"topic_name": topicName,
+			"size":       len(msg.Data),
+		})
+		g.eventEmitter.Emit(&events.Event{
+			Type:      events.EventSubmissionReceived,
+			Severity:  events.SeverityInfo,
+			Component: "p2p-gateway",
+			Timestamp: time.Now(),
+			Payload:   json.RawMessage(payload),
+		})
+
+		// Update metrics
+		g.metricsRegistry.Counter("submissions.received.total").Inc(1)
+		g.metricsRegistry.Counter("submissions.received.bytes").Inc(float64(len(msg.Data)))
+
 		// Route to Redis for dequeuer processing (namespaced by protocol:market)
 		queueKey := g.keyBuilder.SubmissionQueue()
+		queueDepthBefore, _ := g.redisClient.LLen(g.ctx, queueKey).Result()
+
 		if err := g.redisClient.LPush(g.ctx, queueKey, msg.Data).Err(); err != nil {
 			log.WithError(err).Error("Failed to push submission to Redis")
+			g.metricsRegistry.Counter("submissions.routing.failed").Inc(1)
 		} else {
 			log.Infof("✅ P2P Gateway: Routed %s to Redis queue", topicLabel)
+			g.metricsRegistry.Counter("submissions.routing.success").Inc(1)
+
+			// Emit queue depth change event
+			queuePayload, _ := json.Marshal(map[string]interface{}{
+				"queue_name":     "submission",
+				"current_depth":  int(queueDepthBefore) + 1,
+				"previous_depth": int(queueDepthBefore),
+			})
+			g.eventEmitter.Emit(&events.Event{
+				Type:      events.EventQueueDepthChanged,
+				Severity:  events.SeverityDebug,
+				Component: "p2p-gateway",
+				Timestamp: time.Now(),
+				Payload:   json.RawMessage(queuePayload),
+			})
 		}
 	}
 }
@@ -233,12 +311,34 @@ func (g *P2PGateway) handleIncomingBatches() {
 			validatorID = seqID
 		}
 
+		// Emit validator batch received event
+		batchPayload, _ := json.Marshal(map[string]interface{}{
+			"validator_id": validatorID,
+			"epoch_id":     fmt.Sprintf("%v", epochID),
+			"peer_id":      msg.ReceivedFrom.String(),
+			"size":         len(msg.Data),
+		})
+		g.eventEmitter.Emit(&events.Event{
+			Type:      events.EventValidatorBatchReceived,
+			Severity:  events.SeverityInfo,
+			Component: "p2p-gateway",
+			Timestamp: time.Now(),
+			EpochID:   fmt.Sprintf("%v", epochID),
+			Payload:   json.RawMessage(batchPayload),
+		})
+
+		// Update metrics
+		g.metricsRegistry.Counter("batches.received.total").Inc(1)
+		g.metricsRegistry.Counter("batches.received.bytes").Inc(float64(len(msg.Data)))
+
 		// Route to Redis for aggregator processing (namespaced by protocol:market)
 		// Include validator ID in the key so we can track who sent what
 		key := g.keyBuilder.IncomingBatch(fmt.Sprintf("%v", epochID), validatorID)
 		if err := g.redisClient.Set(g.ctx, key, msg.Data, 30*time.Minute).Err(); err != nil {
 			log.WithError(err).Error("Failed to store incoming batch")
+			g.metricsRegistry.Counter("batches.storage.failed").Inc(1)
 		} else {
+			g.metricsRegistry.Counter("batches.storage.success").Inc(1)
 			// Check if epoch is already aggregated before queueing (namespaced)
 			aggregatedKey := g.keyBuilder.BatchAggregated(fmt.Sprintf("%v", epochID))
 			exists, _ := g.redisClient.Exists(g.ctx, aggregatedKey).Result()
@@ -402,6 +502,15 @@ func (g *P2PGateway) Start() error {
 
 func (g *P2PGateway) Stop() {
 	log.Info("Stopping P2P Gateway")
+
+	// Stop event emitter and publisher
+	if g.eventEmitter != nil {
+		g.eventEmitter.Stop()
+	}
+	if g.eventPublisher != nil {
+		g.eventPublisher.Stop()
+	}
+
 	g.cancel()
 	if g.p2pHost != nil {
 		g.p2pHost.Close()
