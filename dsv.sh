@@ -5,6 +5,11 @@
 
 set -e
 
+# Load environment variables if .env exists
+if [ -f .env ]; then
+    export $(grep -v '^#' .env | xargs)
+fi
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -38,6 +43,7 @@ show_usage() {
     echo ""
     echo "Main Commands:"
     echo "  start         - Start separated architecture (production)"
+    echo "  start-all     - Start main services AND monitoring stack"
     echo "  stop          - Stop all services"
     echo "  restart       - Restart all services"
     echo "  status        - Show service status"
@@ -165,7 +171,9 @@ start_monitoring() {
         echo "  • State Tracker (tracks epoch/submission/validator states)"
         echo "  • Enhanced Monitor API (dashboard endpoints)"
         echo ""
-        echo "Dashboard: http://localhost:8080/swagger/index.html"
+
+        MONITOR_PORT="${MONITOR_API_PORT:-8080}"
+        echo "Dashboard: http://localhost:${MONITOR_PORT}/swagger/index.html"
         echo "New endpoints:"
         echo "  • /api/v1/dashboard/summary - Overall health & performance"
         echo "  • /api/v1/epochs/timeline - Epoch progression tracking"
@@ -365,6 +373,11 @@ show_service_logs() {
 case "${1:-}" in
     start|up)
         start_services
+        ;;
+    start-all)
+        start_services
+        sleep 2  # Give main services time to initialize
+        start_monitoring
         ;;
     stop|down)
         stop_services
