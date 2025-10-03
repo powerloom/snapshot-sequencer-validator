@@ -105,13 +105,22 @@ func NewP2PGateway(cfg *config.Settings) (*P2PGateway, error) {
 	// Subscribe emitter events to publisher
 	eventEmitter.Subscribe(&events.Subscriber{
 		ID: "redis-publisher",
-		Handler: func(event *events.Event) error {
-			return eventPublisher.Publish(event)
+		Handler: func(event *events.Event) {
+			eventPublisher.Publish(event)
 		},
 	})
 
 	// Initialize metrics registry
-	metricsRegistry := metrics.NewRegistry()
+	metricsConfig := &metrics.CollectorConfig{
+		RedisAddr:          fmt.Sprintf("%s:%s", cfg.RedisHost, cfg.RedisPort),
+		RedisPassword:      cfg.RedisPassword,
+		RedisDB:            cfg.RedisDB,
+		RedisKeyPrefix:     "metrics",
+		CollectionInterval: 10 * time.Second,
+		BatchSize:          100,
+		FlushInterval:      30 * time.Second,
+	}
+	metricsRegistry := metrics.NewRegistry(metricsConfig)
 
 	gateway := &P2PGateway{
 		ctx:            ctx,
@@ -239,8 +248,25 @@ func (g *P2PGateway) handleSubmissionMessages(sub *pubsub.Subscription, topicNam
 		})
 
 		// Update metrics
-		g.metricsRegistry.Counter("submissions.received.total").Inc(1)
-		g.metricsRegistry.Counter("submissions.received.bytes").Inc(float64(len(msg.Data)))
+		submissionsCounter := g.metricsRegistry.GetOrCreate(metrics.MetricConfig{
+			Name:   "submissions.received.total",
+			Type:   metrics.MetricTypeCounter,
+			Help:   "Total submissions received",
+			Labels: metrics.Labels{},
+		})
+		if counter, ok := submissionsCounter.(*metrics.Counter); ok {
+			counter.Inc()
+		}
+
+		bytesCounter := g.metricsRegistry.GetOrCreate(metrics.MetricConfig{
+			Name:   "submissions.received.bytes",
+			Type:   metrics.MetricTypeCounter,
+			Help:   "Total bytes received",
+			Labels: metrics.Labels{},
+		})
+		if counter, ok := bytesCounter.(*metrics.Counter); ok {
+			counter.Add(float64(len(msg.Data)))
+		}
 
 		// Route to Redis for dequeuer processing (namespaced by protocol:market)
 		queueKey := g.keyBuilder.SubmissionQueue()
@@ -248,10 +274,26 @@ func (g *P2PGateway) handleSubmissionMessages(sub *pubsub.Subscription, topicNam
 
 		if err := g.redisClient.LPush(g.ctx, queueKey, msg.Data).Err(); err != nil {
 			log.WithError(err).Error("Failed to push submission to Redis")
-			g.metricsRegistry.Counter("submissions.routing.failed").Inc(1)
+			failedCounter := g.metricsRegistry.GetOrCreate(metrics.MetricConfig{
+				Name:   "submissions.routing.failed",
+				Type:   metrics.MetricTypeCounter,
+				Help:   "Failed routing attempts",
+				Labels: metrics.Labels{},
+			})
+			if counter, ok := failedCounter.(*metrics.Counter); ok {
+				counter.Inc()
+			}
 		} else {
 			log.Infof("✅ P2P Gateway: Routed %s to Redis queue", topicLabel)
-			g.metricsRegistry.Counter("submissions.routing.success").Inc(1)
+			successCounter := g.metricsRegistry.GetOrCreate(metrics.MetricConfig{
+				Name:   "submissions.routing.success",
+				Type:   metrics.MetricTypeCounter,
+				Help:   "Successful routing attempts",
+				Labels: metrics.Labels{},
+			})
+			if counter, ok := successCounter.(*metrics.Counter); ok {
+				counter.Inc()
+			}
 
 			// Emit queue depth change event
 			queuePayload, _ := json.Marshal(map[string]interface{}{
@@ -328,17 +370,50 @@ func (g *P2PGateway) handleIncomingBatches() {
 		})
 
 		// Update metrics
-		g.metricsRegistry.Counter("batches.received.total").Inc(1)
-		g.metricsRegistry.Counter("batches.received.bytes").Inc(float64(len(msg.Data)))
+		batchesCounter := g.metricsRegistry.GetOrCreate(metrics.MetricConfig{
+			Name:   "batches.received.total",
+			Type:   metrics.MetricTypeCounter,
+			Help:   "Total batches received",
+			Labels: metrics.Labels{},
+		})
+		if counter, ok := batchesCounter.(*metrics.Counter); ok {
+			counter.Inc()
+		}
+
+		batchBytesCounter := g.metricsRegistry.GetOrCreate(metrics.MetricConfig{
+			Name:   "batches.received.bytes",
+			Type:   metrics.MetricTypeCounter,
+			Help:   "Total batch bytes received",
+			Labels: metrics.Labels{},
+		})
+		if counter, ok := batchBytesCounter.(*metrics.Counter); ok {
+			counter.Add(float64(len(msg.Data)))
+		}
 
 		// Route to Redis for aggregator processing (namespaced by protocol:market)
 		// Include validator ID in the key so we can track who sent what
 		key := g.keyBuilder.IncomingBatch(fmt.Sprintf("%v", epochID), validatorID)
 		if err := g.redisClient.Set(g.ctx, key, msg.Data, 30*time.Minute).Err(); err != nil {
 			log.WithError(err).Error("Failed to store incoming batch")
-			g.metricsRegistry.Counter("batches.storage.failed").Inc(1)
+			storageFailedCounter := g.metricsRegistry.GetOrCreate(metrics.MetricConfig{
+				Name:   "batches.storage.failed",
+				Type:   metrics.MetricTypeCounter,
+				Help:   "Failed batch storage attempts",
+				Labels: metrics.Labels{},
+			})
+			if counter, ok := storageFailedCounter.(*metrics.Counter); ok {
+				counter.Inc()
+			}
 		} else {
-			g.metricsRegistry.Counter("batches.storage.success").Inc(1)
+			storageSuccessCounter := g.metricsRegistry.GetOrCreate(metrics.MetricConfig{
+				Name:   "batches.storage.success",
+				Type:   metrics.MetricTypeCounter,
+				Help:   "Successful batch storage",
+				Labels: metrics.Labels{},
+			})
+			if counter, ok := storageSuccessCounter.(*metrics.Counter); ok {
+				counter.Inc()
+			}
 			// Check if epoch is already aggregated before queueing (namespaced)
 			aggregatedKey := g.keyBuilder.BatchAggregated(fmt.Sprintf("%v", epochID))
 			exists, _ := g.redisClient.Exists(g.ctx, aggregatedKey).Result()
