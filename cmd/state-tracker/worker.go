@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -79,20 +80,45 @@ func (sw *StateWorker) StartStateChangeListener(ctx context.Context) {
 				continue
 			}
 
-			// Parse event
-			var event StateChangeEvent
-			if err := json.Unmarshal([]byte(msg.Payload), &event); err != nil {
-				log.WithError(err).Debug("Failed to parse state change event")
+			// Parse simple event format: "type:action:id"
+			// e.g., "submission:received:123", "epoch:open:456"
+			parts := strings.Split(msg.Payload, ":")
+			if len(parts) < 2 {
+				log.WithField("payload", msg.Payload).Debug("Invalid state change format")
 				continue
 			}
 
-			// Update counters based on event type
-			sw.processStateChange(&event)
+			eventType := parts[0]
+			sw.processSimpleStateChange(eventType)
 		}
 	}
 }
 
-// processStateChange updates in-memory counters based on state change
+// processSimpleStateChange updates counters from simple event format
+func (sw *StateWorker) processSimpleStateChange(eventType string) {
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+
+	switch eventType {
+	case "submission":
+		sw.submissions++
+		stateChangesProcessed.WithLabelValues("submission").Inc()
+	case "validation":
+		sw.validations++
+		stateChangesProcessed.WithLabelValues("validation").Inc()
+	case "epoch":
+		sw.epochs++
+		stateChangesProcessed.WithLabelValues("epoch").Inc()
+	case "batch":
+		sw.batches++
+		stateChangesProcessed.WithLabelValues("batch").Inc()
+	case "part":
+		// Parts are tracked but don't have separate counter
+		stateChangesProcessed.WithLabelValues("part").Inc()
+	}
+}
+
+// processStateChange updates in-memory counters based on state change (legacy)
 func (sw *StateWorker) processStateChange(event *StateChangeEvent) {
 	sw.mu.Lock()
 	defer sw.mu.Unlock()
