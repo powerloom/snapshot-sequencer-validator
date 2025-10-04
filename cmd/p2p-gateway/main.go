@@ -414,6 +414,15 @@ func (g *P2PGateway) handleIncomingBatches() {
 			if counter, ok := storageSuccessCounter.(*metrics.Counter); ok {
 				counter.Inc()
 			}
+
+			// Track validator batch activity for monitoring
+			validatorBatchesKey := fmt.Sprintf("metrics:validator:%s:batches", validatorID)
+			timestamp := time.Now().Unix()
+			g.redisClient.ZAdd(g.ctx, validatorBatchesKey, &redis.Z{
+				Score:  float64(timestamp),
+				Member: epochID,
+			})
+
 			// Check if epoch is already aggregated before queueing (namespaced)
 			aggregatedKey := g.keyBuilder.BatchAggregated(fmt.Sprintf("%v", epochID))
 			exists, _ := g.redisClient.Exists(g.ctx, aggregatedKey).Result()

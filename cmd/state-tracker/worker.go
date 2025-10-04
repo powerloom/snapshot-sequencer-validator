@@ -87,13 +87,17 @@ func (sw *StateWorker) StartStateChangeListener(ctx context.Context) {
 			}
 
 			eventType := parts[0]
-			sw.processSimpleStateChange(eventType)
+			action := ""
+			if len(parts) > 1 {
+				action = parts[1]
+			}
+			sw.processSimpleStateChange(eventType, action)
 		}
 	}
 }
 
 // processSimpleStateChange updates counters from simple event format
-func (sw *StateWorker) processSimpleStateChange(eventType string) {
+func (sw *StateWorker) processSimpleStateChange(eventType string, action string) {
 	sw.mu.Lock()
 	defer sw.mu.Unlock()
 
@@ -107,9 +111,12 @@ func (sw *StateWorker) processSimpleStateChange(eventType string) {
 		stateChangesProcessed.WithLabelValues("validation").Inc()
 		log.WithField("type", eventType).Debug("Received state change event")
 	case "epoch":
-		sw.epochs++
-		stateChangesProcessed.WithLabelValues("epoch").Inc()
-		log.WithField("type", eventType).Debug("Received state change event")
+		// Only count epoch opens (ignore closes to avoid double-counting)
+		if action == "open" {
+			sw.epochs++
+			stateChangesProcessed.WithLabelValues("epoch").Inc()
+			log.WithField("type", eventType).WithField("action", action).Debug("Received state change event")
+		}
 	case "batch":
 		sw.batches++
 		stateChangesProcessed.WithLabelValues("batch").Inc()
@@ -194,28 +201,43 @@ func (sw *StateWorker) aggregateCurrentMetrics(ctx context.Context) {
 
 	sw.mu.RUnlock()
 
-	// Count active validators by scanning metrics:validator:*:batches keys
-	// Find validators with activity in last 5 minutes
-	activeCount := 0
+	// Count active validators using two-level reference (no SCAN)
+	// 1. Get recent batches from timeline
+	// 2. Read validator lists from each batch
+	activeValidators := make(map[string]bool)
 	fiveMinutesAgo := time.Now().Add(-5 * time.Minute).Unix()
 
-	var cursor uint64
-	for {
-		keys, nextCursor, _ := sw.redis.Scan(ctx, cursor, "metrics:validator:*:batches", 100).Result()
-		for _, key := range keys {
-			// Check if validator has recent batches
-			count, _ := sw.redis.ZCount(ctx, key,
-				strconv.FormatInt(fiveMinutesAgo, 10),
-				"+inf").Result()
-			if count > 0 {
-				activeCount++
+	// Get recent batch epochs from timeline
+	recentBatches, _ := sw.redis.ZRangeByScore(ctx, "metrics:batches:timeline", &redis.ZRangeBy{
+		Min: strconv.FormatInt(fiveMinutesAgo, 10),
+		Max: "+inf",
+	}).Result()
+
+	// For each recent batch, get its validator list
+	for _, batchEntry := range recentBatches {
+		// Entry format: "aggregated:{epoch}" or "local:{epoch}"
+		parts := strings.Split(batchEntry, ":")
+		if len(parts) < 2 {
+			continue
+		}
+		epochID := parts[1]
+
+		// Check aggregated batch first (has full validator list)
+		validatorsKey := fmt.Sprintf("metrics:batch:%s:validators", epochID)
+		validatorList, err := sw.redis.Get(ctx, validatorsKey).Result()
+		if err == nil && validatorList != "" {
+			// Parse validator list (comma-separated or JSON array)
+			validators := strings.Split(validatorList, ",")
+			for _, v := range validators {
+				v = strings.TrimSpace(v)
+				if v != "" {
+					activeValidators[v] = true
+				}
 			}
 		}
-		cursor = nextCursor
-		if cursor == 0 {
-			break
-		}
 	}
+
+	activeCount := len(activeValidators)
 
 	// Prepare summary data
 	summary := map[string]interface{}{
@@ -336,24 +358,33 @@ func (sw *StateWorker) aggregateHourPeriod(ctx context.Context, hourStart, hourE
 		strconv.FormatInt(startTS, 10),
 		strconv.FormatInt(endTS, 10)).Result()
 
-	// Count unique validators with activity in this hour
-	uniqueValidators := 0
-	var cursor uint64
-	for {
-		keys, nextCursor, _ := sw.redis.Scan(ctx, cursor, "metrics:validator:*:batches", 100).Result()
-		for _, key := range keys {
-			count, _ := sw.redis.ZCount(ctx, key,
-				strconv.FormatInt(startTS, 10),
-				strconv.FormatInt(endTS, 10)).Result()
-			if count > 0 {
-				uniqueValidators++
+	// Count unique validators using two-level reference (no SCAN)
+	uniqueValidatorsMap := make(map[string]bool)
+	hourBatches, _ := sw.redis.ZRangeByScore(ctx, "metrics:batches:timeline", &redis.ZRangeBy{
+		Min: strconv.FormatInt(startTS, 10),
+		Max: strconv.FormatInt(endTS, 10),
+	}).Result()
+
+	for _, batchEntry := range hourBatches {
+		parts := strings.Split(batchEntry, ":")
+		if len(parts) < 2 {
+			continue
+		}
+		epochID := parts[1]
+
+		validatorsKey := fmt.Sprintf("metrics:batch:%s:validators", epochID)
+		validatorList, err := sw.redis.Get(ctx, validatorsKey).Result()
+		if err == nil && validatorList != "" {
+			validators := strings.Split(validatorList, ",")
+			for _, v := range validators {
+				v = strings.TrimSpace(v)
+				if v != "" {
+					uniqueValidatorsMap[v] = true
+				}
 			}
 		}
-		cursor = nextCursor
-		if cursor == 0 {
-			break
-		}
 	}
+	uniqueValidators := len(uniqueValidatorsMap)
 
 	hourStats := map[string]interface{}{
 		"hour_start":        hourStart.Format(time.RFC3339),
@@ -500,6 +531,7 @@ func (sw *StateWorker) StartPruningWorker(ctx context.Context) {
 func (sw *StateWorker) pruneOldData(ctx context.Context) {
 	cutoff := time.Now().Add(-24 * time.Hour).Unix()
 
+	// Only prune main timeline sorted sets (no per-validator keys needed)
 	timelines := []string{
 		"metrics:submissions:timeline",
 		"metrics:validations:timeline",
@@ -518,26 +550,6 @@ func (sw *StateWorker) pruneOldData(ctx context.Context) {
 			continue
 		}
 		totalRemoved += removed
-	}
-
-	// Also prune validator-specific sorted sets
-	var cursor uint64
-	for {
-		keys, nextCursor, _ := sw.redis.Scan(ctx, cursor, "metrics:validator:*:batches", 100).Result()
-		for _, key := range keys {
-			removed, err := sw.redis.ZRemRangeByScore(ctx, key,
-				"-inf",
-				strconv.FormatInt(cutoff, 10)).Result()
-			if err != nil {
-				log.WithError(err).WithField("key", key).Error("Failed to prune validator data")
-				continue
-			}
-			totalRemoved += removed
-		}
-		cursor = nextCursor
-		if cursor == 0 {
-			break
-		}
 	}
 
 	if totalRemoved > 0 {
