@@ -5,9 +5,9 @@ services:
       - REDIS_PORT=${REDIS_PORT:-6379}
     volumes:
       - redis-data:/data
-    command: sh -c 'redis-server --port $${REDIS_PORT} --appendonly yes --maxmemory 2gb'
+    command: sh -c 'redis-server --port ${REDIS_PORT} --appendonly yes --maxmemory 2gb'
     healthcheck:
-      test: ["CMD", "sh", "-c", "redis-cli -p $${REDIS_PORT} ping"]
+      test: ["CMD", "sh", "-c", "redis-cli -p ${REDIS_PORT} ping"]
       interval: 5s
       timeout: 3s
       retries: 5

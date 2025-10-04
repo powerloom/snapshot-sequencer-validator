@@ -1,7 +1,0 @@
-# Debug override - exposes Redis port for monitoring
-# Usage: docker-compose -f docker-compose.snapshot-sequencer.yml -f docker-compose.debug.yml up
-
-services:
-  redis:
-    ports:
-      - "${REDIS_PORT:-6379}:6379"  # Expose Redis for debugging/monitoring

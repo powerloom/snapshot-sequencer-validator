@@ -9,7 +9,7 @@ services:
     container_name: dsv-event-emitter
     environment:
       - REDIS_HOST=redis
-      - REDIS_PORT=6379
+      - REDIS_PORT=${REDIS_PORT:-6379}
       - REDIS_PASSWORD=
       - REDIS_DB=0
       - PROTOCOL=${PROTOCOL:-aave}
@@ -29,7 +29,7 @@ services:
     container_name: dsv-state-tracker
     environment:
       - REDIS_HOST=redis
-      - REDIS_PORT=6379
+      - REDIS_PORT=${REDIS_PORT:-6379}
       - REDIS_PASSWORD=
       - REDIS_DB=0
       - PROTOCOL=${PROTOCOL:-aave}
@@ -65,7 +65,7 @@ services:
     container_name: dsv-metrics-server
     environment:
       - REDIS_HOST=redis
-      - REDIS_PORT=6379
+      - REDIS_PORT=${REDIS_PORT:-6379}
       - REDIS_PASSWORD=
       - REDIS_DB=0
       - PROTOCOL=${PROTOCOL:-aave}
@@ -96,7 +96,7 @@ services:
     image: redis:7-alpine
     container_name: dsv-redis-monitoring
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:${REDIS_PORT:-6379}"
     volumes:
       - redis-monitoring-data:/data
     networks:
