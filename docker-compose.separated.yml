@@ -222,7 +222,7 @@ services:
       - PROTOCOL=${PROTOCOL:-aave}
       - MARKET=${MARKET:-mainnet}
       - STATE_TRACKER_RETENTION_DAYS=7
-      - LOG_LEVEL=info
+      - LOG_LEVEL=${LOG_LEVEL:-info}
     depends_on:
       redis:
         condition: service_healthy

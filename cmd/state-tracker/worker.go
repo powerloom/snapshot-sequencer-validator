@@ -103,18 +103,25 @@ func (sw *StateWorker) processSimpleStateChange(eventType string) {
 	case "submission":
 		sw.submissions++
 		stateChangesProcessed.WithLabelValues("submission").Inc()
+		log.WithField("type", eventType).Debug("Received state change event")
 	case "validation":
 		sw.validations++
 		stateChangesProcessed.WithLabelValues("validation").Inc()
+		log.WithField("type", eventType).Debug("Received state change event")
 	case "epoch":
 		sw.epochs++
 		stateChangesProcessed.WithLabelValues("epoch").Inc()
+		log.WithField("type", eventType).Debug("Received state change event")
 	case "batch":
 		sw.batches++
 		stateChangesProcessed.WithLabelValues("batch").Inc()
+		log.WithField("type", eventType).Debug("Received state change event")
 	case "part":
 		// Parts are tracked but don't have separate counter
 		stateChangesProcessed.WithLabelValues("part").Inc()
+		log.WithField("type", eventType).Debug("Received state change event")
+	default:
+		log.WithField("type", eventType).Debug("Unknown event type received")
 	}
 }
 
