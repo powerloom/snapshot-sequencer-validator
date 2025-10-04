@@ -215,7 +215,7 @@ services:
   state-tracker:
     build:
       context: .
-      dockerfile: cmd/state-tracker/Dockerfile
+      dockerfile: Dockerfile.state-tracker
     container_name: dsv-state-tracker
     environment:
       - REDIS_HOST=redis
