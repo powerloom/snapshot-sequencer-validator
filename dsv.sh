@@ -86,12 +86,6 @@ start_services() {
         exit 1
     fi
 
-    # Ensure the shared network exists
-    if ! docker network ls --format '{{.Name}}' | grep -q '^dsv-shared-network$'; then
-        print_color "$CYAN" "Creating shared network dsv-shared-network..."
-        docker network create dsv-shared-network
-    fi
-
     # Check environment
     if [ ! -f .env ]; then
         print_color "$YELLOW" "Warning: .env file not found. Using defaults."
