@@ -154,12 +154,6 @@ func (sw *StateWorker) processStateChange(event *StateChangeEvent) {
 		stateChangesProcessed.WithLabelValues("validator").Inc()
 	}
 
-	// Store event in timeline sorted set (for recent activity)
-	timelineKey := fmt.Sprintf("timeline:%s", event.Type)
-	sw.redis.ZAdd(context.Background(), timelineKey, &redis.Z{
-		Score:  float64(event.Timestamp),
-		Member: event.EntityID,
-	})
 
 	log.WithFields(logrus.Fields{
 		"type":      event.Type,
@@ -238,18 +232,18 @@ func (sw *StateWorker) aggregateCurrentMetrics(ctx context.Context) {
 	fiveMinutesAgo := now - 300
 
 	// Count recent submissions
-	recentSubmissions, _ := sw.redis.ZCount(ctx, "timeline:submission",
+	recentSubmissions, _ := sw.redis.ZCount(ctx, "metrics:submissions:timeline",
 		strconv.FormatInt(oneMinuteAgo, 10),
 		strconv.FormatInt(now, 10)).Result()
 	summary["submissions_1m"] = recentSubmissions
 
-	recentSubmissions5m, _ := sw.redis.ZCount(ctx, "timeline:submission",
+	recentSubmissions5m, _ := sw.redis.ZCount(ctx, "metrics:submissions:timeline",
 		strconv.FormatInt(fiveMinutesAgo, 10),
 		strconv.FormatInt(now, 10)).Result()
 	summary["submissions_5m"] = recentSubmissions5m
 
 	// Count recent epochs
-	recentEpochs, _ := sw.redis.ZCount(ctx, "timeline:epoch",
+	recentEpochs, _ := sw.redis.ZCount(ctx, "metrics:epochs:timeline",
 		strconv.FormatInt(oneMinuteAgo, 10),
 		strconv.FormatInt(now, 10)).Result()
 	summary["epochs_1m"] = recentEpochs
@@ -320,19 +314,19 @@ func (sw *StateWorker) aggregateHourPeriod(ctx context.Context, hourStart, hourE
 	endTS := hourEnd.Unix()
 
 	// Count events in this hour
-	submissions, _ := sw.redis.ZCount(ctx, "timeline:submission",
+	submissions, _ := sw.redis.ZCount(ctx, "metrics:submissions:timeline",
 		strconv.FormatInt(startTS, 10),
 		strconv.FormatInt(endTS, 10)).Result()
 
-	validations, _ := sw.redis.ZCount(ctx, "timeline:validation",
+	validations, _ := sw.redis.ZCount(ctx, "metrics:validations:timeline",
 		strconv.FormatInt(startTS, 10),
 		strconv.FormatInt(endTS, 10)).Result()
 
-	epochs, _ := sw.redis.ZCount(ctx, "timeline:epoch",
+	epochs, _ := sw.redis.ZCount(ctx, "metrics:epochs:timeline",
 		strconv.FormatInt(startTS, 10),
 		strconv.FormatInt(endTS, 10)).Result()
 
-	batches, _ := sw.redis.ZCount(ctx, "timeline:batch",
+	batches, _ := sw.redis.ZCount(ctx, "metrics:batches:timeline",
 		strconv.FormatInt(startTS, 10),
 		strconv.FormatInt(endTS, 10)).Result()
 
@@ -402,19 +396,19 @@ func (sw *StateWorker) aggregateDailyStats(ctx context.Context) {
 	endTS := now.Unix()
 
 	// Count events in last 24 hours
-	submissions, _ := sw.redis.ZCount(ctx, "timeline:submission",
+	submissions, _ := sw.redis.ZCount(ctx, "metrics:submissions:timeline",
 		strconv.FormatInt(startTS, 10),
 		strconv.FormatInt(endTS, 10)).Result()
 
-	validations, _ := sw.redis.ZCount(ctx, "timeline:validation",
+	validations, _ := sw.redis.ZCount(ctx, "metrics:validations:timeline",
 		strconv.FormatInt(startTS, 10),
 		strconv.FormatInt(endTS, 10)).Result()
 
-	epochs, _ := sw.redis.ZCount(ctx, "timeline:epoch",
+	epochs, _ := sw.redis.ZCount(ctx, "metrics:epochs:timeline",
 		strconv.FormatInt(startTS, 10),
 		strconv.FormatInt(endTS, 10)).Result()
 
-	batches, _ := sw.redis.ZCount(ctx, "timeline:batch",
+	batches, _ := sw.redis.ZCount(ctx, "metrics:batches:timeline",
 		strconv.FormatInt(startTS, 10),
 		strconv.FormatInt(endTS, 10)).Result()
 
@@ -424,11 +418,11 @@ func (sw *StateWorker) aggregateDailyStats(ctx context.Context) {
 		hourStart := dayAgo.Add(time.Duration(i) * time.Hour)
 		hourEnd := hourStart.Add(time.Hour)
 
-		hourSubmissions, _ := sw.redis.ZCount(ctx, "timeline:submission",
+		hourSubmissions, _ := sw.redis.ZCount(ctx, "metrics:submissions:timeline",
 			strconv.FormatInt(hourStart.Unix(), 10),
 			strconv.FormatInt(hourEnd.Unix(), 10)).Result()
 
-		hourEpochs, _ := sw.redis.ZCount(ctx, "timeline:epoch",
+		hourEpochs, _ := sw.redis.ZCount(ctx, "metrics:epochs:timeline",
 			strconv.FormatInt(hourStart.Unix(), 10),
 			strconv.FormatInt(hourEnd.Unix(), 10)).Result()
 
@@ -488,10 +482,10 @@ func (sw *StateWorker) pruneOldData(ctx context.Context) {
 	cutoff := time.Now().Add(-24 * time.Hour).Unix()
 
 	timelines := []string{
-		"timeline:submission",
-		"timeline:validation",
-		"timeline:epoch",
-		"timeline:batch",
+		"metrics:submissions:timeline",
+		"metrics:validations:timeline",
+		"metrics:epochs:timeline",
+		"metrics:batches:timeline",
 		"timeline:validator_active",
 	}
 

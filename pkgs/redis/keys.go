@@ -182,6 +182,31 @@ func MetricsTotalProcessed() string {
 	return "metrics:total_processed"
 }
 
+// MetricsSubmissionsTimeline returns the key for submissions timeline
+func MetricsSubmissionsTimeline() string {
+	return "metrics:submissions:timeline"
+}
+
+// MetricsValidationsTimeline returns the key for validations timeline
+func MetricsValidationsTimeline() string {
+	return "metrics:validations:timeline"
+}
+
+// MetricsEpochsTimeline returns the key for epochs timeline
+func MetricsEpochsTimeline() string {
+	return "metrics:epochs:timeline"
+}
+
+// MetricsBatchesTimeline returns the key for batches timeline
+func MetricsBatchesTimeline() string {
+	return "metrics:batches:timeline"
+}
+
+// MetricsPartsTimeline returns the key for parts timeline
+func MetricsPartsTimeline() string {
+	return "metrics:parts:timeline"
+}
+
 // Legacy/Deprecated Keys (for backward compatibility if needed)
 
 // BatchFinalized returns the legacy key for finalized batch
