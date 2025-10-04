@@ -226,12 +226,13 @@ func (sw *StateWorker) aggregateCurrentMetrics(ctx context.Context) {
 		validatorsKey := fmt.Sprintf("metrics:batch:%s:validators", epochID)
 		validatorList, err := sw.redis.Get(ctx, validatorsKey).Result()
 		if err == nil && validatorList != "" {
-			// Parse validator list (comma-separated or JSON array)
-			validators := strings.Split(validatorList, ",")
-			for _, v := range validators {
-				v = strings.TrimSpace(v)
-				if v != "" {
-					activeValidators[v] = true
+			// Parse validator list (stored as JSON array)
+			var validators []string
+			if err := json.Unmarshal([]byte(validatorList), &validators); err == nil {
+				for _, v := range validators {
+					if v != "" {
+						activeValidators[v] = true
+					}
 				}
 			}
 		}
@@ -375,11 +376,13 @@ func (sw *StateWorker) aggregateHourPeriod(ctx context.Context, hourStart, hourE
 		validatorsKey := fmt.Sprintf("metrics:batch:%s:validators", epochID)
 		validatorList, err := sw.redis.Get(ctx, validatorsKey).Result()
 		if err == nil && validatorList != "" {
-			validators := strings.Split(validatorList, ",")
-			for _, v := range validators {
-				v = strings.TrimSpace(v)
-				if v != "" {
-					uniqueValidatorsMap[v] = true
+			// Parse validator list (stored as JSON array)
+			var validators []string
+			if err := json.Unmarshal([]byte(validatorList), &validators); err == nil {
+				for _, v := range validators {
+					if v != "" {
+						uniqueValidatorsMap[v] = true
+					}
 				}
 			}
 		}
