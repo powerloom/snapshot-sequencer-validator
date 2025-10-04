@@ -740,13 +740,15 @@ func (s *UnifiedSequencer) queueSubmissionFromP2P(data []byte, topic string, pee
 			log.Infof("✅ Queued submission: Epoch=%s, Project=%s from peer %s",
 				epochID, projectID, peerID[:16])
 
-			// Add monitoring metrics
-			submissionID := fmt.Sprintf("%s-%s-%d", epochID, projectID, time.Now().UnixNano())
-			timestamp := time.Now().Unix()
-			hour := time.Now().Format("2006010215") // YYYYMMDDHH format
+			// Skip monitoring for epoch 0 heartbeats (P2P mesh maintenance)
+			if epochID != "0" || (epochID == "0" && projectID != "") {
+				// Add monitoring metrics
+				submissionID := fmt.Sprintf("%s-%s-%d", epochID, projectID, time.Now().UnixNano())
+				timestamp := time.Now().Unix()
+				hour := time.Now().Format("2006010215") // YYYYMMDDHH format
 
-			// Pipeline for monitoring metrics
-			pipe := s.redisClient.Pipeline()
+				// Pipeline for monitoring metrics
+				pipe := s.redisClient.Pipeline()
 
 			// 1. Add to timeline (sorted set, no TTL - pruned daily)
 			pipe.ZAdd(s.ctx, "metrics:submissions:timeline", &redis.Z{
@@ -772,9 +774,10 @@ func (s *UnifiedSequencer) queueSubmissionFromP2P(data []byte, topic string, pee
 			// 4. Publish state change event
 			pipe.Publish(s.ctx, "state:change", fmt.Sprintf("submission:received:%s", submissionID))
 
-			// Execute pipeline (ignore errors - monitoring is non-critical)
-			if _, err := pipe.Exec(s.ctx); err != nil {
-				log.Debugf("Failed to write monitoring metrics: %v", err)
+				// Execute pipeline (ignore errors - monitoring is non-critical)
+				if _, err := pipe.Exec(s.ctx); err != nil {
+					log.Debugf("Failed to write monitoring metrics: %v", err)
+				}
 			}
 
 			// Log current queue depth
