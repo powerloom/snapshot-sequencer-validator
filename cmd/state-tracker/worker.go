@@ -29,7 +29,6 @@ type StateWorker struct {
 	epochs          int64
 	batches         int64
 	lastReset       time.Time
-	activeValidators map[string]time.Time
 
 	// Control
 	shutdown chan struct{}
@@ -51,11 +50,10 @@ func NewStateWorker(redisClient *redis.Client) *StateWorker {
 	keyBuilder := redislib.NewKeyBuilder(protocol, market)
 
 	return &StateWorker{
-		redis:            redisClient,
-		keyBuilder:       keyBuilder,
-		activeValidators: make(map[string]time.Time),
-		lastReset:        time.Now(),
-		shutdown:         make(chan struct{}),
+		redis:      redisClient,
+		keyBuilder: keyBuilder,
+		lastReset:  time.Now(),
+		shutdown:   make(chan struct{}),
 	}
 }
 
@@ -146,12 +144,6 @@ func (sw *StateWorker) processStateChange(event *StateChangeEvent) {
 	case "batch":
 		atomic.AddInt64(&sw.batches, 1)
 		stateChangesProcessed.WithLabelValues("batch").Inc()
-
-	case "validator_active":
-		if validatorID, ok := event.Attributes["validator_id"].(string); ok {
-			sw.activeValidators[validatorID] = time.Now()
-		}
-		stateChangesProcessed.WithLabelValues("validator").Inc()
 	}
 
 
@@ -200,16 +192,30 @@ func (sw *StateWorker) aggregateCurrentMetrics(ctx context.Context) {
 	epochRate := float64(sw.epochs) / duration
 	batchRate := float64(sw.batches) / duration
 
-	// Count active validators (seen in last 5 minutes)
+	sw.mu.RUnlock()
+
+	// Count active validators by scanning metrics:validator:*:batches keys
+	// Find validators with activity in last 5 minutes
 	activeCount := 0
-	cutoff := time.Now().Add(-5 * time.Minute)
-	for _, lastSeen := range sw.activeValidators {
-		if lastSeen.After(cutoff) {
-			activeCount++
+	fiveMinutesAgo := time.Now().Add(-5 * time.Minute).Unix()
+
+	var cursor uint64
+	for {
+		keys, nextCursor, _ := sw.redis.Scan(ctx, cursor, "metrics:validator:*:batches", 100).Result()
+		for _, key := range keys {
+			// Check if validator has recent batches
+			count, _ := sw.redis.ZCount(ctx, key,
+				strconv.FormatInt(fiveMinutesAgo, 10),
+				"+inf").Result()
+			if count > 0 {
+				activeCount++
+			}
+		}
+		cursor = nextCursor
+		if cursor == 0 {
+			break
 		}
 	}
-
-	sw.mu.RUnlock()
 
 	// Prepare summary data
 	summary := map[string]interface{}{
@@ -227,25 +233,25 @@ func (sw *StateWorker) aggregateCurrentMetrics(ctx context.Context) {
 	}
 
 	// Get recent activity counts from timelines
-	now := time.Now().Unix()
-	oneMinuteAgo := now - 60
-	fiveMinutesAgo := now - 300
+	nowTS := time.Now().Unix()
+	oneMinuteAgo := nowTS - 60
+	fiveMinutesAgoTS := nowTS - 300
 
 	// Count recent submissions
 	recentSubmissions, _ := sw.redis.ZCount(ctx, "metrics:submissions:timeline",
 		strconv.FormatInt(oneMinuteAgo, 10),
-		strconv.FormatInt(now, 10)).Result()
+		strconv.FormatInt(nowTS, 10)).Result()
 	summary["submissions_1m"] = recentSubmissions
 
 	recentSubmissions5m, _ := sw.redis.ZCount(ctx, "metrics:submissions:timeline",
-		strconv.FormatInt(fiveMinutesAgo, 10),
-		strconv.FormatInt(now, 10)).Result()
+		strconv.FormatInt(fiveMinutesAgoTS, 10),
+		strconv.FormatInt(nowTS, 10)).Result()
 	summary["submissions_5m"] = recentSubmissions5m
 
 	// Count recent epochs
 	recentEpochs, _ := sw.redis.ZCount(ctx, "metrics:epochs:timeline",
 		strconv.FormatInt(oneMinuteAgo, 10),
-		strconv.FormatInt(now, 10)).Result()
+		strconv.FormatInt(nowTS, 10)).Result()
 	summary["epochs_1m"] = recentEpochs
 
 	// Store summary with TTL
@@ -330,11 +336,24 @@ func (sw *StateWorker) aggregateHourPeriod(ctx context.Context, hourStart, hourE
 		strconv.FormatInt(startTS, 10),
 		strconv.FormatInt(endTS, 10)).Result()
 
-	// Get unique validators in this hour
-	validatorEvents, _ := sw.redis.ZRangeByScore(ctx, "timeline:validator_active", &redis.ZRangeBy{
-		Min: strconv.FormatInt(startTS, 10),
-		Max: strconv.FormatInt(endTS, 10),
-	}).Result()
+	// Count unique validators with activity in this hour
+	uniqueValidators := 0
+	var cursor uint64
+	for {
+		keys, nextCursor, _ := sw.redis.Scan(ctx, cursor, "metrics:validator:*:batches", 100).Result()
+		for _, key := range keys {
+			count, _ := sw.redis.ZCount(ctx, key,
+				strconv.FormatInt(startTS, 10),
+				strconv.FormatInt(endTS, 10)).Result()
+			if count > 0 {
+				uniqueValidators++
+			}
+		}
+		cursor = nextCursor
+		if cursor == 0 {
+			break
+		}
+	}
 
 	hourStats := map[string]interface{}{
 		"hour_start":        hourStart.Format(time.RFC3339),
@@ -343,7 +362,7 @@ func (sw *StateWorker) aggregateHourPeriod(ctx context.Context, hourStart, hourE
 		"validations":       validations,
 		"epochs":            epochs,
 		"batches":           batches,
-		"unique_validators": len(validatorEvents),
+		"unique_validators": uniqueValidators,
 		"updated_at":        time.Now().Unix(),
 	}
 
@@ -486,7 +505,7 @@ func (sw *StateWorker) pruneOldData(ctx context.Context) {
 		"metrics:validations:timeline",
 		"metrics:epochs:timeline",
 		"metrics:batches:timeline",
-		"timeline:validator_active",
+		"metrics:parts:timeline",
 	}
 
 	totalRemoved := int64(0)
@@ -501,6 +520,26 @@ func (sw *StateWorker) pruneOldData(ctx context.Context) {
 		totalRemoved += removed
 	}
 
+	// Also prune validator-specific sorted sets
+	var cursor uint64
+	for {
+		keys, nextCursor, _ := sw.redis.Scan(ctx, cursor, "metrics:validator:*:batches", 100).Result()
+		for _, key := range keys {
+			removed, err := sw.redis.ZRemRangeByScore(ctx, key,
+				"-inf",
+				strconv.FormatInt(cutoff, 10)).Result()
+			if err != nil {
+				log.WithError(err).WithField("key", key).Error("Failed to prune validator data")
+				continue
+			}
+			totalRemoved += removed
+		}
+		cursor = nextCursor
+		if cursor == 0 {
+			break
+		}
+	}
+
 	if totalRemoved > 0 {
 		log.WithField("removed_entries", totalRemoved).Info("Pruned old timeline data")
 	}
@@ -513,14 +552,6 @@ func (sw *StateWorker) pruneOldData(ctx context.Context) {
 		sw.epochs = 0
 		sw.batches = 0
 		sw.lastReset = time.Now()
-
-		// Clean up old validators
-		cutoffTime := time.Now().Add(-5 * time.Minute)
-		for validatorID, lastSeen := range sw.activeValidators {
-			if lastSeen.Before(cutoffTime) {
-				delete(sw.activeValidators, validatorID)
-			}
-		}
 
 		log.Info("Reset in-memory counters after 24 hours")
 	}
