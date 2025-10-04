@@ -233,20 +233,31 @@ consensus:epoch:{epochID}:result                     # Final local consensus det
 epoch:{epochID}:validators                           # Set of validators who submitted batches
 ```
 
-### Submission Tracking (Updated Format)
+### Submission Tracking (Namespaced and Corrected)
 ```
+# Submission Collection
 submissionQueue                                     # Raw P2P submissions
 {protocol}:{market}:processed:{sequencerID}:{id}    # Individual processed submissions (10min TTL)
 {protocol}:{market}:epoch:{epochId}:processed       # Set of submission IDs per epoch (1hr TTL)
-{protocol}:{market}:epoch:{epochId}:project:{pid}:votes # Vote counts per CID
+{protocol}:{market}:epoch:{epochId}:project:{pid}:votes # Vote counts per CID (fixed namespacing)
 
-# New consensus tracking keys
-consensus:{epochId}:total_validators                # Total validators for epoch
-consensus:{epochId}:voting_progress                 # Overall consensus voting status
-consensus:{epochId}:project:{pid}:votes             # Per-project validator votes
-consensus:{epochId}:project:{pid}:cid               # Winning CID for project
-consensus:{epochId}:status                          # Epoch consensus status (pending/complete/failed)
+# New consensus tracking keys with protocol/market context
+{protocol}:{market}:consensus:{epochId}:total_validators    # Total validators for epoch
+{protocol}:{market}:consensus:{epochId}:voting_progress     # Overall consensus voting status
+{protocol}:{market}:consensus:{epochId}:project:{pid}:votes # Per-project validator votes
+{protocol}:{market}:consensus:{epochId}:project:{pid}:cid   # Winning CID for project
+{protocol}:{market}:consensus:{epochId}:status              # Epoch consensus status
+
+# Type-safe performance tracking keys
+{protocol}:{market}:metrics:total_processed         # Total submissions processed per market
+{protocol}:{market}:metrics:processing_rate         # Submissions per minute per market
 ```
+
+**Key Changes**:
+- Added {protocol}:{market} namespacing for all consensus and metric keys
+- Ensured consistent namespacing across submission and consensus tracking
+- Improved type safety for performance metrics
+- Enabled multi-market performance tracking
 
 ### Window Management (Updated Format)
 ```
@@ -276,10 +287,19 @@ worker:aggregator:current_epoch           # Epoch being aggregated
 
 ### Performance Metrics
 ```
-metrics:total_processed                   # Total submissions processed
-metrics:processing_rate                   # Submissions per minute
-metrics:avg_latency                       # Average processing time
+# Namespaced Multi-Market Metrics
+{protocol}:{market}:metrics:total_processed     # Total submissions processed per market/protocol
+{protocol}:{market}:metrics:processing_rate     # Submissions per minute per market/protocol
+{protocol}:{market}:metrics:avg_latency         # Average processing time per market/protocol
+{protocol}:{market}:metrics:validator_count     # Number of active validators per market/protocol
+{protocol}:{market}:metrics:consensus_rate      # Percentage of epochs reaching consensus
 ```
+
+**Performance Tracking Improvements**:
+- Added protocol and market context to all metrics
+- Included validator and consensus performance metrics
+- Enables granular performance analysis across different markets and protocols
+- Facilitates multi-market performance comparison
 
 ## Worker Status Values
 
@@ -447,6 +467,15 @@ SUBMISSION_FORMAT_STRATEGY=single ./dsv.sh distributed
 2. Verify container environment variables
 3. Test with explicit conversion strategy
 4. Monitor metrics and queue processing
+
+**Type Conversion Improvements**:
+- Added helper functions to handle uint64 → float64 JSON unmarshaling
+- Fixed FinalizedBatches endpoint to extract:
+  - Full IPFS CID
+  - ValidatorCount
+  - Complete submission details
+- Consistent type conversion across API endpoints
+- Improved getCurrentEpochInfo to find actual current epoch
 
 **Tip**: Always use the most recent version of launch scripts and monitor containers for the latest conversion utilities.
 

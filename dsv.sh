@@ -44,22 +44,15 @@ show_usage() {
     echo "Usage: $0 <command> [options]"
     echo ""
     echo "Main Commands:"
-    echo "  start         - Start separated architecture (production)"
-    echo "  start-all     - Start main services AND monitoring stack"
-    echo "  stop          - Stop all services"
-    echo "  restart       - Restart all services"
-    echo "  status        - Show service status"
-    echo "  clean         - Stop and remove all containers/volumes"
-    echo ""
-    echo "Monitoring Stack:"
-    echo "  monitor-start - Start monitoring services (State Tracker + Enhanced API)"
-    echo "  monitor-stop  - Stop monitoring services"
-    echo "  monitor-status - Show monitoring services status"
-    echo "  monitor-logs  - Show monitoring services logs"
+    echo "  start [--no-monitor]  - Start services (monitoring enabled by default)"
+    echo "  stop                  - Stop all services"
+    echo "  restart               - Restart all services"
+    echo "  status                - Show service status"
+    echo "  clean                 - Stop and remove all containers/volumes"
     echo ""
     echo "Monitoring:"
     echo "  monitor       - Show pipeline status (legacy)"
-    echo "  dashboard     - Open dashboard in browser (http://localhost:8080/swagger)"
+    echo "  dashboard     - Open dashboard in browser (http://localhost:9091/swagger)"
     echo "  logs          - Show all logs"
     echo "  p2p-logs      - P2P Gateway logs"
     echo "  aggregator-logs - Aggregator logs"
@@ -80,6 +73,12 @@ is_separated_running() {
 
 # Start production (separated) mode
 start_services() {
+    # Check for --no-monitor flag
+    local enable_monitoring=true
+    if [ "${1:-}" = "--no-monitor" ]; then
+        enable_monitoring=false
+    fi
+
     print_color "$GREEN" "🚀 Starting Separated Architecture"
 
     if [ ! -f docker-compose.separated.yml ]; then
@@ -87,12 +86,25 @@ start_services() {
         exit 1
     fi
 
+    # Ensure the shared network exists
+    if ! docker network ls --format '{{.Name}}' | grep -q '^dsv-shared-network$'; then
+        print_color "$CYAN" "Creating shared network dsv-shared-network..."
+        docker network create dsv-shared-network
+    fi
+
     # Check environment
     if [ ! -f .env ]; then
         print_color "$YELLOW" "Warning: .env file not found. Using defaults."
     fi
 
-    $DOCKER_COMPOSE_CMD -f docker-compose.separated.yml up -d --build
+    # Start services with or without monitoring profile
+    if [ "$enable_monitoring" = true ]; then
+        print_color "$CYAN" "Starting with monitoring enabled..."
+        $DOCKER_COMPOSE_CMD -f docker-compose.separated.yml --profile monitoring up -d --build
+    else
+        print_color "$CYAN" "Starting without monitoring (--no-monitor flag used)..."
+        $DOCKER_COMPOSE_CMD -f docker-compose.separated.yml up -d --build
+    fi
 
     if [ $? -eq 0 ]; then
         print_color "$GREEN" "✅ Services started successfully"
@@ -103,9 +115,14 @@ start_services() {
         echo "  • Finalizer (batch creation)"
         echo "  • Dequeuer (submission processing)"
         echo "  • Event Monitor (epoch tracking)"
+        if [ "$enable_monitoring" = true ]; then
+            echo "  • State Tracker (data aggregation)"
+            echo "  • Monitor API (dashboard)"
+        fi
         echo ""
-        echo "Start monitoring: ./dsv.sh monitor-start"
-        echo "View dashboard: ./dsv.sh dashboard"
+        if [ "$enable_monitoring" = true ]; then
+            echo "View dashboard: http://localhost:${MONITOR_API_PORT:-9091}/swagger/index.html"
+        fi
         echo "Logs: ./dsv.sh logs"
     else
         print_color "$RED" "❌ Failed to start services"
@@ -115,26 +132,15 @@ start_services() {
 
 # Stop services
 stop_services() {
-    print_color "$YELLOW" "Stopping services..."
+    print_color "$YELLOW" "Stopping all services..."
     if is_separated_running; then
-        $DOCKER_COMPOSE_CMD -f docker-compose.separated.yml down
+        # Stop all services including monitoring profile
+        $DOCKER_COMPOSE_CMD -f docker-compose.separated.yml --profile monitoring down
     else
         # Try to stop any running containers
         $DOCKER_COMPOSE_CMD down 2>/dev/null || true
     fi
-    print_color "$GREEN" "✓ Services stopped"
-
-    # Ask about monitoring stack
-    if [ -f docker-compose.monitoring.yml ]; then
-        if $DOCKER_COMPOSE_CMD -f docker-compose.monitoring.yml ps --services 2>/dev/null | grep -q monitor-api; then
-            print_color "$YELLOW" "Monitoring stack is running. Stop it too? (y/N)"
-            read -p "" -n 1 -r
-            echo
-            if [[ $REPLY =~ ^[Yy]$ ]]; then
-                stop_monitoring
-            fi
-        fi
-    fi
+    print_color "$GREEN" "✓ All services stopped"
 }
 
 # Show status
@@ -148,80 +154,10 @@ show_status() {
     fi
 }
 
-# Start monitoring stack
-start_monitoring() {
-    print_color "$GREEN" "🔍 Starting Monitoring Stack"
-
-    if [ ! -f docker-compose.monitoring.yml ]; then
-        print_color "$RED" "Error: docker-compose.monitoring.yml not found"
-        exit 1
-    fi
-
-    # Check if main services are running
-    if ! is_separated_running; then
-        print_color "$YELLOW" "Warning: Main DSV services are not running"
-        print_color "$YELLOW" "Start them first with: ./dsv.sh start"
-        echo ""
-    fi
-
-    $DOCKER_COMPOSE_CMD -f docker-compose.monitoring.yml up -d state-tracker monitor-api
-
-    if [ $? -eq 0 ]; then
-        print_color "$GREEN" "✅ Monitoring stack started"
-        echo ""
-        print_color "$CYAN" "Services:"
-        echo "  • State Tracker (tracks epoch/submission/validator states)"
-        echo "  • Enhanced Monitor API (dashboard endpoints)"
-        echo ""
-
-        MONITOR_PORT="${MONITOR_API_PORT:-8080}"
-        echo "Dashboard: http://localhost:${MONITOR_PORT}/swagger/index.html"
-        echo "New endpoints:"
-        echo "  • /api/v1/dashboard/summary - Overall health & performance"
-        echo "  • /api/v1/epochs/timeline - Epoch progression tracking"
-        echo "  • /api/v1/validator/performance - Validator metrics"
-        echo "  • /api/v1/queues/analytics - Queue bottleneck detection"
-        echo "  • /api/v1/network/consensus - Network consensus view"
-    else
-        print_color "$RED" "❌ Failed to start monitoring stack"
-        exit 1
-    fi
-}
-
-# Stop monitoring stack
-stop_monitoring() {
-    print_color "$YELLOW" "Stopping monitoring stack..."
-    if [ -f docker-compose.monitoring.yml ]; then
-        $DOCKER_COMPOSE_CMD -f docker-compose.monitoring.yml down
-        print_color "$GREEN" "✓ Monitoring stack stopped"
-    else
-        print_color "$RED" "Error: docker-compose.monitoring.yml not found"
-    fi
-}
-
-# Show monitoring status
-monitoring_status() {
-    print_color "$BLUE" "Monitoring Stack Status:"
-    echo ""
-    if [ -f docker-compose.monitoring.yml ]; then
-        $DOCKER_COMPOSE_CMD -f docker-compose.monitoring.yml ps
-    else
-        print_color "$RED" "Error: docker-compose.monitoring.yml not found"
-    fi
-}
-
-# Show monitoring logs
-monitoring_logs() {
-    if [ -f docker-compose.monitoring.yml ]; then
-        $DOCKER_COMPOSE_CMD -f docker-compose.monitoring.yml logs -f ${1:+--tail=$1}
-    else
-        print_color "$RED" "Error: docker-compose.monitoring.yml not found"
-    fi
-}
 
 # Open dashboard
 open_dashboard() {
-    MONITOR_PORT="${MONITOR_API_PORT:-8080}"
+    MONITOR_PORT="${MONITOR_API_PORT:-9091}"
     URL="http://localhost:${MONITOR_PORT}/swagger/index.html"
 
     print_color "$CYAN" "Opening dashboard at: $URL"
@@ -374,12 +310,7 @@ show_service_logs() {
 # Main command handler
 case "${1:-}" in
     start|up)
-        start_services
-        ;;
-    start-all)
-        start_services
-        sleep 2  # Give main services time to initialize
-        start_monitoring
+        start_services "$2"
         ;;
     stop|down)
         stop_services
@@ -387,25 +318,13 @@ case "${1:-}" in
     restart)
         stop_services
         sleep 2
-        start_services
+        start_services "$2"
         ;;
     status|ps)
         show_status
         ;;
     monitor)
         monitor_pipeline
-        ;;
-    monitor-start)
-        start_monitoring
-        ;;
-    monitor-stop)
-        stop_monitoring
-        ;;
-    monitor-status)
-        monitoring_status
-        ;;
-    monitor-logs)
-        monitoring_logs "$2"
         ;;
     dashboard)
         open_dashboard

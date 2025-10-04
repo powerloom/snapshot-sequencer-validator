@@ -13,6 +13,7 @@ services:
       retries: 5
     networks:
       - sequencer-net
+      - dsv-shared
 
   # P2P Gateway - Singleton for ALL P2P communication
   p2p-gateway:
@@ -210,30 +211,55 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  # Monitor API - REST API for pipeline monitoring with Swagger UI
+  # State Tracker - Background worker for data aggregation
+  state-tracker:
+    build:
+      context: .
+      dockerfile: cmd/state-tracker/Dockerfile
+    container_name: dsv-state-tracker
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_PASSWORD=
+      - REDIS_DB=0
+      - PROTOCOL=${PROTOCOL:-aave}
+      - MARKET=${MARKET:-mainnet}
+      - STATE_TRACKER_RETENTION_DAYS=7
+      - LOG_LEVEL=info
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - dsv-shared
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+  # Monitor API - REST API for pipeline monitoring
   monitor-api:
     build:
       context: .
       dockerfile: docker/Dockerfile.monitor-api
+    container_name: dsv-monitor-api
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=${REDIS_PORT:-6379}
-      - PROTOCOL=${PROTOCOL:-uniswapv2}
-      - MARKET=${DATA_MARKET_ADDRESSES}
-      - MONITOR_API_PORT=${MONITOR_API_PORT:-8080}
+      - REDIS_DB=${REDIS_DB:-0}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - MONITOR_API_PORT=${MONITOR_API_PORT:-9091}
+      - VALIDATOR_ID=${SEQUENCER_ID:-validator-001}
+      - PROTOCOL=${PROTOCOL:-aave}
+      - MARKET=${MARKET:-mainnet}
+    ports:
+      - "${MONITOR_API_PORT:-9091}:${MONITOR_API_PORT:-9091}"
     depends_on:
       redis:
         condition: service_healthy
-    ports:
-      - "${MONITOR_API_PORT:-8080}:${MONITOR_API_PORT:-8080}"
     networks:
-      - sequencer-net
+      - dsv-shared
     restart: unless-stopped
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
+    profiles:
+      - monitoring
 
   # Optional: Monitoring with Prometheus + Grafana
   prometheus:
@@ -274,3 +300,6 @@ volumes:
 networks:
   sequencer-net:
     driver: bridge
+  dsv-shared:
+    external: true
+    name: dsv-shared-network

@@ -740,6 +740,43 @@ func (s *UnifiedSequencer) queueSubmissionFromP2P(data []byte, topic string, pee
 			log.Infof("✅ Queued submission: Epoch=%s, Project=%s from peer %s",
 				epochID, projectID, peerID[:16])
 
+			// Add monitoring metrics
+			submissionID := fmt.Sprintf("%s-%s-%d", epochID, projectID, time.Now().UnixNano())
+			timestamp := time.Now().Unix()
+			hour := time.Now().Format("2006010215") // YYYYMMDDHH format
+
+			// Pipeline for monitoring metrics
+			pipe := s.redisClient.Pipeline()
+
+			// 1. Add to timeline (sorted set, no TTL - pruned daily)
+			pipe.ZAdd(s.ctx, "metrics:submissions:timeline", &redis.Z{
+				Score:  float64(timestamp),
+				Member: submissionID,
+			})
+
+			// 2. Store submission details with TTL (1 hour)
+			submissionData := map[string]interface{}{
+				"epoch_id":    epochID,
+				"project_id":  projectID,
+				"peer_id":     peerID[:16],
+				"timestamp":   timestamp,
+				"data_market": s.config.DataMarketAddresses[0],
+			}
+			jsonData, _ := json.Marshal(submissionData)
+			pipe.SetEX(s.ctx, fmt.Sprintf("metrics:submission:%s", submissionID), string(jsonData), time.Hour)
+
+			// 3. Update hourly counter
+			pipe.HIncrBy(s.ctx, fmt.Sprintf("metrics:hourly:%s:submissions", hour), "total", 1)
+			pipe.Expire(s.ctx, fmt.Sprintf("metrics:hourly:%s:submissions", hour), 2*time.Hour)
+
+			// 4. Publish state change event
+			pipe.Publish(s.ctx, "state:change", fmt.Sprintf("submission:received:%s", submissionID))
+
+			// Execute pipeline (ignore errors - monitoring is non-critical)
+			if _, err := pipe.Exec(s.ctx); err != nil {
+				log.Debugf("Failed to write monitoring metrics: %v", err)
+			}
+
 			// Log current queue depth
 			submissionQueueKey := s.keyBuilder.SubmissionQueue()
 			if length, err := s.redisClient.LLen(s.ctx, submissionQueueKey).Result(); err == nil {
@@ -1069,6 +1106,45 @@ func (s *UnifiedSequencer) processBatchPart(epochID uint64, batchID int, totalBa
 
 	// Mark batch part as completed
 	workers.TrackBatchPart(s.redisClient, epochStr, batchID, "completed")
+
+	// Add monitoring metrics for part creation
+	timestamp := time.Now().Unix()
+	partID := fmt.Sprintf("%d:%d", epochID, batchID)
+
+	// Pipeline for monitoring metrics
+	pipe := s.redisClient.Pipeline()
+
+	// 1. Increment epoch parts counter with TTL
+	epochPartsKey := fmt.Sprintf("metrics:epoch:%d:parts", epochID)
+	pipe.HIncrBy(ctx, epochPartsKey, "count", 1)
+	pipe.Expire(ctx, epochPartsKey, 2*time.Hour)
+
+	// 2. Store part details with TTL
+	partMetricsKey := fmt.Sprintf("metrics:part:%s", partID)
+	partMetricsData := map[string]interface{}{
+		"epoch_id":       epochID,
+		"batch_id":       batchID,
+		"total_batches":  totalBatches,
+		"project_count":  len(projects),
+		"finalizer_id":   s.config.SequencerID,
+		"timestamp":      timestamp,
+	}
+	jsonData, _ := json.Marshal(partMetricsData)
+	pipe.SetEX(ctx, partMetricsKey, string(jsonData), time.Hour)
+
+	// 3. Add to parts timeline
+	pipe.ZAdd(ctx, "metrics:parts:timeline", &redis.Z{
+		Score:  float64(timestamp),
+		Member: partID,
+	})
+
+	// 4. Publish state change
+	pipe.Publish(ctx, "state:change", fmt.Sprintf("part:created:%s", partID))
+
+	// Execute pipeline (ignore errors - monitoring is non-critical)
+	if _, err := pipe.Exec(ctx); err != nil {
+		log.Debugf("Failed to write monitoring metrics: %v", err)
+	}
 
 	// Update progress tracking using keyBuilder
 	completedKey := s.keyBuilder.EpochPartsCompleted(fmt.Sprintf("%d", epochID))

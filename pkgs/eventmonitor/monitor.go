@@ -459,7 +459,38 @@ func (wm *WindowManager) StartSubmissionWindow(ctx context.Context, dataMarket s
 	
 	log.Infof("⏰ Submission window opened for epoch %s in market %s (duration: %v, active: %d)",
 		epochID, dataMarket, duration, activeCount)
-	
+
+	// Add monitoring metrics for window open
+	timestamp := time.Now().Unix()
+
+	// Pipeline for monitoring metrics
+	pipe := wm.redisClient.Pipeline()
+
+	// 1. Add to epochs timeline
+	pipe.ZAdd(context.Background(), "metrics:epochs:timeline", &redis.Z{
+		Score:  float64(timestamp),
+		Member: fmt.Sprintf("open:%s", epochID.String()),
+	})
+
+	// 2. Store epoch info with TTL
+	epochInfoKey := fmt.Sprintf("metrics:epoch:%s:info", epochID.String())
+	pipe.HSet(context.Background(), epochInfoKey, map[string]interface{}{
+		"status":      "open",
+		"start":       timestamp,
+		"data_market": dataMarket,
+		"duration":    duration.Seconds(),
+		"start_block": startBlock,
+	})
+	pipe.Expire(context.Background(), epochInfoKey, 2*time.Hour)
+
+	// 3. Publish state change
+	pipe.Publish(context.Background(), "state:change", fmt.Sprintf("epoch:open:%s", epochID.String()))
+
+	// Execute pipeline
+	if _, err := pipe.Exec(context.Background()); err != nil {
+		log.Debugf("Failed to write monitoring metrics: %v", err)
+	}
+
 	return nil
 }
 
@@ -495,6 +526,33 @@ func (wm *WindowManager) closeWindow(dataMarket string, epochID *big.Int) {
 	
 	log.Infof("⏱️ Submission window closed for epoch %s in market %s (remaining: %d)",
 		epochID, dataMarket, activeCount)
+
+	// Add monitoring metrics for window close
+	timestamp := time.Now().Unix()
+
+	// Pipeline for monitoring metrics
+	pipe := wm.redisClient.Pipeline()
+
+	// 1. Add to epochs timeline
+	pipe.ZAdd(context.Background(), "metrics:epochs:timeline", &redis.Z{
+		Score:  float64(timestamp),
+		Member: fmt.Sprintf("close:%s", epochID.String()),
+	})
+
+	// 2. Update epoch info (already has TTL from open)
+	epochInfoKey := fmt.Sprintf("metrics:epoch:%s:info", epochID.String())
+	pipe.HSet(context.Background(), epochInfoKey, map[string]interface{}{
+		"status": "closed",
+		"end":    timestamp,
+	})
+
+	// 3. Publish state change
+	pipe.Publish(context.Background(), "state:change", fmt.Sprintf("epoch:closed:%s", epochID.String()))
+
+	// Execute pipeline
+	if _, err := pipe.Exec(context.Background()); err != nil {
+		log.Debugf("Failed to write monitoring metrics: %v", err)
+	}
 }
 
 func (wm *WindowManager) triggerFinalization(dataMarket string, epochID *big.Int, startBlock uint64) {

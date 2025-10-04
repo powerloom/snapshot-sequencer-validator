@@ -7,11 +7,9 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/go-redis/redis/v8"
 	"github.com/powerloom/snapshot-sequencer-validator/config"
-	"github.com/powerloom/snapshot-sequencer-validator/pkgs/rpcmetrics"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sirupsen/logrus"
@@ -22,36 +20,36 @@ var (
 	log = logrus.New()
 
 	// Prometheus metrics
-	stateTransitions = prometheus.NewCounterVec(
+	stateChangesProcessed = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "state_tracker_transitions_total",
-			Help: "Total number of state transitions",
-		},
-		[]string{"entity_type", "from_state", "to_state"},
-	)
-
-	activeEntities = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Name: "state_tracker_active_entities",
-			Help: "Number of active entities by type",
+			Name: "state_tracker_changes_processed_total",
+			Help: "Total number of state changes processed",
 		},
 		[]string{"entity_type"},
 	)
 
-	stateQueryDuration = prometheus.NewHistogramVec(
+	datasetsGenerated = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "state_tracker_datasets_generated_total",
+			Help: "Total number of datasets generated",
+		},
+		[]string{"dataset_type"},
+	)
+
+	aggregationDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
-			Name:    "state_tracker_query_duration_seconds",
-			Help:    "Duration of state queries",
+			Name:    "state_tracker_aggregation_duration_seconds",
+			Help:    "Duration of data aggregation operations",
 			Buckets: prometheus.DefBuckets,
 		},
-		[]string{"query_type"},
+		[]string{"aggregation_type"},
 	)
 )
 
 func init() {
-	prometheus.MustRegister(stateTransitions)
-	prometheus.MustRegister(activeEntities)
-	prometheus.MustRegister(stateQueryDuration)
+	prometheus.MustRegister(stateChangesProcessed)
+	prometheus.MustRegister(datasetsGenerated)
+	prometheus.MustRegister(aggregationDuration)
 }
 
 func main() {
@@ -76,30 +74,19 @@ func main() {
 		log.WithError(err).Fatal("Failed to connect to Redis")
 	}
 
-	// Initialize metrics client if enabled
-	var metricsClient *rpcmetrics.MetricsClient
-	if viper.GetBool("metrics.enabled") {
-		metricsAddr := fmt.Sprintf("http://%s:%d",
-			viper.GetString("metrics.host"),
-			viper.GetInt("metrics.port"))
-		metricsClient = rpcmetrics.NewMetricsClient(metricsAddr)
-		log.WithField("metrics_endpoint", metricsAddr).Info("Metrics client initialized")
-	}
+	// Create state tracker worker
+	worker := NewStateWorker(redisClient)
 
-	// Create state tracker
-	tracker := NewStateTracker(redisClient, metricsClient)
+	// Start state change listener
+	go worker.StartStateChangeListener(ctx)
 
-	// Start event listener
-	go tracker.StartEventListener(ctx)
+	// Start aggregation workers
+	go worker.StartMetricsAggregator(ctx)
+	go worker.StartHourlyStatsWorker(ctx)
+	go worker.StartDailyStatsWorker(ctx)
+	go worker.StartPruningWorker(ctx)
 
-	// Start HTTP API server
-	apiServer := NewAPIServer(tracker)
-	httpServer := &http.Server{
-		Addr:    fmt.Sprintf(":%d", viper.GetInt("state_tracker.api_port")),
-		Handler: apiServer.Router(),
-	}
-
-	// Start metrics server
+	// Start metrics server (Prometheus only, no API)
 	metricsPort := viper.GetInt("state_tracker.metrics_port")
 	if metricsPort == 0 {
 		metricsPort = 9094
@@ -115,33 +102,17 @@ func main() {
 		}
 	}()
 
-	// Start HTTP server
-	go func() {
-		log.WithField("port", viper.GetInt("state_tracker.api_port")).Info("Starting State Tracker API server")
-		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.WithError(err).Fatal("API server failed")
-		}
-	}()
-
-	// Start periodic cleanup of old state
-	go tracker.StartCleanup(ctx)
+	log.Info("State Tracker worker started - preparing datasets for monitor-api")
 
 	// Wait for shutdown signal
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	<-sigCh
 
-	log.Info("Shutting down State Tracker service...")
+	log.Info("Shutting down State Tracker worker...")
 
 	// Graceful shutdown
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	worker.Shutdown()
 
-	if err := httpServer.Shutdown(shutdownCtx); err != nil {
-		log.WithError(err).Error("Failed to gracefully shutdown HTTP server")
-	}
-
-	tracker.Shutdown()
-
-	log.Info("State Tracker service stopped")
+	log.Info("State Tracker worker stopped")
 }

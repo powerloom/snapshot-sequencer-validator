@@ -119,7 +119,50 @@ func (d *Dequeuer) ProcessSubmission(submission *SnapshotSubmission, submissionI
 	
 	log.Debugf("Successfully processed submission %s for epoch %d, slot %d",
 		submissionID, submission.Request.EpochId, submission.Request.SlotId)
-	
+
+	// Add monitoring metrics for validated submission
+	timestamp := time.Now().Unix()
+	hour := time.Now().Format("2006010215") // YYYYMMDDHH format
+
+	// Pipeline for monitoring metrics
+	pipe := d.redisClient.Pipeline()
+
+	// 1. Add to validations timeline (sorted set, no TTL - pruned daily)
+	pipe.ZAdd(context.Background(), "metrics:validations:timeline", &redis.Z{
+		Score:  float64(timestamp),
+		Member: submissionID,
+	})
+
+	// 2. Store validation details with TTL (1 hour)
+	validationData := map[string]interface{}{
+		"submission_id":   submissionID,
+		"epoch_id":        submission.Request.EpochId,
+		"project_id":      submission.Request.ProjectId,
+		"validator_id":    d.sequencerID,
+		"snapshotter":     snapshotterAddr.Hex(),
+		"timestamp":       timestamp,
+		"data_market":     submission.DataMarket,
+	}
+	jsonData, _ := json.Marshal(validationData)
+	pipe.SetEX(context.Background(), fmt.Sprintf("metrics:validation:%s", submissionID), string(jsonData), time.Hour)
+
+	// 3. Add to epoch validated set with TTL
+	epochValidatedKey := fmt.Sprintf("metrics:epoch:%d:validated", submission.Request.EpochId)
+	pipe.SAdd(context.Background(), epochValidatedKey, submissionID)
+	pipe.Expire(context.Background(), epochValidatedKey, 2*time.Hour)
+
+	// 4. Update hourly counter
+	pipe.HIncrBy(context.Background(), fmt.Sprintf("metrics:hourly:%s:validations", hour), "total", 1)
+	pipe.Expire(context.Background(), fmt.Sprintf("metrics:hourly:%s:validations", hour), 2*time.Hour)
+
+	// 5. Publish state change event
+	pipe.Publish(context.Background(), "state:change", fmt.Sprintf("submission:validated:%s", submissionID))
+
+	// Execute pipeline (ignore errors - monitoring is non-critical)
+	if _, err := pipe.Exec(context.Background()); err != nil {
+		log.Debugf("Failed to write monitoring metrics: %v", err)
+	}
+
 	return nil
 }
 

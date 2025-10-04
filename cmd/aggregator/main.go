@@ -259,6 +259,48 @@ func (a *Aggregator) aggregateWorkerParts(epochIDStr string, totalParts int) {
 		"projects": len(aggregatedResults),
 	}).Info("✅ LEVEL 1 COMPLETE: Created local finalized batch from worker parts")
 
+	// Add monitoring metrics for Level 1 aggregation
+	timestamp := time.Now().Unix()
+
+	// Pipeline for monitoring metrics
+	pipe := a.redisClient.Pipeline()
+
+	// 1. Add to batches timeline
+	pipe.ZAdd(a.ctx, "metrics:batches:timeline", &redis.Z{
+		Score:  float64(timestamp),
+		Member: fmt.Sprintf("local:%d", epochID),
+	})
+
+	// 2. Store local batch metrics with TTL
+	batchMetricsKey := fmt.Sprintf("metrics:batch:local:%d", epochID)
+	batchMetricsData := map[string]interface{}{
+		"epoch_id":      epochID,
+		"type":          "local",
+		"validator_id":  a.config.SequencerID,
+		"ipfs_cid":      finalizedBatch.BatchIPFSCID,
+		"merkle_root":   finalizedBatch.MerkleRoot,
+		"project_count": len(finalizedBatch.ProjectIds),
+		"parts_merged":  totalParts,
+		"timestamp":     timestamp,
+	}
+	jsonData, _ := json.Marshal(batchMetricsData)
+	pipe.SetEX(a.ctx, batchMetricsKey, string(jsonData), 24*time.Hour)
+
+	// 3. Add to validator batches timeline
+	validatorBatchesKey := fmt.Sprintf("metrics:validator:%s:batches", a.config.SequencerID)
+	pipe.ZAdd(a.ctx, validatorBatchesKey, &redis.Z{
+		Score:  float64(timestamp),
+		Member: epochID,
+	})
+
+	// 4. Publish state change
+	pipe.Publish(a.ctx, "state:change", fmt.Sprintf("batch:local:%d", epochID))
+
+	// Execute pipeline (ignore errors - monitoring is non-critical)
+	if _, err := pipe.Exec(a.ctx); err != nil {
+		log.Debugf("Failed to write monitoring metrics: %v", err)
+	}
+
 	// CRITICAL: Broadcast our local batch to validator network
 	broadcastMsg := map[string]interface{}{
 		"type":    "finalized_batch",
@@ -440,6 +482,45 @@ func (a *Aggregator) aggregateEpoch(epochIDStr string) {
 		"total_validators": totalValidators,
 		"projects":         len(aggregatedBatch.ProjectVotes),
 	}).Info("Aggregator: Completed aggregation")
+
+	// Add monitoring metrics for Level 2 aggregation
+	timestamp := time.Now().Unix()
+	epochID, _ := strconv.ParseUint(epochIDStr, 10, 64)
+
+	// Pipeline for monitoring metrics
+	pipe := a.redisClient.Pipeline()
+
+	// 1. Add to batches timeline
+	pipe.ZAdd(a.ctx, "metrics:batches:timeline", &redis.Z{
+		Score:  float64(timestamp),
+		Member: fmt.Sprintf("aggregated:%s", epochIDStr),
+	})
+
+	// 2. Store aggregated batch metrics with TTL
+	batchMetricsKey := fmt.Sprintf("metrics:batch:aggregated:%s", epochIDStr)
+	batchMetricsData := map[string]interface{}{
+		"epoch_id":         epochID,
+		"type":             "aggregated",
+		"validators_count": totalValidators,
+		"project_count":    len(aggregatedBatch.ProjectVotes),
+		"timestamp":        timestamp,
+		"validator_ids":    extractValidatorIDs(incomingKeys),
+	}
+	jsonData, _ := json.Marshal(batchMetricsData)
+	pipe.SetEX(a.ctx, batchMetricsKey, string(jsonData), 24*time.Hour)
+
+	// 3. Store validator list with TTL
+	validatorsKey := fmt.Sprintf("metrics:batch:%s:validators", epochIDStr)
+	validatorList, _ := json.Marshal(extractValidatorIDs(incomingKeys))
+	pipe.SetEX(a.ctx, validatorsKey, string(validatorList), 24*time.Hour)
+
+	// 4. Publish state change
+	pipe.Publish(a.ctx, "state:change", fmt.Sprintf("batch:aggregated:%s", epochIDStr))
+
+	// Execute pipeline (ignore errors - monitoring is non-critical)
+	if _, err := pipe.Exec(a.ctx); err != nil {
+		log.Debugf("Failed to write monitoring metrics: %v", err)
+	}
 
 	// CRITICAL: Clean up source finalized batch to prevent re-aggregation loop
 	keysToDelete := []string{ourBatchKey}
@@ -768,6 +849,19 @@ func (a *Aggregator) Stop() {
 	if a.redisClient != nil {
 		a.redisClient.Close()
 	}
+}
+
+// extractValidatorIDs extracts validator IDs from incoming batch keys
+func extractValidatorIDs(keys []string) []string {
+	validators := make([]string, 0)
+	for _, key := range keys {
+		// Keys are in format: incoming:batch:{epochId}:{validatorId}
+		parts := strings.Split(key, ":")
+		if len(parts) >= 4 {
+			validators = append(validators, parts[3])
+		}
+	}
+	return validators
 }
 
 func main() {
