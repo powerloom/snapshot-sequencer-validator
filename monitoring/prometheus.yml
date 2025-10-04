@@ -1,0 +1,29 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'state-tracker'
+    static_configs:
+      - targets: ['state-tracker:9094']
+    scrape_interval: 30s
+
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis:6379']
+    scrape_interval: 30s
+
+  - job_name: 'aggregator'
+    static_configs:
+      - targets: ['aggregator:8081']
+    scrape_interval: 30s
+
+  - job_name: 'unified'
+    static_configs:
+      - targets: ['dequeuer:8082', 'event-monitor:8083', 'finalizer:8084']
+    scrape_interval: 30s
+
+  - job_name: 'p2p-gateway'
+    static_configs:
+      - targets: ['p2p-gateway:8086']
+    scrape_interval: 30s
