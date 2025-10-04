@@ -6,14 +6,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	"github.com/go-redis/redis/v8"
-	"github.com/powerloom/snapshot-sequencer-validator/config"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sirupsen/logrus"
-	"github.com/spf13/viper"
 )
 
 var (
@@ -59,19 +58,43 @@ func main() {
 		log.SetLevel(logrus.DebugLevel)
 	}
 
-	// Load configuration
-	config.LoadConfig()
+	// Load configuration (suppressing sequencer logs)
+	// Just load Redis config directly from env
+	redisHost := os.Getenv("REDIS_HOST")
+	if redisHost == "" {
+		redisHost = "localhost"
+	}
+	redisPort := os.Getenv("REDIS_PORT")
+	if redisPort == "" {
+		redisPort = "6379"
+	}
+	redisPassword := os.Getenv("REDIS_PASSWORD")
+	redisDB := 0
+	if dbStr := os.Getenv("REDIS_DB"); dbStr != "" {
+		if db, err := strconv.Atoi(dbStr); err == nil {
+			redisDB = db
+		}
+	}
+
+	// Log Redis configuration for debugging
+	redisAddr := fmt.Sprintf("%s:%s", redisHost, redisPort)
+	log.WithFields(logrus.Fields{
+		"host": redisHost,
+		"port": redisPort,
+		"addr": redisAddr,
+		"db":   redisDB,
+	}).Info("State-tracker connecting to Redis")
 
 	// Connect to Redis
 	redisClient := redis.NewClient(&redis.Options{
-		Addr:     fmt.Sprintf("%s:%s", viper.GetString("redis.host"), viper.GetString("redis.port")),
-		Password: viper.GetString("redis.password"),
-		DB:       viper.GetInt("redis.db"),
+		Addr:     redisAddr,
+		Password: redisPassword,
+		DB:       redisDB,
 	})
 
 	ctx := context.Background()
 	if err := redisClient.Ping(ctx).Err(); err != nil {
-		log.WithError(err).Fatal("Failed to connect to Redis")
+		log.WithError(err).WithField("addr", redisAddr).Fatal("Failed to connect to Redis")
 	}
 
 	// Create state tracker worker
@@ -87,9 +110,11 @@ func main() {
 	go worker.StartPruningWorker(ctx)
 
 	// Start metrics server (Prometheus only, no API)
-	metricsPort := viper.GetInt("state_tracker.metrics_port")
-	if metricsPort == 0 {
-		metricsPort = 9094
+	metricsPort := 9094
+	if port := os.Getenv("STATE_TRACKER_METRICS_PORT"); port != "" {
+		if p, err := strconv.Atoi(port); err == nil {
+			metricsPort = p
+		}
 	}
 
 	go func() {
