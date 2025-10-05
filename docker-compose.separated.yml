@@ -4,6 +4,8 @@ services:
     volumes:
       - redis-data:/data
     command: redis-server --appendonly yes --maxmemory 2gb
+    ports:
+      - "${REDIS_BIND_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -21,7 +23,7 @@ services:
       - SEQUENCER_ID=p2p-gateway-${SEQUENCER_ID:-1}
       - P2P_PORT=${P2P_PORT:-9001}
       - REDIS_HOST=redis
-      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_PORT=6379
       - REDIS_DB=${REDIS_DB:-0}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - BOOTSTRAP_MULTIADDR=${BOOTSTRAP_MULTIADDR}
@@ -54,7 +56,7 @@ services:
     environment:
       - SEQUENCER_ID=dequeuer-${SEQUENCER_ID:-1}
       - REDIS_HOST=redis
-      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_PORT=6379
       - REDIS_DB=${REDIS_DB:-0}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - DEBUG_MODE=${DEBUG_MODE:-false}
@@ -97,7 +99,7 @@ services:
     environment:
       - SEQUENCER_ID=event-monitor-${SEQUENCER_ID:-1}
       - REDIS_HOST=redis
-      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_PORT=6379
       - REDIS_DB=${REDIS_DB:-0}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - DEBUG_MODE=${DEBUG_MODE:-false}
@@ -141,7 +143,7 @@ services:
     environment:
       - SEQUENCER_ID=finalizer-${SEQUENCER_ID:-1}
       - REDIS_HOST=redis
-      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_PORT=6379
       - REDIS_DB=${REDIS_DB:-0}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - DEBUG_MODE=${DEBUG_MODE:-false}
@@ -184,7 +186,7 @@ services:
     environment:
       - SEQUENCER_ID=aggregator-${SEQUENCER_ID:-1}
       - REDIS_HOST=redis
-      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_PORT=6379
       - REDIS_DB=${REDIS_DB:-0}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - DEBUG_MODE=${DEBUG_MODE:-false}
@@ -216,7 +218,7 @@ services:
     container_name: dsv-state-tracker
     environment:
       - REDIS_HOST=redis
-      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_PORT=6379
       - REDIS_PASSWORD=
       - REDIS_DB=0
       - PROTOCOL=${PROTOCOL:-aave}
@@ -240,7 +242,7 @@ services:
     container_name: dsv-monitor-api
     environment:
       - REDIS_HOST=redis
-      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_PORT=6379
       - REDIS_DB=${REDIS_DB:-0}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - MONITOR_API_PORT=${MONITOR_API_PORT:-9091}
