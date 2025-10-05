@@ -220,9 +220,14 @@ func (sw *StateWorker) aggregateCurrentMetrics(ctx context.Context) {
 		if len(parts) < 2 {
 			continue
 		}
+		batchType := parts[0]
 		epochID := parts[1]
 
-		// Check aggregated batch first (has full validator list)
+		// Only aggregated batches have validator lists (Level 2)
+		if batchType != "aggregated" {
+			continue
+		}
+
 		validatorsKey := fmt.Sprintf("metrics:batch:%s:validators", epochID)
 		validatorList, err := sw.redis.Get(ctx, validatorsKey).Result()
 		if err == nil && validatorList != "" {
@@ -371,7 +376,13 @@ func (sw *StateWorker) aggregateHourPeriod(ctx context.Context, hourStart, hourE
 		if len(parts) < 2 {
 			continue
 		}
+		batchType := parts[0]
 		epochID := parts[1]
+
+		// Only aggregated batches have validator lists (Level 2)
+		if batchType != "aggregated" {
+			continue
+		}
 
 		validatorsKey := fmt.Sprintf("metrics:batch:%s:validators", epochID)
 		validatorList, err := sw.redis.Get(ctx, validatorsKey).Result()
