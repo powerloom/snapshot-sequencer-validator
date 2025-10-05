@@ -509,9 +509,12 @@ func (a *Aggregator) aggregateEpoch(epochIDStr string) {
 	jsonData, _ := json.Marshal(batchMetricsData)
 	pipe.SetEX(a.ctx, batchMetricsKey, string(jsonData), 24*time.Hour)
 
-	// 3. Store validator list with TTL
+	// 3. Store validator list with TTL (include local + remote validators)
 	validatorsKey := fmt.Sprintf("metrics:batch:%s:validators", epochIDStr)
-	validatorList, _ := json.Marshal(extractValidatorIDs(incomingKeys))
+	allValidators := extractValidatorIDs(incomingKeys)
+	// Add local validator ID
+	allValidators = append(allValidators, a.config.SequencerID)
+	validatorList, _ := json.Marshal(allValidators)
 	pipe.SetEX(a.ctx, validatorsKey, string(validatorList), 24*time.Hour)
 
 	// 4. Publish state change
@@ -855,10 +858,10 @@ func (a *Aggregator) Stop() {
 func extractValidatorIDs(keys []string) []string {
 	validators := make([]string, 0)
 	for _, key := range keys {
-		// Keys are in format: incoming:batch:{epochId}:{validatorId}
+		// Keys are in format: {protocol}:{market}:incoming:batch:{epochId}:{validatorId}
 		parts := strings.Split(key, ":")
-		if len(parts) >= 4 {
-			validators = append(validators, parts[3])
+		if len(parts) >= 6 {
+			validators = append(validators, parts[5])
 		}
 	}
 	return validators
