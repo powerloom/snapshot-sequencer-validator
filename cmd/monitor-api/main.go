@@ -70,7 +70,7 @@ func NewMonitorAPI(redisClient *redis.Client, protocol, market string) *MonitorA
 // @Success 200 {object} DashboardSummary
 // @Router /dashboard/summary [get]
 func (m *MonitorAPI) DashboardSummary(c *gin.Context) {
-	// Read pre-aggregated dashboard summary
+	// Read pre-aggregated dashboard summary from state-tracker
 	summaryJSON, err := m.redis.Get(m.ctx, "dashboard:summary").Result()
 	if err != nil && err != redis.Nil {
 		log.WithError(err).Error("Failed to fetch dashboard summary")
@@ -79,9 +79,11 @@ func (m *MonitorAPI) DashboardSummary(c *gin.Context) {
 	var summary map[string]interface{}
 	if summaryJSON != "" {
 		json.Unmarshal([]byte(summaryJSON), &summary)
+	} else {
+		summary = make(map[string]interface{})
 	}
 
-	// Read current stats hash
+	// Read current stats hash from state-tracker
 	currentStats, err := m.redis.HGetAll(m.ctx, "stats:current").Result()
 	if err != nil && err != redis.Nil {
 		log.WithError(err).Error("Failed to fetch current stats")
@@ -98,6 +100,30 @@ func (m *MonitorAPI) DashboardSummary(c *gin.Context) {
 		}
 	}
 
+	// Get queue depths for real-time status
+	submissionQueueDepth, _ := m.redis.LLen(m.ctx, m.keyBuilder.SubmissionQueue()).Result()
+	finalizationQueueDepth, _ := m.redis.LLen(m.ctx, m.keyBuilder.FinalizationQueue()).Result()
+	aggregationQueueDepth, _ := m.redis.LLen(m.ctx, m.keyBuilder.AggregationQueue()).Result()
+
+	// Add queue depths to current stats
+	statsMap["submission_queue_depth"] = submissionQueueDepth
+	statsMap["finalization_queue_depth"] = finalizationQueueDepth
+	statsMap["aggregation_queue_depth"] = aggregationQueueDepth
+
+	// Get participation metrics from state-tracker
+	participationJSON, _ := m.redis.Get(m.ctx, "metrics:participation").Result()
+	var participation map[string]interface{}
+	if participationJSON != "" {
+		json.Unmarshal([]byte(participationJSON), &participation)
+	}
+
+	// Get current epoch status from state-tracker
+	currentEpochJSON, _ := m.redis.Get(m.ctx, "metrics:current_epoch").Result()
+	var currentEpoch map[string]interface{}
+	if currentEpochJSON != "" {
+		json.Unmarshal([]byte(currentEpochJSON), &currentEpoch)
+	}
+
 	response := DashboardSummary{
 		ValidatorID:    getEnv("VALIDATOR_ID", "validator-001"),
 		Metrics:        summary,
@@ -106,11 +132,32 @@ func (m *MonitorAPI) DashboardSummary(c *gin.Context) {
 		Timestamp:      time.Now(),
 	}
 
-	// Add recent activity from summary
+	// Add recent activity from pre-aggregated summary
 	if summary != nil {
 		response.RecentActivity["submissions_1m"] = summary["submissions_1m"]
 		response.RecentActivity["submissions_5m"] = summary["submissions_5m"]
 		response.RecentActivity["epochs_1m"] = summary["epochs_1m"]
+		response.RecentActivity["epochs_5m"] = summary["epochs_5m"]
+		response.RecentActivity["batches_1m"] = summary["batches_1m"]
+		response.RecentActivity["batches_5m"] = summary["batches_5m"]
+	}
+
+	// Add participation metrics
+	if participation != nil {
+		response.Metrics["participation_rate"] = participation["participation_rate"]
+		response.Metrics["inclusion_rate"] = participation["inclusion_rate"]
+		response.Metrics["level1_batches_24h"] = participation["level1_batches_24h"]
+		response.Metrics["level2_inclusions_24h"] = participation["level2_inclusions_24h"]
+		response.Metrics["epochs_participated_24h"] = participation["epochs_participated_24h"]
+		response.Metrics["epochs_total_24h"] = participation["epochs_total_24h"]
+	}
+
+	// Add current epoch status
+	if currentEpoch != nil {
+		response.CurrentStats["current_epoch_id"] = currentEpoch["epoch_id"]
+		response.CurrentStats["current_epoch_phase"] = currentEpoch["phase"]
+		response.CurrentStats["epoch_time_remaining"] = currentEpoch["time_remaining_seconds"]
+		response.CurrentStats["epoch_window_duration"] = currentEpoch["window_duration"]
 	}
 
 	c.JSON(http.StatusOK, response)
@@ -335,6 +382,8 @@ func (m *MonitorAPI) Health(c *gin.Context) {
 		"timestamp":   time.Now(),
 	})
 }
+
+
 
 // Helper function to determine queue status
 func getQueueStatus(depth int) string {

@@ -297,6 +297,12 @@ func (sw *StateWorker) aggregateCurrentMetrics(ctx context.Context) {
 		"epochs":      sw.epochs,
 		"validators":  activeCount,
 	}).Debug("Updated dashboard summary")
+
+	// Aggregate participation metrics
+	sw.aggregateParticipationMetrics(ctx)
+
+	// Aggregate current epoch status
+	sw.aggregateCurrentEpochStatus(ctx)
 }
 
 // StartHourlyStatsWorker prepares hourly statistics every 5 minutes
@@ -582,6 +588,185 @@ func (sw *StateWorker) pruneOldData(ctx context.Context) {
 		log.Info("Reset in-memory counters after 24 hours")
 	}
 	sw.mu.Unlock()
+}
+
+// aggregateParticipationMetrics calculates participation and inclusion rates
+func (sw *StateWorker) aggregateParticipationMetrics(ctx context.Context) {
+	now := time.Now().Unix()
+	last24h := now - 86400
+
+	// Get our validator ID (protocol:market format from keyBuilder)
+	validatorID := fmt.Sprintf("%s:%s", sw.keyBuilder.ProtocolState, sw.keyBuilder.DataMarket)
+
+	// Count Level 1 batches (our local finalizations) in last 24h
+	ourBatchesKey := fmt.Sprintf("metrics:validator:%s:batches", validatorID)
+	level1Batches, _ := sw.redis.ZCount(ctx, ourBatchesKey,
+		strconv.FormatInt(last24h, 10),
+		strconv.FormatInt(now, 10)).Result()
+
+	// Count total Level 2 batches (network aggregations) in last 24h
+	allLevel2Batches, _ := sw.redis.ZCount(ctx, "metrics:batches:timeline",
+		strconv.FormatInt(last24h, 10),
+		strconv.FormatInt(now, 10)).Result()
+
+	// Count Level 2 batches where we were included
+	level2Inclusions := int64(0)
+
+	// Get recent aggregated batches from timeline
+	recentAggregated, _ := sw.redis.ZRangeByScore(ctx, "metrics:batches:timeline", &redis.ZRangeBy{
+		Min: strconv.FormatInt(last24h, 10),
+		Max: strconv.FormatInt(now, 10),
+	}).Result()
+
+	// For each aggregated batch, check if we contributed
+	for _, entry := range recentAggregated {
+		// Entry format: "aggregated:{epoch}" or "local:{epoch}"
+		if !strings.HasPrefix(entry, "aggregated:") {
+			continue
+		}
+
+		epochID := strings.TrimPrefix(entry, "aggregated:")
+
+		// Check if our validator is in the validators list
+		validatorsKey := fmt.Sprintf("metrics:batch:%s:validators", epochID)
+		validatorsJSON, err := sw.redis.Get(ctx, validatorsKey).Result()
+		if err != nil {
+			continue
+		}
+
+		var validators []string
+		if json.Unmarshal([]byte(validatorsJSON), &validators) == nil {
+			for _, v := range validators {
+				if v == validatorID {
+					level2Inclusions++
+					break
+				}
+			}
+		}
+	}
+
+	// Calculate metrics
+	participationRate := 0.0
+	if allLevel2Batches > 0 {
+		participationRate = float64(level2Inclusions) / float64(allLevel2Batches) * 100
+	}
+
+	inclusionRate := 0.0
+	if level1Batches > 0 {
+		inclusionRate = float64(level2Inclusions) / float64(level1Batches) * 100
+		if inclusionRate > 100 {
+			inclusionRate = 100
+		}
+	}
+
+	// Count epochs in last 24h
+	epochsTotal, _ := sw.redis.ZCount(ctx, "metrics:epochs:timeline",
+		strconv.FormatInt(last24h, 10),
+		strconv.FormatInt(now, 10)).Result()
+
+	// Store participation metrics
+	participationMetrics := map[string]interface{}{
+		"epochs_participated_24h":  level1Batches,
+		"epochs_total_24h":         epochsTotal,
+		"participation_rate":       participationRate,
+		"level1_batches_24h":       level1Batches,
+		"level2_inclusions_24h":    level2Inclusions,
+		"inclusion_rate":           inclusionRate,
+		"timestamp":                now,
+	}
+
+	metricsJSON, _ := json.Marshal(participationMetrics)
+	sw.redis.Set(ctx, "metrics:participation", metricsJSON, 60*time.Second)
+
+	log.WithFields(logrus.Fields{
+		"participation_rate": fmt.Sprintf("%.1f%%", participationRate),
+		"inclusion_rate":     fmt.Sprintf("%.1f%%", inclusionRate),
+		"level1_batches":     level1Batches,
+		"level2_inclusions":  level2Inclusions,
+	}).Debug("Updated participation metrics")
+}
+
+// aggregateCurrentEpochStatus detects current epoch and its phase
+func (sw *StateWorker) aggregateCurrentEpochStatus(ctx context.Context) {
+	// Get latest epoch from timeline
+	latestEpochs, _ := sw.redis.ZRevRangeWithScores(ctx, "metrics:epochs:timeline", 0, 0).Result()
+	if len(latestEpochs) == 0 {
+		return
+	}
+
+	// Parse epoch ID from entry (format: "open:{epoch_id}" or "close:{epoch_id}")
+	latestEntry := latestEpochs[0].Member.(string)
+	parts := strings.Split(latestEntry, ":")
+	if len(parts) < 2 {
+		return
+	}
+
+	epochID := parts[1]
+	epochTimestamp := int64(latestEpochs[0].Score)
+
+	// Get epoch info
+	epochInfoKey := fmt.Sprintf("metrics:epoch:%s:info", epochID)
+	epochInfo, _ := sw.redis.HGetAll(ctx, epochInfoKey).Result()
+
+	// Determine current phase
+	phase := "unknown"
+	timeRemaining := int64(0)
+	now := time.Now().Unix()
+
+	// Check if window is still open
+	windowDuration := float64(20) // default 20 seconds
+	if durationStr, ok := epochInfo["duration"]; ok {
+		if d, err := strconv.ParseFloat(durationStr, 64); err == nil {
+			windowDuration = d
+		}
+	}
+
+	windowEndTime := epochTimestamp + int64(windowDuration)
+
+	if now < windowEndTime {
+		phase = "submission"
+		timeRemaining = windowEndTime - now
+	} else {
+		// Window closed, check for finalization
+		level1Key := fmt.Sprintf("metrics:batch:local:%s", epochID)
+		level1Exists, _ := sw.redis.Exists(ctx, level1Key).Result()
+
+		if level1Exists > 0 {
+			// Check for aggregation
+			level2Key := fmt.Sprintf("metrics:batch:aggregated:%s", epochID)
+			level2Exists, _ := sw.redis.Exists(ctx, level2Key).Result()
+
+			if level2Exists > 0 {
+				phase = "complete"
+			} else {
+				phase = "aggregation"
+			}
+		} else {
+			phase = "finalization"
+		}
+	}
+
+	// Count submissions in current epoch (from submission queue or processed submissions)
+	submissionsReceived := int64(0)
+	// TODO: Track submissions per epoch in P2P gateway
+
+	currentEpochStatus := map[string]interface{}{
+		"epoch_id":              epochID,
+		"phase":                 phase,
+		"time_remaining_seconds": timeRemaining,
+		"window_duration":       windowDuration,
+		"submissions_received":  submissionsReceived,
+		"timestamp":             now,
+	}
+
+	statusJSON, _ := json.Marshal(currentEpochStatus)
+	sw.redis.Set(ctx, "metrics:current_epoch", statusJSON, 30*time.Second)
+
+	log.WithFields(logrus.Fields{
+		"epoch_id":       epochID,
+		"phase":          phase,
+		"time_remaining": timeRemaining,
+	}).Debug("Updated current epoch status")
 }
 
 // Shutdown gracefully stops the worker
