@@ -106,6 +106,58 @@ func (kb *KeyBuilder) BatchAggregated(epochID string) string {
 	return fmt.Sprintf("%s:%s:batch:aggregated:%s", kb.ProtocolState, kb.DataMarket, epochID)
 }
 
+// Metrics Keys (namespaced per protocol:market)
+
+// MetricsEpochsTimeline returns the namespaced key for epochs timeline
+func (kb *KeyBuilder) MetricsEpochsTimeline() string {
+	return fmt.Sprintf("%s:%s:metrics:epochs:timeline", kb.ProtocolState, kb.DataMarket)
+}
+
+// MetricsBatchesTimeline returns the namespaced key for batches timeline
+func (kb *KeyBuilder) MetricsBatchesTimeline() string {
+	return fmt.Sprintf("%s:%s:metrics:batches:timeline", kb.ProtocolState, kb.DataMarket)
+}
+
+// MetricsBatchLocal returns the namespaced key for local batch metadata
+func (kb *KeyBuilder) MetricsBatchLocal(epochID string) string {
+	return fmt.Sprintf("%s:%s:metrics:batch:local:%s", kb.ProtocolState, kb.DataMarket, epochID)
+}
+
+// MetricsBatchAggregated returns the namespaced key for aggregated batch metadata
+func (kb *KeyBuilder) MetricsBatchAggregated(epochID string) string {
+	return fmt.Sprintf("%s:%s:metrics:batch:aggregated:%s", kb.ProtocolState, kb.DataMarket, epochID)
+}
+
+// MetricsBatchValidators returns the namespaced key for batch validator list
+func (kb *KeyBuilder) MetricsBatchValidators(epochID string) string {
+	return fmt.Sprintf("%s:%s:metrics:batch:%s:validators", kb.ProtocolState, kb.DataMarket, epochID)
+}
+
+// MetricsEpochInfo returns the namespaced key for epoch info
+func (kb *KeyBuilder) MetricsEpochInfo(epochID string) string {
+	return fmt.Sprintf("%s:%s:metrics:epoch:%s:info", kb.ProtocolState, kb.DataMarket, epochID)
+}
+
+// MetricsEpochParts returns the namespaced key for epoch parts tracking
+func (kb *KeyBuilder) MetricsEpochParts(epochID string) string {
+	return fmt.Sprintf("%s:%s:metrics:epoch:%s:parts", kb.ProtocolState, kb.DataMarket, epochID)
+}
+
+// MetricsEpochValidated returns the namespaced key for validated epoch status
+func (kb *KeyBuilder) MetricsEpochValidated(epochID string) string {
+	return fmt.Sprintf("%s:%s:metrics:epoch:%s:validated", kb.ProtocolState, kb.DataMarket, epochID)
+}
+
+// MetricsValidatorBatches returns the namespaced key for validator batch timeline
+func (kb *KeyBuilder) MetricsValidatorBatches(validatorID string) string {
+	return fmt.Sprintf("%s:%s:metrics:validator:%s:batches", kb.ProtocolState, kb.DataMarket, validatorID)
+}
+
+// MetricsBatchPart returns the namespaced key for batch part metrics
+func (kb *KeyBuilder) MetricsBatchPart(epochID string, partID int) string {
+	return fmt.Sprintf("%s:%s:metrics:part:%s:%d", kb.ProtocolState, kb.DataMarket, epochID, partID)
+}
+
 // Monitoring Keys (not namespaced)
 
 // PipelineHealth returns the key for component health status

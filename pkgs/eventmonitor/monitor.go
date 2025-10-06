@@ -467,13 +467,13 @@ func (wm *WindowManager) StartSubmissionWindow(ctx context.Context, dataMarket s
 	pipe := wm.redisClient.Pipeline()
 
 	// 1. Add to epochs timeline
-	pipe.ZAdd(context.Background(), "metrics:epochs:timeline", &redis.Z{
+	pipe.ZAdd(context.Background(), kb.MetricsEpochsTimeline(), &redis.Z{
 		Score:  float64(timestamp),
 		Member: fmt.Sprintf("open:%s", epochID.String()),
 	})
 
 	// 2. Store epoch info with TTL
-	epochInfoKey := fmt.Sprintf("metrics:epoch:%s:info", epochID.String())
+	epochInfoKey := kb.MetricsEpochInfo(epochID.String())
 	pipe.HSet(context.Background(), epochInfoKey, map[string]interface{}{
 		"status":      "open",
 		"start":       timestamp,
@@ -534,13 +534,13 @@ func (wm *WindowManager) closeWindow(dataMarket string, epochID *big.Int) {
 	pipe := wm.redisClient.Pipeline()
 
 	// 1. Add to epochs timeline
-	pipe.ZAdd(context.Background(), "metrics:epochs:timeline", &redis.Z{
+	pipe.ZAdd(context.Background(), kb.MetricsEpochsTimeline(), &redis.Z{
 		Score:  float64(timestamp),
 		Member: fmt.Sprintf("close:%s", epochID.String()),
 	})
 
 	// 2. Update epoch info (already has TTL from open)
-	epochInfoKey := fmt.Sprintf("metrics:epoch:%s:info", epochID.String())
+	epochInfoKey := kb.MetricsEpochInfo(epochID.String())
 	pipe.HSet(context.Background(), epochInfoKey, map[string]interface{}{
 		"status": "closed",
 		"end":    timestamp,

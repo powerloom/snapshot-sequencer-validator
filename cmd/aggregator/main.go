@@ -266,13 +266,13 @@ func (a *Aggregator) aggregateWorkerParts(epochIDStr string, totalParts int) {
 	pipe := a.redisClient.Pipeline()
 
 	// 1. Add to batches timeline
-	pipe.ZAdd(a.ctx, "metrics:batches:timeline", &redis.Z{
+	pipe.ZAdd(a.ctx, a.keyBuilder.MetricsBatchesTimeline(), &redis.Z{
 		Score:  float64(timestamp),
 		Member: fmt.Sprintf("local:%d", epochID),
 	})
 
 	// 2. Store local batch metrics with TTL
-	batchMetricsKey := fmt.Sprintf("metrics:batch:local:%d", epochID)
+	batchMetricsKey := a.keyBuilder.MetricsBatchLocal(strconv.FormatUint(epochID, 10))
 	batchMetricsData := map[string]interface{}{
 		"epoch_id":      epochID,
 		"type":          "local",
@@ -287,7 +287,7 @@ func (a *Aggregator) aggregateWorkerParts(epochIDStr string, totalParts int) {
 	pipe.SetEX(a.ctx, batchMetricsKey, string(jsonData), 24*time.Hour)
 
 	// 3. Add to validator batches timeline
-	validatorBatchesKey := fmt.Sprintf("metrics:validator:%s:batches", a.config.SequencerID)
+	validatorBatchesKey := a.keyBuilder.MetricsValidatorBatches(a.config.SequencerID)
 	pipe.ZAdd(a.ctx, validatorBatchesKey, &redis.Z{
 		Score:  float64(timestamp),
 		Member: epochID,
@@ -491,13 +491,13 @@ func (a *Aggregator) aggregateEpoch(epochIDStr string) {
 	pipe := a.redisClient.Pipeline()
 
 	// 1. Add to batches timeline
-	pipe.ZAdd(a.ctx, "metrics:batches:timeline", &redis.Z{
+	pipe.ZAdd(a.ctx, a.keyBuilder.MetricsBatchesTimeline(), &redis.Z{
 		Score:  float64(timestamp),
 		Member: fmt.Sprintf("aggregated:%s", epochIDStr),
 	})
 
 	// 2. Store aggregated batch metrics with TTL
-	batchMetricsKey := fmt.Sprintf("metrics:batch:aggregated:%s", epochIDStr)
+	batchMetricsKey := a.keyBuilder.MetricsBatchAggregated(epochIDStr)
 	batchMetricsData := map[string]interface{}{
 		"epoch_id":         epochID,
 		"type":             "aggregated",
@@ -510,7 +510,7 @@ func (a *Aggregator) aggregateEpoch(epochIDStr string) {
 	pipe.SetEX(a.ctx, batchMetricsKey, string(jsonData), 24*time.Hour)
 
 	// 3. Store validator list with TTL (include local + remote validators)
-	validatorsKey := fmt.Sprintf("metrics:batch:%s:validators", epochIDStr)
+	validatorsKey := a.keyBuilder.MetricsBatchValidators(epochIDStr)
 	allValidators := extractValidatorIDs(incomingKeys)
 	// Add local validator ID
 	allValidators = append(allValidators, a.config.SequencerID)

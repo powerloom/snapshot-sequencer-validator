@@ -451,7 +451,7 @@ func (m *MonitorAPI) FinalizedBatches(c *gin.Context) {
 	if epochID != "" {
 		if level == 1 || level == 0 {
 			// Get Level 1 batch
-			level1Key := fmt.Sprintf("metrics:batch:local:%s", epochID)
+			level1Key := m.keyBuilder.MetricsBatchLocal(epochID)
 			level1Data, err := m.redis.Get(m.ctx, level1Key).Result()
 			if err == nil {
 				var batchData map[string]interface{}
@@ -476,13 +476,13 @@ func (m *MonitorAPI) FinalizedBatches(c *gin.Context) {
 
 		if level == 2 || level == 0 {
 			// Get Level 2 batch
-			level2Key := fmt.Sprintf("metrics:batch:aggregated:%s", epochID)
+			level2Key := m.keyBuilder.MetricsBatchAggregated(epochID)
 			level2Data, err := m.redis.Get(m.ctx, level2Key).Result()
 			if err == nil {
 				var batchData map[string]interface{}
 				if json.Unmarshal([]byte(level2Data), &batchData) == nil {
 					// Get validator list
-					validatorsKey := fmt.Sprintf("metrics:batch:%s:validators", epochID)
+					validatorsKey := m.keyBuilder.MetricsBatchValidators(epochID)
 					validatorsJSON, _ := m.redis.Get(m.ctx, validatorsKey).Result()
 					var validators []string
 					if validatorsJSON != "" {
@@ -507,7 +507,7 @@ func (m *MonitorAPI) FinalizedBatches(c *gin.Context) {
 		now := time.Now().Unix()
 		start := now - 3600 // Last hour by default
 
-		entries, _ := m.redis.ZRevRangeByScore(m.ctx, "metrics:batches:timeline", &redis.ZRangeBy{
+		entries, _ := m.redis.ZRevRangeByScore(m.ctx, m.keyBuilder.MetricsBatchesTimeline(), &redis.ZRangeBy{
 			Min:   strconv.FormatInt(start, 10),
 			Max:   "+inf",
 			Count: int64(limit),
@@ -522,7 +522,7 @@ func (m *MonitorAPI) FinalizedBatches(c *gin.Context) {
 			batchEpoch := parts[1]
 
 			if batchType == "local" && (level == 1 || level == 0) {
-				level1Key := fmt.Sprintf("metrics:batch:local:%s", batchEpoch)
+				level1Key := m.keyBuilder.MetricsBatchLocal(batchEpoch)
 				level1Data, err := m.redis.Get(m.ctx, level1Key).Result()
 				if err == nil {
 					var batchData map[string]interface{}
@@ -544,12 +544,12 @@ func (m *MonitorAPI) FinalizedBatches(c *gin.Context) {
 					}
 				}
 			} else if batchType == "aggregated" && (level == 2 || level == 0) {
-				level2Key := fmt.Sprintf("metrics:batch:aggregated:%s", batchEpoch)
+				level2Key := m.keyBuilder.MetricsBatchAggregated(batchEpoch)
 				level2Data, err := m.redis.Get(m.ctx, level2Key).Result()
 				if err == nil {
 					var batchData map[string]interface{}
 					if json.Unmarshal([]byte(level2Data), &batchData) == nil {
-						validatorsKey := fmt.Sprintf("metrics:batch:%s:validators", batchEpoch)
+						validatorsKey := m.keyBuilder.MetricsBatchValidators(batchEpoch)
 						validatorsJSON, _ := m.redis.Get(m.ctx, validatorsKey).Result()
 						var validators []string
 						if validatorsJSON != "" {
@@ -593,7 +593,7 @@ func (m *MonitorAPI) AggregationResults(c *gin.Context) {
 	now := time.Now().Unix()
 	start := now - 86400 // Last 24 hours
 
-	entries, _ := m.redis.ZRevRangeByScore(m.ctx, "metrics:batches:timeline", &redis.ZRangeBy{
+	entries, _ := m.redis.ZRevRangeByScore(m.ctx, m.keyBuilder.MetricsBatchesTimeline(), &redis.ZRangeBy{
 		Min:   strconv.FormatInt(start, 10),
 		Max:   "+inf",
 		Count: int64(limit * 2), // Get more to filter only aggregated
@@ -607,7 +607,7 @@ func (m *MonitorAPI) AggregationResults(c *gin.Context) {
 
 		epochID := strings.TrimPrefix(entry, "aggregated:")
 
-		level2Key := fmt.Sprintf("metrics:batch:aggregated:%s", epochID)
+		level2Key := m.keyBuilder.MetricsBatchAggregated(epochID)
 		level2Data, err := m.redis.Get(m.ctx, level2Key).Result()
 		if err != nil {
 			continue
@@ -619,7 +619,7 @@ func (m *MonitorAPI) AggregationResults(c *gin.Context) {
 		}
 
 		// Get validator list
-		validatorsKey := fmt.Sprintf("metrics:batch:%s:validators", epochID)
+		validatorsKey := m.keyBuilder.MetricsBatchValidators(epochID)
 		validatorsJSON, _ := m.redis.Get(m.ctx, validatorsKey).Result()
 		var validators []string
 		if validatorsJSON != "" {
@@ -661,7 +661,7 @@ func (m *MonitorAPI) EpochsTimeline(c *gin.Context) {
 	}
 
 	// Get recent epochs from timeline (entries are "open:{id}" or "close:{id}")
-	entries, _ := m.redis.ZRevRange(m.ctx, "metrics:epochs:timeline", 0, int64(limit*2)).Result()
+	entries, _ := m.redis.ZRevRange(m.ctx, m.keyBuilder.MetricsEpochsTimeline(), 0, int64(limit*2)).Result()
 
 	epochMap := make(map[string]*EpochInfo)
 	var epochOrder []string
@@ -698,7 +698,7 @@ func (m *MonitorAPI) EpochsTimeline(c *gin.Context) {
 		epochInfo := epochMap[epochID]
 
 		// Get epoch info hash
-		infoKey := fmt.Sprintf("metrics:epoch:%s:info", epochID)
+		infoKey := m.keyBuilder.MetricsEpochInfo(epochID)
 		infoData, err := m.redis.HGetAll(m.ctx, infoKey).Result()
 		if err == nil {
 			if startStr, ok := infoData["start"]; ok {
@@ -717,12 +717,12 @@ func (m *MonitorAPI) EpochsTimeline(c *gin.Context) {
 		}
 
 		// Check for Level 1 batch
-		level1Key := fmt.Sprintf("metrics:batch:local:%s", epochID)
+		level1Key := m.keyBuilder.MetricsBatchLocal(epochID)
 		level1Exists, _ := m.redis.Exists(m.ctx, level1Key).Result()
 		epochInfo.Level1Batch = level1Exists > 0
 
 		// Check for Level 2 batch
-		level2Key := fmt.Sprintf("metrics:batch:aggregated:%s", epochID)
+		level2Key := m.keyBuilder.MetricsBatchAggregated(epochID)
 		level2Exists, _ := m.redis.Exists(m.ctx, level2Key).Result()
 		epochInfo.Level2Batch = level2Exists > 0
 
