@@ -452,8 +452,6 @@ var SwaggerInfo = &swag.Spec{
 	Description:      "Monitoring API that reads pre-aggregated data from state-tracker worker",
 	InfoInstanceName: "swagger",
 	SwaggerTemplate:  docTemplate,
-	LeftDelim:        "{{",
-	RightDelim:       "}}",
 }
 
 func init() {
