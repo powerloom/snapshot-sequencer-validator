@@ -20,6 +20,18 @@
                 "summary": "Aggregation results",
                 "parameters": [
                     {
+                        "type": "string",
+                        "description": "Protocol state identifier",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    },
+                    {
                         "type": "integer",
                         "description": "Number of results (default 20)",
                         "name": "limit",
@@ -50,6 +62,18 @@
                 ],
                 "summary": "Finalized batches",
                 "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    },
                     {
                         "type": "integer",
                         "description": "Batch level (1 or 2, default both)",
@@ -113,6 +137,18 @@
                 ],
                 "summary": "Epochs timeline",
                 "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    },
                     {
                         "type": "integer",
                         "description": "Number of epochs (default 50)",
@@ -185,6 +221,20 @@
                     "queues"
                 ],
                 "summary": "Queue status",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",

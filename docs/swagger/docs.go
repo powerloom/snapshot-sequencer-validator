@@ -27,6 +27,18 @@ const docTemplate = `{
                 "summary": "Aggregation results",
                 "parameters": [
                     {
+                        "type": "string",
+                        "description": "Protocol state identifier",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    },
+                    {
                         "type": "integer",
                         "description": "Number of results (default 20)",
                         "name": "limit",
@@ -57,6 +69,18 @@ const docTemplate = `{
                 ],
                 "summary": "Finalized batches",
                 "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    },
                     {
                         "type": "integer",
                         "description": "Batch level (1 or 2, default both)",
@@ -120,6 +144,18 @@ const docTemplate = `{
                 ],
                 "summary": "Epochs timeline",
                 "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    },
                     {
                         "type": "integer",
                         "description": "Number of epochs (default 50)",
@@ -192,6 +228,20 @@ const docTemplate = `{
                     "queues"
                 ],
                 "summary": "Queue status",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -449,7 +499,7 @@ var SwaggerInfo = &swag.Spec{
 	BasePath:         "/api/v1",
 	Schemes:          []string{},
 	Title:            "DSV Monitoring API",
-	Description:      "A comprehensive monitoring API for the Decentralized Sequencer Validator",
+	Description:      "A comprehensive monitoring API for the Decentralized Sequencer Validator participating in Powerloom datamarkets",
 	InfoInstanceName: "swagger",
 	SwaggerTemplate:  docTemplate,
 }

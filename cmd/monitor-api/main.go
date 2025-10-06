@@ -430,12 +430,29 @@ func (m *MonitorAPI) Health(c *gin.Context) {
 // @Description Get Level 1 (local) or Level 2 (aggregated) finalized batches
 // @Tags batches
 // @Produce json
+// @Param protocol query string false "Protocol state identifier"
+// @Param market query string false "Data market address"
 // @Param level query int false "Batch level (1 or 2, default both)"
 // @Param epoch_id query string false "Specific epoch ID"
 // @Param limit query int false "Number of batches to retrieve (default 50)"
 // @Success 200 {array} FinalizedBatch
 // @Router /batches/finalized [get]
 func (m *MonitorAPI) FinalizedBatches(c *gin.Context) {
+	protocol := c.Query("protocol")
+	market := c.Query("market")
+
+	// Use specified protocol/market or fall back to default
+	kb := m.keyBuilder
+	if protocol != "" || market != "" {
+		if protocol == "" {
+			protocol = m.keyBuilder.ProtocolState
+		}
+		if market == "" {
+			market = m.keyBuilder.DataMarket
+		}
+		kb = keys.NewKeyBuilder(protocol, market)
+	}
+
 	levelParam := c.DefaultQuery("level", "0")
 	level, _ := strconv.Atoi(levelParam)
 	epochID := c.Query("epoch_id")
@@ -451,7 +468,7 @@ func (m *MonitorAPI) FinalizedBatches(c *gin.Context) {
 	if epochID != "" {
 		if level == 1 || level == 0 {
 			// Get Level 1 batch
-			level1Key := m.keyBuilder.MetricsBatchLocal(epochID)
+			level1Key := kb.MetricsBatchLocal(epochID)
 			level1Data, err := m.redis.Get(m.ctx, level1Key).Result()
 			if err == nil {
 				var batchData map[string]interface{}
@@ -476,13 +493,13 @@ func (m *MonitorAPI) FinalizedBatches(c *gin.Context) {
 
 		if level == 2 || level == 0 {
 			// Get Level 2 batch
-			level2Key := m.keyBuilder.MetricsBatchAggregated(epochID)
+			level2Key := kb.MetricsBatchAggregated(epochID)
 			level2Data, err := m.redis.Get(m.ctx, level2Key).Result()
 			if err == nil {
 				var batchData map[string]interface{}
 				if json.Unmarshal([]byte(level2Data), &batchData) == nil {
 					// Get validator list
-					validatorsKey := m.keyBuilder.MetricsBatchValidators(epochID)
+					validatorsKey := kb.MetricsBatchValidators(epochID)
 					validatorsJSON, _ := m.redis.Get(m.ctx, validatorsKey).Result()
 					var validators []string
 					if validatorsJSON != "" {
@@ -507,7 +524,7 @@ func (m *MonitorAPI) FinalizedBatches(c *gin.Context) {
 		now := time.Now().Unix()
 		start := now - 3600 // Last hour by default
 
-		entries, _ := m.redis.ZRevRangeByScore(m.ctx, m.keyBuilder.MetricsBatchesTimeline(), &redis.ZRangeBy{
+		entries, _ := m.redis.ZRevRangeByScore(m.ctx, kb.MetricsBatchesTimeline(), &redis.ZRangeBy{
 			Min:   strconv.FormatInt(start, 10),
 			Max:   "+inf",
 			Count: int64(limit),
@@ -522,7 +539,7 @@ func (m *MonitorAPI) FinalizedBatches(c *gin.Context) {
 			batchEpoch := parts[1]
 
 			if batchType == "local" && (level == 1 || level == 0) {
-				level1Key := m.keyBuilder.MetricsBatchLocal(batchEpoch)
+				level1Key := kb.MetricsBatchLocal(batchEpoch)
 				level1Data, err := m.redis.Get(m.ctx, level1Key).Result()
 				if err == nil {
 					var batchData map[string]interface{}
@@ -544,12 +561,12 @@ func (m *MonitorAPI) FinalizedBatches(c *gin.Context) {
 					}
 				}
 			} else if batchType == "aggregated" && (level == 2 || level == 0) {
-				level2Key := m.keyBuilder.MetricsBatchAggregated(batchEpoch)
+				level2Key := kb.MetricsBatchAggregated(batchEpoch)
 				level2Data, err := m.redis.Get(m.ctx, level2Key).Result()
 				if err == nil {
 					var batchData map[string]interface{}
 					if json.Unmarshal([]byte(level2Data), &batchData) == nil {
-						validatorsKey := m.keyBuilder.MetricsBatchValidators(batchEpoch)
+						validatorsKey := kb.MetricsBatchValidators(batchEpoch)
 						validatorsJSON, _ := m.redis.Get(m.ctx, validatorsKey).Result()
 						var validators []string
 						if validatorsJSON != "" {
@@ -579,10 +596,27 @@ func (m *MonitorAPI) FinalizedBatches(c *gin.Context) {
 // @Description Get network-wide aggregated batches with validator contributions
 // @Tags aggregation
 // @Produce json
+// @Param protocol query string false "Protocol state identifier"
+// @Param market query string false "Data market address"
 // @Param limit query int false "Number of results (default 20)"
 // @Success 200 {array} FinalizedBatch
 // @Router /aggregation/results [get]
 func (m *MonitorAPI) AggregationResults(c *gin.Context) {
+	protocol := c.Query("protocol")
+	market := c.Query("market")
+
+	// Use specified protocol/market or fall back to default
+	kb := m.keyBuilder
+	if protocol != "" || market != "" {
+		if protocol == "" {
+			protocol = m.keyBuilder.ProtocolState
+		}
+		if market == "" {
+			market = m.keyBuilder.DataMarket
+		}
+		kb = keys.NewKeyBuilder(protocol, market)
+	}
+
 	limitParam := c.DefaultQuery("limit", "20")
 	limit, _ := strconv.Atoi(limitParam)
 	if limit <= 0 || limit > 100 {
@@ -593,7 +627,7 @@ func (m *MonitorAPI) AggregationResults(c *gin.Context) {
 	now := time.Now().Unix()
 	start := now - 86400 // Last 24 hours
 
-	entries, _ := m.redis.ZRevRangeByScore(m.ctx, m.keyBuilder.MetricsBatchesTimeline(), &redis.ZRangeBy{
+	entries, _ := m.redis.ZRevRangeByScore(m.ctx, kb.MetricsBatchesTimeline(), &redis.ZRangeBy{
 		Min:   strconv.FormatInt(start, 10),
 		Max:   "+inf",
 		Count: int64(limit * 2), // Get more to filter only aggregated
@@ -607,7 +641,7 @@ func (m *MonitorAPI) AggregationResults(c *gin.Context) {
 
 		epochID := strings.TrimPrefix(entry, "aggregated:")
 
-		level2Key := m.keyBuilder.MetricsBatchAggregated(epochID)
+		level2Key := kb.MetricsBatchAggregated(epochID)
 		level2Data, err := m.redis.Get(m.ctx, level2Key).Result()
 		if err != nil {
 			continue
@@ -619,7 +653,7 @@ func (m *MonitorAPI) AggregationResults(c *gin.Context) {
 		}
 
 		// Get validator list
-		validatorsKey := m.keyBuilder.MetricsBatchValidators(epochID)
+		validatorsKey := kb.MetricsBatchValidators(epochID)
 		validatorsJSON, _ := m.redis.Get(m.ctx, validatorsKey).Result()
 		var validators []string
 		if validatorsJSON != "" {
@@ -650,10 +684,27 @@ func (m *MonitorAPI) AggregationResults(c *gin.Context) {
 // @Description Get epoch progression with phases and batch status
 // @Tags epochs
 // @Produce json
+// @Param protocol query string false "Protocol state identifier"
+// @Param market query string false "Data market address"
 // @Param limit query int false "Number of epochs (default 50)"
 // @Success 200 {array} EpochInfo
 // @Router /epochs/timeline [get]
 func (m *MonitorAPI) EpochsTimeline(c *gin.Context) {
+	protocol := c.Query("protocol")
+	market := c.Query("market")
+
+	// Use specified protocol/market or fall back to default
+	kb := m.keyBuilder
+	if protocol != "" || market != "" {
+		if protocol == "" {
+			protocol = m.keyBuilder.ProtocolState
+		}
+		if market == "" {
+			market = m.keyBuilder.DataMarket
+		}
+		kb = keys.NewKeyBuilder(protocol, market)
+	}
+
 	limitParam := c.DefaultQuery("limit", "50")
 	limit, _ := strconv.Atoi(limitParam)
 	if limit <= 0 || limit > 200 {
@@ -661,7 +712,7 @@ func (m *MonitorAPI) EpochsTimeline(c *gin.Context) {
 	}
 
 	// Get recent epochs from timeline (entries are "open:{id}" or "close:{id}")
-	entries, _ := m.redis.ZRevRange(m.ctx, m.keyBuilder.MetricsEpochsTimeline(), 0, int64(limit*2)).Result()
+	entries, _ := m.redis.ZRevRange(m.ctx, kb.MetricsEpochsTimeline(), 0, int64(limit*2)).Result()
 
 	epochMap := make(map[string]*EpochInfo)
 	var epochOrder []string
@@ -698,7 +749,7 @@ func (m *MonitorAPI) EpochsTimeline(c *gin.Context) {
 		epochInfo := epochMap[epochID]
 
 		// Get epoch info hash
-		infoKey := m.keyBuilder.MetricsEpochInfo(epochID)
+		infoKey := kb.MetricsEpochInfo(epochID)
 		infoData, err := m.redis.HGetAll(m.ctx, infoKey).Result()
 		if err == nil {
 			if startStr, ok := infoData["start"]; ok {
@@ -717,12 +768,12 @@ func (m *MonitorAPI) EpochsTimeline(c *gin.Context) {
 		}
 
 		// Check for Level 1 batch
-		level1Key := m.keyBuilder.MetricsBatchLocal(epochID)
+		level1Key := kb.MetricsBatchLocal(epochID)
 		level1Exists, _ := m.redis.Exists(m.ctx, level1Key).Result()
 		epochInfo.Level1Batch = level1Exists > 0
 
 		// Check for Level 2 batch
-		level2Key := m.keyBuilder.MetricsBatchAggregated(epochID)
+		level2Key := kb.MetricsBatchAggregated(epochID)
 		level2Exists, _ := m.redis.Exists(m.ctx, level2Key).Result()
 		epochInfo.Level2Batch = level2Exists > 0
 
@@ -747,9 +798,26 @@ func (m *MonitorAPI) EpochsTimeline(c *gin.Context) {
 // @Description Get real-time queue depths and processing rates
 // @Tags queues
 // @Produce json
+// @Param protocol query string false "Protocol state identifier"
+// @Param market query string false "Data market address"
 // @Success 200 {array} QueueStatus
 // @Router /queues/status [get]
 func (m *MonitorAPI) QueuesStatus(c *gin.Context) {
+	protocol := c.Query("protocol")
+	market := c.Query("market")
+
+	// Use specified protocol/market or fall back to default
+	kb := m.keyBuilder
+	if protocol != "" || market != "" {
+		if protocol == "" {
+			protocol = m.keyBuilder.ProtocolState
+		}
+		if market == "" {
+			market = m.keyBuilder.DataMarket
+		}
+		kb = keys.NewKeyBuilder(protocol, market)
+	}
+
 	queues := []QueueStatus{
 		{
 			QueueName: "submission_queue",
@@ -769,15 +837,15 @@ func (m *MonitorAPI) QueuesStatus(c *gin.Context) {
 	}
 
 	// Get actual queue depths
-	submissionDepth, _ := m.redis.LLen(m.ctx, m.keyBuilder.SubmissionQueue()).Result()
+	submissionDepth, _ := m.redis.LLen(m.ctx, kb.SubmissionQueue()).Result()
 	queues[0].Depth = submissionDepth
 	queues[0].Status = getQueueStatus(int(submissionDepth))
 
-	finalizationDepth, _ := m.redis.LLen(m.ctx, m.keyBuilder.FinalizationQueue()).Result()
+	finalizationDepth, _ := m.redis.LLen(m.ctx, kb.FinalizationQueue()).Result()
 	queues[1].Depth = finalizationDepth
 	queues[1].Status = getQueueStatus(int(finalizationDepth))
 
-	aggregationDepth, _ := m.redis.LLen(m.ctx, m.keyBuilder.AggregationQueue()).Result()
+	aggregationDepth, _ := m.redis.LLen(m.ctx, kb.AggregationQueue()).Result()
 	queues[2].Depth = aggregationDepth
 	queues[2].Status = getQueueStatus(int(aggregationDepth))
 

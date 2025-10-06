@@ -113,6 +113,14 @@ paths:
     get:
       description: Get network-wide aggregated batches with validator contributions
       parameters:
+      - description: Protocol state identifier
+        in: query
+        name: protocol
+        type: string
+      - description: Data market address
+        in: query
+        name: market
+        type: string
       - description: Number of results (default 20)
         in: query
         name: limit
@@ -133,6 +141,14 @@ paths:
     get:
       description: Get Level 1 (local) or Level 2 (aggregated) finalized batches
       parameters:
+      - description: Protocol state identifier
+        in: query
+        name: protocol
+        type: string
+      - description: Data market address
+        in: query
+        name: market
+        type: string
       - description: Batch level (1 or 2, default both)
         in: query
         name: level
@@ -174,6 +190,14 @@ paths:
     get:
       description: Get epoch progression with phases and batch status
       parameters:
+      - description: Protocol state identifier
+        in: query
+        name: protocol
+        type: string
+      - description: Data market address
+        in: query
+        name: market
+        type: string
       - description: Number of epochs (default 50)
         in: query
         name: limit
@@ -221,6 +245,15 @@ paths:
   /queues/status:
     get:
       description: Get real-time queue depths and processing rates
+      parameters:
+      - description: Protocol state identifier
+        in: query
+        name: protocol
+        type: string
+      - description: Data market address
+        in: query
+        name: market
+        type: string
       produces:
       - application/json
       responses:
