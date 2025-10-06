@@ -258,6 +258,20 @@
                     "stats"
                 ],
                 "summary": "Daily statistics",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -279,6 +293,18 @@
                 ],
                 "summary": "Hourly statistics",
                 "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    },
                     {
                         "type": "integer",
                         "description": "Number of hours to retrieve (default 24)",

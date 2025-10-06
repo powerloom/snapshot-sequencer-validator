@@ -229,10 +229,27 @@ func (m *MonitorAPI) DashboardSummary(c *gin.Context) {
 // @Description Get pre-aggregated hourly statistics
 // @Tags stats
 // @Produce json
+// @Param protocol query string false "Protocol state identifier"
+// @Param market query string false "Data market address"
 // @Param hours query int false "Number of hours to retrieve (default 24)"
 // @Success 200 {object} HourlyStats
 // @Router /stats/hourly [get]
 func (m *MonitorAPI) HourlyStats(c *gin.Context) {
+	protocol := c.Query("protocol")
+	market := c.Query("market")
+
+	// Use specified protocol/market or fall back to default
+	kb := m.keyBuilder
+	if protocol != "" || market != "" {
+		if protocol == "" {
+			protocol = m.keyBuilder.ProtocolState
+		}
+		if market == "" {
+			market = m.keyBuilder.DataMarket
+		}
+		kb = keys.NewKeyBuilder(protocol, market)
+	}
+
 	hoursParam := c.DefaultQuery("hours", "24")
 	hours, _ := strconv.Atoi(hoursParam)
 	if hours <= 0 || hours > 48 {
@@ -242,10 +259,10 @@ func (m *MonitorAPI) HourlyStats(c *gin.Context) {
 	hourlyData := make([]map[string]interface{}, 0, hours)
 	now := time.Now()
 
-	// Fetch hourly stats for requested hours
+	// Fetch hourly stats for requested hours (namespaced)
 	for i := 0; i < hours; i++ {
 		hourTime := now.Add(-time.Duration(i) * time.Hour).Truncate(time.Hour)
-		hourKey := fmt.Sprintf("stats:hourly:%d", hourTime.Unix())
+		hourKey := fmt.Sprintf("%s:%s:stats:hourly:%d", kb.ProtocolState, kb.DataMarket, hourTime.Unix())
 
 		statsJSON, err := m.redis.Get(m.ctx, hourKey).Result()
 		if err == redis.Nil {
@@ -273,11 +290,29 @@ func (m *MonitorAPI) HourlyStats(c *gin.Context) {
 // @Description Get pre-aggregated 24-hour statistics
 // @Tags stats
 // @Produce json
+// @Param protocol query string false "Protocol state identifier"
+// @Param market query string false "Data market address"
 // @Success 200 {object} DailyStats
 // @Router /stats/daily [get]
 func (m *MonitorAPI) DailyStats(c *gin.Context) {
-	// Read pre-aggregated daily stats
-	statsJSON, err := m.redis.Get(m.ctx, "stats:daily").Result()
+	protocol := c.Query("protocol")
+	market := c.Query("market")
+
+	// Use specified protocol/market or fall back to default
+	kb := m.keyBuilder
+	if protocol != "" || market != "" {
+		if protocol == "" {
+			protocol = m.keyBuilder.ProtocolState
+		}
+		if market == "" {
+			market = m.keyBuilder.DataMarket
+		}
+		kb = keys.NewKeyBuilder(protocol, market)
+	}
+
+	// Read pre-aggregated daily stats (namespaced)
+	dailyKey := fmt.Sprintf("%s:%s:stats:daily", kb.ProtocolState, kb.DataMarket)
+	statsJSON, err := m.redis.Get(m.ctx, dailyKey).Result()
 	if err == redis.Nil {
 		c.JSON(http.StatusOK, DailyStats{
 			Summary:   map[string]interface{}{"message": "No daily stats available yet"},
@@ -319,11 +354,29 @@ func (m *MonitorAPI) DailyStats(c *gin.Context) {
 // @Description Get pipeline metrics from pre-aggregated data
 // @Tags pipeline
 // @Produce json
+// @Param protocol query string false "Protocol state identifier"
+// @Param market query string false "Data market address"
 // @Success 200 {object} map[string]interface{}
 // @Router /pipeline/overview [get]
 func (m *MonitorAPI) PipelineOverview(c *gin.Context) {
-	// Read from dashboard:summary for compatibility
-	summaryJSON, _ := m.redis.Get(m.ctx, "dashboard:summary").Result()
+	protocol := c.Query("protocol")
+	market := c.Query("market")
+
+	// Use specified protocol/market or fall back to default
+	kb := m.keyBuilder
+	if protocol != "" || market != "" {
+		if protocol == "" {
+			protocol = m.keyBuilder.ProtocolState
+		}
+		if market == "" {
+			market = m.keyBuilder.DataMarket
+		}
+		kb = keys.NewKeyBuilder(protocol, market)
+	}
+
+	// Read from namespaced dashboard:summary
+	summaryKey := fmt.Sprintf("%s:%s:dashboard:summary", kb.ProtocolState, kb.DataMarket)
+	summaryJSON, _ := m.redis.Get(m.ctx, summaryKey).Result()
 
 	var summary map[string]interface{}
 	if summaryJSON != "" {
@@ -333,9 +386,9 @@ func (m *MonitorAPI) PipelineOverview(c *gin.Context) {
 	}
 
 	// Add queue depths if needed (real-time check)
-	submissionQueueDepth, _ := m.redis.LLen(m.ctx, m.keyBuilder.SubmissionQueue()).Result()
-	finalizationQueueDepth, _ := m.redis.LLen(m.ctx, m.keyBuilder.FinalizationQueue()).Result()
-	aggregationQueueDepth, _ := m.redis.LLen(m.ctx, m.keyBuilder.AggregationQueue()).Result()
+	submissionQueueDepth, _ := m.redis.LLen(m.ctx, kb.SubmissionQueue()).Result()
+	finalizationQueueDepth, _ := m.redis.LLen(m.ctx, kb.FinalizationQueue()).Result()
+	aggregationQueueDepth, _ := m.redis.LLen(m.ctx, kb.AggregationQueue()).Result()
 
 	overview := map[string]interface{}{
 		"submission_queue": map[string]interface{}{
@@ -449,8 +502,9 @@ func (m *MonitorAPI) Health(c *gin.Context) {
 		return
 	}
 
-	// Check if state-tracker data is fresh
-	summaryJSON, _ := m.redis.Get(m.ctx, "dashboard:summary").Result()
+	// Check if state-tracker data is fresh (use default keyBuilder for health check)
+	summaryKey := fmt.Sprintf("%s:%s:dashboard:summary", m.keyBuilder.ProtocolState, m.keyBuilder.DataMarket)
+	summaryJSON, _ := m.redis.Get(m.ctx, summaryKey).Result()
 	dataFresh := summaryJSON != ""
 
 	c.JSON(http.StatusOK, gin.H{
@@ -769,7 +823,6 @@ func (m *MonitorAPI) EpochsTimeline(c *gin.Context) {
 		if len(parts) < 2 {
 			continue
 		}
-		action := parts[0]
 		epochID := parts[1]
 
 		if _, exists := epochMap[epochID]; !exists {
@@ -777,12 +830,6 @@ func (m *MonitorAPI) EpochsTimeline(c *gin.Context) {
 				EpochID: epochID,
 			}
 			epochOrder = append(epochOrder, epochID)
-		}
-
-		if action == "open" {
-			epochMap[epochID].Status = "open"
-		} else if action == "close" {
-			epochMap[epochID].Status = "closed"
 		}
 	}
 
@@ -795,10 +842,14 @@ func (m *MonitorAPI) EpochsTimeline(c *gin.Context) {
 
 		epochInfo := epochMap[epochID]
 
-		// Get epoch info hash
+		// Get epoch info hash (authoritative source)
 		infoKey := kb.MetricsEpochInfo(epochID)
 		infoData, err := m.redis.HGetAll(m.ctx, infoKey).Result()
 		if err == nil {
+			// Get status from Redis hash (authoritative)
+			if status, ok := infoData["status"]; ok {
+				epochInfo.Status = status
+			}
 			if startStr, ok := infoData["start"]; ok {
 				if startInt, err := strconv.ParseInt(startStr, 10, 64); err == nil {
 					epochInfo.StartTime = startInt

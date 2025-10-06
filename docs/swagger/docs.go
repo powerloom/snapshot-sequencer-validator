@@ -265,6 +265,20 @@ const docTemplate = `{
                     "stats"
                 ],
                 "summary": "Daily statistics",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -286,6 +300,18 @@ const docTemplate = `{
                 ],
                 "summary": "Hourly statistics",
                 "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    },
                     {
                         "type": "integer",
                         "description": "Number of hours to retrieve (default 24)",
@@ -498,8 +524,8 @@ var SwaggerInfo = &swag.Spec{
 	Host:             "",
 	BasePath:         "/api/v1",
 	Schemes:          []string{},
-	Title:            "DSV Monitoring API",
-	Description:      "A comprehensive monitoring API for the Decentralized Sequencer Validator participating in Powerloom datamarkets",
+	Title:            "DSV Pipeline Monitor API (Direct Redis)",
+	Description:      "Monitoring API that reads pre-aggregated data from state-tracker worker",
 	InfoInstanceName: "swagger",
 	SwaggerTemplate:  docTemplate,
 }

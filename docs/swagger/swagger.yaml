@@ -269,6 +269,15 @@ paths:
   /stats/daily:
     get:
       description: Get pre-aggregated 24-hour statistics
+      parameters:
+      - description: Protocol state identifier
+        in: query
+        name: protocol
+        type: string
+      - description: Data market address
+        in: query
+        name: market
+        type: string
       produces:
       - application/json
       responses:
@@ -283,6 +292,14 @@ paths:
     get:
       description: Get pre-aggregated hourly statistics
       parameters:
+      - description: Protocol state identifier
+        in: query
+        name: protocol
+        type: string
+      - description: Data market address
+        in: query
+        name: market
+        type: string
       - description: Number of hours to retrieve (default 24)
         in: query
         name: hours
