@@ -103,8 +103,24 @@ func NewMonitorAPI(redisClient *redis.Client, protocol, market string) *MonitorA
 // @Success 200 {object} DashboardSummary
 // @Router /dashboard/summary [get]
 func (m *MonitorAPI) DashboardSummary(c *gin.Context) {
-	// Read pre-aggregated dashboard summary from state-tracker
-	summaryJSON, err := m.redis.Get(m.ctx, "dashboard:summary").Result()
+	protocol := c.Query("protocol")
+	market := c.Query("market")
+
+	// Use specified protocol/market or fall back to default
+	kb := m.keyBuilder
+	if protocol != "" || market != "" {
+		if protocol == "" {
+			protocol = m.keyBuilder.ProtocolState
+		}
+		if market == "" {
+			market = m.keyBuilder.DataMarket
+		}
+		kb = keys.NewKeyBuilder(protocol, market)
+	}
+
+	// Read pre-aggregated dashboard summary from state-tracker (namespaced)
+	summaryKey := fmt.Sprintf("%s:%s:dashboard:summary", kb.ProtocolState, kb.DataMarket)
+	summaryJSON, err := m.redis.Get(m.ctx, summaryKey).Result()
 	if err != nil && err != redis.Nil {
 		log.WithError(err).Error("Failed to fetch dashboard summary")
 	}
@@ -116,8 +132,9 @@ func (m *MonitorAPI) DashboardSummary(c *gin.Context) {
 		summary = make(map[string]interface{})
 	}
 
-	// Read current stats hash from state-tracker
-	currentStats, err := m.redis.HGetAll(m.ctx, "stats:current").Result()
+	// Read current stats hash from state-tracker (namespaced)
+	statsKey := fmt.Sprintf("%s:%s:stats:current", kb.ProtocolState, kb.DataMarket)
+	currentStats, err := m.redis.HGetAll(m.ctx, statsKey).Result()
 	if err != nil && err != redis.Nil {
 		log.WithError(err).Error("Failed to fetch current stats")
 	}
@@ -133,32 +150,34 @@ func (m *MonitorAPI) DashboardSummary(c *gin.Context) {
 		}
 	}
 
-	// Get queue depths for real-time status
-	submissionQueueDepth, _ := m.redis.LLen(m.ctx, m.keyBuilder.SubmissionQueue()).Result()
-	finalizationQueueDepth, _ := m.redis.LLen(m.ctx, m.keyBuilder.FinalizationQueue()).Result()
-	aggregationQueueDepth, _ := m.redis.LLen(m.ctx, m.keyBuilder.AggregationQueue()).Result()
+	// Get queue depths for real-time status (use kb not m.keyBuilder)
+	submissionQueueDepth, _ := m.redis.LLen(m.ctx, kb.SubmissionQueue()).Result()
+	finalizationQueueDepth, _ := m.redis.LLen(m.ctx, kb.FinalizationQueue()).Result()
+	aggregationQueueDepth, _ := m.redis.LLen(m.ctx, kb.AggregationQueue()).Result()
 
 	// Add queue depths to current stats
 	statsMap["submission_queue_depth"] = submissionQueueDepth
 	statsMap["finalization_queue_depth"] = finalizationQueueDepth
 	statsMap["aggregation_queue_depth"] = aggregationQueueDepth
 
-	// Get participation metrics from state-tracker
-	participationJSON, _ := m.redis.Get(m.ctx, "metrics:participation").Result()
+	// Get participation metrics from state-tracker (namespaced)
+	participationKey := fmt.Sprintf("%s:%s:metrics:participation", kb.ProtocolState, kb.DataMarket)
+	participationJSON, _ := m.redis.Get(m.ctx, participationKey).Result()
 	var participation map[string]interface{}
 	if participationJSON != "" {
 		json.Unmarshal([]byte(participationJSON), &participation)
 	}
 
-	// Get current epoch status from state-tracker
-	currentEpochJSON, _ := m.redis.Get(m.ctx, "metrics:current_epoch").Result()
+	// Get current epoch status from state-tracker (namespaced)
+	currentEpochKey := fmt.Sprintf("%s:%s:metrics:current_epoch", kb.ProtocolState, kb.DataMarket)
+	currentEpochJSON, _ := m.redis.Get(m.ctx, currentEpochKey).Result()
 	var currentEpoch map[string]interface{}
 	if currentEpochJSON != "" {
 		json.Unmarshal([]byte(currentEpochJSON), &currentEpoch)
 	}
 
 	response := DashboardSummary{
-		ValidatorID:    getEnv("VALIDATOR_ID", "validator-001"),
+		ValidatorID:    getEnv("SEQUENCER_ID", "validator1"),
 		Metrics:        summary,
 		CurrentStats:   statsMap,
 		RecentActivity: make(map[string]interface{}),
@@ -347,6 +366,21 @@ func (m *MonitorAPI) PipelineOverview(c *gin.Context) {
 // @Success 200 {object} map[string]interface{}
 // @Router /timeline/recent [get]
 func (m *MonitorAPI) RecentTimeline(c *gin.Context) {
+	protocol := c.Query("protocol")
+	market := c.Query("market")
+
+	// Use specified protocol/market or fall back to default
+	kb := m.keyBuilder
+	if protocol != "" || market != "" {
+		if protocol == "" {
+			protocol = m.keyBuilder.ProtocolState
+		}
+		if market == "" {
+			market = m.keyBuilder.DataMarket
+		}
+		kb = keys.NewKeyBuilder(protocol, market)
+	}
+
 	eventType := c.DefaultQuery("type", "submission")
 	minutesParam := c.DefaultQuery("minutes", "5")
 	minutes, _ := strconv.Atoi(minutesParam)
@@ -365,7 +399,8 @@ func (m *MonitorAPI) RecentTimeline(c *gin.Context) {
 		eventType = "submission"
 	}
 
-	timelineKey := fmt.Sprintf("timeline:%s", eventType)
+	// Use namespaced timeline key
+	timelineKey := fmt.Sprintf("%s:%s:timeline:%s", kb.ProtocolState, kb.DataMarket, eventType)
 	now := time.Now().Unix()
 	start := now - int64(minutes*60)
 
@@ -515,6 +550,12 @@ func (m *MonitorAPI) FinalizedBatches(c *gin.Context) {
 						ProjectCount:   int(batchData["project_count"].(float64)),
 						Timestamp:      int64(batchData["timestamp"].(float64)),
 					}
+					if cid, ok := batchData["ipfs_cid"].(string); ok {
+						batch.IPFSCid = cid
+					}
+					if root, ok := batchData["merkle_root"].(string); ok {
+						batch.MerkleRoot = root
+					}
 					batches = append(batches, batch)
 				}
 			}
@@ -581,6 +622,12 @@ func (m *MonitorAPI) FinalizedBatches(c *gin.Context) {
 							ValidatorCount: len(validators),
 							ProjectCount:   int(batchData["project_count"].(float64)),
 							Timestamp:      int64(batchData["timestamp"].(float64)),
+						}
+						if cid, ok := batchData["ipfs_cid"].(string); ok {
+							batch.IPFSCid = cid
+						}
+						if root, ok := batchData["merkle_root"].(string); ok {
+							batch.MerkleRoot = root
 						}
 						batches = append(batches, batch)
 					}

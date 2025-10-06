@@ -505,6 +505,8 @@ func (a *Aggregator) aggregateEpoch(epochIDStr string) {
 		"project_count":    len(aggregatedBatch.ProjectVotes),
 		"timestamp":        timestamp,
 		"validator_ids":    extractValidatorIDs(incomingKeys),
+		"ipfs_cid":         aggregatedBatch.BatchIPFSCID,
+		"merkle_root":      aggregatedBatch.MerkleRoot,
 	}
 	jsonData, _ := json.Marshal(batchMetricsData)
 	pipe.SetEX(a.ctx, batchMetricsKey, string(jsonData), 24*time.Hour)
