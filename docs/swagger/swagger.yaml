@@ -1,172 +1,57 @@
 basePath: /api/v1
 definitions:
-  main.AggregatedBatch:
+  main.DailyStats:
     properties:
-      batch_ipfs_cid:
-        description: IPFS CID of the final Level 2 aggregated batch
-        type: string
-      epoch_id:
-        type: string
-      merkle_root:
-        description: Merkle root as base64 string
-        type: string
-      project_count:
-        type: integer
-      project_ids:
-        description: Array of project IDs that were aggregated
+      hourly_breakdown:
         items:
-          type: string
+          additionalProperties: true
+          type: object
         type: array
-      timestamp:
-        type: string
-      validator_batches:
-        additionalProperties:
-          type: string
-        description: validator_id → their individual Level 1 batch IPFS CID
+      summary:
+        additionalProperties: true
         type: object
-      validator_count:
-        type: integer
-      validator_ids:
-        description: Array of validator IDs that contributed
-        items:
-          type: string
-        type: array
-    type: object
-  main.AggregationMetrics:
-    properties:
-      consensus_alignment_rate:
-        type: number
-      level1_contributions:
-        type: integer
-      level2_participations:
-        type: integer
-      validator_weight:
-        type: number
-    type: object
-  main.AggregationSummary:
-    properties:
-      batch_ipfs_cid:
-        type: string
-      merkle_root:
-        type: string
-      projects_finalized:
-        type: integer
       timestamp:
         type: string
-    type: object
-  main.Alert:
-    properties:
-      message:
-        type: string
-      severity:
-        description: info|warning|critical
-        type: string
-      timestamp:
-        type: string
-      type:
-        type: string
-    type: object
-  main.BatchPart:
-    properties:
-      epoch_id:
-        type: string
-      part_id:
-        type: integer
-      project_count:
-        type: integer
-    type: object
-  main.Bottleneck:
-    properties:
-      detected_at:
-        type: string
-      duration_s:
-        type: integer
-      peak_depth:
-        type: integer
-      queue:
-        type: string
-      severity:
-        description: low|medium|high
-        type: string
-    type: object
-  main.CurrentEpochInfo:
-    properties:
-      expected_submissions:
-        type: integer
-      id:
-        type: integer
-      local_submissions:
-        type: integer
-      phase:
-        description: submission|finalization|aggregation|complete
-        type: string
-      time_remaining:
-        type: integer
     type: object
   main.DashboardSummary:
     properties:
-      alerts:
-        items:
-          $ref: '#/definitions/main.Alert'
-        type: array
-      current_epoch:
-        $ref: '#/definitions/main.CurrentEpochInfo'
-      health:
-        $ref: '#/definitions/main.HealthStatus'
-      performance_24h:
-        $ref: '#/definitions/main.Performance24H'
+      current_stats:
+        additionalProperties: true
+        description: From stats:current
+        type: object
+      metrics:
+        additionalProperties: true
+        description: From dashboard:summary
+        type: object
+      recent_activity:
+        additionalProperties: true
+        description: 1m and 5m activity
+        type: object
+      timestamp:
+        type: string
       validator_id:
         type: string
     type: object
-  main.EpochDetail:
+  main.EpochInfo:
     properties:
-      epoch_id:
-        type: integer
-      metrics:
-        $ref: '#/definitions/main.EpochMetrics'
-      phases:
-        $ref: '#/definitions/main.EpochPhases'
-      status:
-        description: complete|processing|missed
+      data_market:
         type: string
-    type: object
-  main.EpochMetrics:
-    properties:
-      queue_max_depth:
+      duration:
         type: integer
-      total_duration_ms:
+      epoch_id:
+        type: string
+      level1_batch_exists:
+        type: boolean
+      level2_batch_exists:
+        type: boolean
+      phase:
+        description: '"submission", "finalization", "aggregation", "complete"'
+        type: string
+      start_time:
         type: integer
-      worker_utilization:
-        type: number
-    type: object
-  main.EpochPhases:
-    properties:
-      aggregation:
-        $ref: '#/definitions/main.PhaseInfo'
-      finalization:
-        $ref: '#/definitions/main.PhaseInfo'
-      submission:
-        $ref: '#/definitions/main.PhaseInfo'
-    type: object
-  main.EpochTimelineResponse:
-    properties:
-      epochs:
-        items:
-          $ref: '#/definitions/main.EpochDetail'
-        type: array
-      summary:
-        $ref: '#/definitions/main.TimelineSummary'
-    type: object
-  main.FinalizationMetrics:
-    properties:
-      average_finalization_time_ms:
-        type: integer
-      average_projects_per_batch:
-        type: number
-      batches_created:
-        type: integer
-      ipfs_success_rate:
-        type: number
+      status:
+        description: '"open", "closed"'
+        type: string
     type: object
   main.FinalizedBatch:
     properties:
@@ -174,333 +59,64 @@ definitions:
         type: string
       ipfs_cid:
         type: string
-      project_count:
+      level:
+        description: 1 for local, 2 for aggregated
         type: integer
-      sequencer_id:
-        type: string
-      timestamp:
-        type: string
-      vote_count:
-        type: integer
-    type: object
-  main.HealthStatus:
-    properties:
-      components:
-        additionalProperties:
-          type: string
-        type: object
-      last_activity:
-        type: string
-      overall_status:
-        description: healthy|degraded|critical
-        type: string
-    type: object
-  main.NetworkAverages:
-    properties:
-      consensus_alignment_rate:
-        type: number
-      participation_rate:
-        type: number
-      processing_rate:
-        type: number
-    type: object
-  main.NetworkComparison:
-    properties:
-      network_average:
-        $ref: '#/definitions/main.NetworkAverages'
-      percentile_rank:
-        type: integer
-    type: object
-  main.NetworkConsensusView:
-    properties:
-      aggregation:
-        $ref: '#/definitions/main.AggregationSummary'
-      consensus_status:
-        description: achieved|pending|failed
-        type: string
-      epoch_id:
-        type: integer
-      project_consensus:
-        additionalProperties:
-          $ref: '#/definitions/main.ProjectVotes'
-        type: object
-      validator_contributions:
-        items:
-          $ref: '#/definitions/main.ValidatorContribution'
-        type: array
-      validators:
-        $ref: '#/definitions/main.ValidatorSummary'
-    type: object
-  main.ParticipationMetrics:
-    properties:
-      epochs_participated:
-        type: integer
-      epochs_total:
-        type: integer
-      participation_rate:
-        type: number
-      streak_current:
-        type: integer
-      streak_longest:
-        type: integer
-    type: object
-  main.Performance24H:
-    properties:
-      aggregations_contributed:
-        type: integer
-      epochs_participated:
-        type: integer
-      epochs_total:
-        type: integer
-      finalizations_completed:
-        type: integer
-      participation_rate:
-        type: number
-      submissions_processed:
-        type: integer
-    type: object
-  main.PerformanceMetrics:
-    properties:
-      aggregation:
-        $ref: '#/definitions/main.AggregationMetrics'
-      finalization:
-        $ref: '#/definitions/main.FinalizationMetrics'
-      participation:
-        $ref: '#/definitions/main.ParticipationMetrics'
-      submissions:
-        $ref: '#/definitions/main.SubmissionMetrics'
-    type: object
-  main.PhaseInfo:
-    properties:
-      batch_created:
-        type: boolean
-      consensus_achieved:
-        type: boolean
-      end:
-        type: string
-      ipfs_cid:
-        type: string
       merkle_root:
         type: string
-      projects_finalized:
+      project_count:
         type: integer
-      start:
-        type: string
-      submissions_processed:
-        type: integer
-      submissions_received:
-        type: integer
-      validators_participated:
-        type: integer
-    type: object
-  main.PipelineOverview:
-    properties:
-      active_windows:
-        type: integer
-      active_workers:
-        type: integer
-      aggregated_batches:
-        type: integer
-      aggregation_queue:
-        $ref: '#/definitions/main.QueueStatus'
-      completed_parts:
-        type: integer
-      finalization_queue:
-        $ref: '#/definitions/main.QueueStatus'
-      finalized_batches:
-        type: integer
-      ready_batches:
-        type: integer
-      submission_queue:
-        $ref: '#/definitions/main.QueueStatus'
       timestamp:
-        type: string
-    type: object
-  main.ProjectVotes:
-    properties:
-      consensus_cid:
-        type: string
-      validators_agreed:
         type: integer
-      vote_distribution:
-        additionalProperties:
-          type: integer
-        type: object
-    type: object
-  main.QueueAnalytics:
-    properties:
-      bottlenecks:
-        items:
-          $ref: '#/definitions/main.Bottleneck'
-        type: array
-      queues:
-        additionalProperties:
-          $ref: '#/definitions/main.QueueMetrics'
-        type: object
-      recommendations:
+      type:
+        description: '"local" or "aggregated"'
+        type: string
+      validator_count:
+        description: Level 2 only
+        type: integer
+      validator_id:
+        description: Level 1 only
+        type: string
+      validator_ids:
+        description: Level 2 only
         items:
           type: string
         type: array
+    type: object
+  main.HourlyStats:
+    properties:
+      hours:
+        items:
+          additionalProperties: true
+          type: object
+        type: array
       timestamp:
         type: string
-    type: object
-  main.QueueMetrics:
-    properties:
-      average_depth_1h:
-        type: number
-      current_depth:
-        type: integer
-      estimated_clear_time_s:
-        type: number
-      max_depth_1h:
-        type: integer
-      processing_rate:
-        type: number
     type: object
   main.QueueStatus:
     properties:
       depth:
         type: integer
-      status:
-        type: string
-    type: object
-  main.ReadyBatch:
-    properties:
-      epoch_id:
-        type: string
-      has_votes:
-        type: boolean
-      project_count:
-        type: integer
-    type: object
-  main.SubmissionMetrics:
-    properties:
-      average_per_epoch:
-        type: number
-      by_project:
-        additionalProperties:
-          type: integer
-        type: object
-      processing_rate:
-        type: number
-      total_processed:
-        type: integer
-      total_received:
-        type: integer
-    type: object
-  main.SubmissionWindow:
-    properties:
-      closed_at:
-        type: string
-      epoch_id:
-        type: string
-      market:
+      queue_name:
         type: string
       status:
-        type: string
-      ttl_seconds:
-        type: integer
-    type: object
-  main.TimelineSummary:
-    properties:
-      average_duration_ms:
-        type: integer
-      missed:
-        type: integer
-      successful:
-        type: integer
-      total_epochs:
-        type: integer
-    type: object
-  main.ValidatorContribution:
-    properties:
-      batch_cid:
-        type: string
-      contribution_weight:
-        type: number
-      projects_count:
-        type: integer
-      submission_count:
-        type: integer
-      validator_id:
-        type: string
-    type: object
-  main.ValidatorPerformance:
-    properties:
-      comparison:
-        $ref: '#/definitions/main.NetworkComparison'
-      metrics:
-        $ref: '#/definitions/main.PerformanceMetrics'
-      period:
-        type: string
-      validator_id:
-        type: string
-    type: object
-  main.ValidatorSummary:
-    properties:
-      participated:
-        type: integer
-      pending:
-        type: integer
-      total:
-        type: integer
-    type: object
-  main.WorkerStatus:
-    properties:
-      epoch_id:
-        type: string
-      healthy:
-        type: boolean
-      last_heartbeat:
-        type: string
-      project_id:
-        type: string
-      status:
-        type: string
-      worker_id:
+        description: '"empty", "healthy", "moderate", "high", "critical"'
         type: string
     type: object
 info:
   contact: {}
-  description: Monitoring API for Decentralized Sequencer Validator pipeline
-  title: DSV Pipeline Monitor API
-  version: "1.0"
+  description: Monitoring API that reads pre-aggregated data from state-tracker worker
+  title: DSV Pipeline Monitor API (Direct Redis)
+  version: "3.0"
 paths:
-  /aggregation/queue:
-    get:
-      description: Get aggregation queue status
-      parameters:
-      - description: Protocol state identifier
-        in: query
-        name: protocol
-        type: string
-      - description: Data market address
-        in: query
-        name: market
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            additionalProperties: true
-            type: object
-      summary: Aggregation queue
-      tags:
-      - aggregation
   /aggregation/results:
     get:
-      description: Get network-wide aggregated batches with complete batch information
+      description: Get network-wide aggregated batches with validator contributions
       parameters:
-      - description: Protocol state identifier
+      - description: Number of results (default 20)
         in: query
-        name: protocol
-        type: string
-      - description: Data market address
-        in: query
-        name: market
-        type: string
+        name: limit
+        type: integer
       produces:
       - application/json
       responses:
@@ -508,46 +124,27 @@ paths:
           description: OK
           schema:
             items:
-              $ref: '#/definitions/main.AggregatedBatch'
+              $ref: '#/definitions/main.FinalizedBatch'
             type: array
-      summary: Aggregated batches
+      summary: Aggregation results
       tags:
       - aggregation
-  /batches/finalization-queue:
-    get:
-      description: Get finalization queue status
-      parameters:
-      - description: Protocol state identifier
-        in: query
-        name: protocol
-        type: string
-      - description: Data market address
-        in: query
-        name: market
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            additionalProperties: true
-            type: object
-      summary: Finalization queue
-      tags:
-      - batches
   /batches/finalized:
     get:
-      description: Get finalized batches with details
+      description: Get Level 1 (local) or Level 2 (aggregated) finalized batches
       parameters:
-      - description: Protocol state identifier
+      - description: Batch level (1 or 2, default both)
         in: query
-        name: protocol
-        type: string
-      - description: Data market address
+        name: level
+        type: integer
+      - description: Specific epoch ID
         in: query
-        name: market
+        name: epoch_id
         type: string
+      - description: Number of batches to retrieve (default 50)
+        in: query
+        name: limit
+        type: integer
       produces:
       - application/json
       responses:
@@ -560,57 +157,9 @@ paths:
       summary: Finalized batches
       tags:
       - batches
-  /batches/parts:
-    get:
-      description: Get completed batch parts from parallel finalization
-      parameters:
-      - description: Protocol state identifier
-        in: query
-        name: protocol
-        type: string
-      - description: Data market address
-        in: query
-        name: market
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            items:
-              $ref: '#/definitions/main.BatchPart'
-            type: array
-      summary: Batch parts
-      tags:
-      - batches
-  /batches/ready:
-    get:
-      description: Get batches ready for finalization
-      parameters:
-      - description: Protocol state identifier
-        in: query
-        name: protocol
-        type: string
-      - description: Data market address
-        in: query
-        name: market
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            items:
-              $ref: '#/definitions/main.ReadyBatch'
-            type: array
-      summary: Ready batches
-      tags:
-      - batches
   /dashboard/summary:
     get:
-      description: Get overall validator health and performance summary
+      description: Get pre-aggregated dashboard metrics from state-tracker
       produces:
       - application/json
       responses:
@@ -623,16 +172,11 @@ paths:
       - dashboard
   /epochs/timeline:
     get:
-      description: Get timeline of recent epochs with phase progression
+      description: Get epoch progression with phases and batch status
       parameters:
-      - default: 50
-        description: Number of epochs to return
+      - description: Number of epochs (default 50)
         in: query
         name: limit
-        type: integer
-      - description: Starting epoch ID
-        in: query
-        name: from_epoch
         type: integer
       produces:
       - application/json
@@ -640,13 +184,15 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/main.EpochTimelineResponse'
-      summary: Epoch timeline
+            items:
+              $ref: '#/definitions/main.EpochInfo'
+            type: array
+      summary: Epochs timeline
       tags:
       - epochs
   /health:
     get:
-      description: Check if the API is running and can connect to Redis
+      description: Check if the API and Redis connection are healthy
       produces:
       - application/json
       responses:
@@ -658,71 +204,9 @@ paths:
       summary: Health check
       tags:
       - health
-  /network/consensus:
-    get:
-      description: Get network-wide consensus information for an epoch
-      parameters:
-      - description: Epoch ID to query
-        in: query
-        name: epoch_id
-        type: integer
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/main.NetworkConsensusView'
-      summary: Network consensus view
-      tags:
-      - network
   /pipeline/overview:
     get:
-      description: Get overall pipeline status summary
-      parameters:
-      - description: Protocol state identifier
-        in: query
-        name: protocol
-        type: string
-      - description: Data market address
-        in: query
-        name: market
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/main.PipelineOverview'
-      summary: Pipeline overview
-      tags:
-      - pipeline
-  /queues/analytics:
-    get:
-      description: Get real-time queue analytics and bottleneck detection
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/main.QueueAnalytics'
-      summary: Queue analytics
-      tags:
-      - queues
-  /submissions/queue:
-    get:
-      description: Get submission queue depth and sample entries
-      parameters:
-      - description: Protocol state identifier
-        in: query
-        name: protocol
-        type: string
-      - description: Data market address
-        in: query
-        name: market
-        type: string
+      description: Get pipeline metrics from pre-aggregated data
       produces:
       - application/json
       responses:
@@ -731,12 +215,12 @@ paths:
           schema:
             additionalProperties: true
             type: object
-      summary: Submission queue status
+      summary: Pipeline overview (legacy support)
       tags:
-      - submissions
-  /submissions/windows:
+      - pipeline
+  /queues/status:
     get:
-      description: Get active and recently closed submission windows
+      description: Get real-time queue depths and processing rates
       produces:
       - application/json
       responses:
@@ -744,52 +228,63 @@ paths:
           description: OK
           schema:
             items:
-              $ref: '#/definitions/main.SubmissionWindow'
+              $ref: '#/definitions/main.QueueStatus'
             type: array
-      summary: Submission windows
+      summary: Queue status
       tags:
-      - submissions
-  /validator/performance:
+      - queues
+  /stats/daily:
     get:
-      description: Get validator performance metrics
-      parameters:
-      - default: '"24h"'
-        description: Time period (24h|7d|30d)
-        in: query
-        name: period
-        type: string
+      description: Get pre-aggregated 24-hour statistics
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/main.ValidatorPerformance'
-      summary: Validator performance
+            $ref: '#/definitions/main.DailyStats'
+      summary: Daily statistics
       tags:
-      - validator
-  /workers/status:
+      - stats
+  /stats/hourly:
     get:
-      description: Get status of all finalization workers
+      description: Get pre-aggregated hourly statistics
       parameters:
-      - description: Protocol state identifier
+      - description: Number of hours to retrieve (default 24)
         in: query
-        name: protocol
-        type: string
-      - description: Data market address
-        in: query
-        name: market
-        type: string
+        name: hours
+        type: integer
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            items:
-              $ref: '#/definitions/main.WorkerStatus'
-            type: array
-      summary: Worker status
+            $ref: '#/definitions/main.HourlyStats'
+      summary: Hourly statistics
       tags:
-      - workers
+      - stats
+  /timeline/recent:
+    get:
+      description: Get recent events from timeline sorted sets
+      parameters:
+      - description: Event type (submission, validation, epoch, batch)
+        in: query
+        name: type
+        type: string
+      - description: Minutes to look back (default 5)
+        in: query
+        name: minutes
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Recent timeline
+      tags:
+      - timeline
 swagger: "2.0"

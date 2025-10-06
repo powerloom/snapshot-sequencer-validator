@@ -195,7 +195,6 @@ func (sw *StateWorker) aggregateCurrentMetrics(ctx context.Context) {
 	// Calculate rates
 	duration := time.Since(sw.lastReset).Seconds()
 	submissionRate := float64(sw.submissions) / duration
-	validationRate := float64(sw.validations) / duration
 	epochRate := float64(sw.epochs) / duration
 	batchRate := float64(sw.batches) / duration
 
@@ -248,16 +247,14 @@ func (sw *StateWorker) aggregateCurrentMetrics(ctx context.Context) {
 	// Prepare summary data
 	summary := map[string]interface{}{
 		"submissions_total":     sw.submissions,
-		"validations_total":     sw.validations,
 		"epochs_total":          sw.epochs,
 		"batches_total":         sw.batches,
 		"submission_rate":       submissionRate,
-		"validation_rate":       validationRate,
 		"epoch_rate":            epochRate,
 		"batch_rate":            batchRate,
 		"active_validators":     activeCount,
-		"updated_at":           time.Now().Unix(),
-		"measurement_duration": duration,
+		"updated_at":            time.Now().Unix(),
+		"measurement_duration":  duration,
 	}
 
 	// Get recent activity counts from timelines
@@ -595,11 +592,15 @@ func (sw *StateWorker) aggregateParticipationMetrics(ctx context.Context) {
 	now := time.Now().Unix()
 	last24h := now - 86400
 
-	// Get our validator ID (protocol:market format from keyBuilder)
-	validatorID := fmt.Sprintf("%s:%s", sw.keyBuilder.ProtocolState, sw.keyBuilder.DataMarket)
+	// Get sequencer ID (this is what aggregator actually writes to Redis)
+	// TODO: This should be actual VALIDATOR_ID, not worker ID, but fixing broadcast is separate issue
+	sequencerID := viper.GetString("sequencer_id")
+	if sequencerID == "" {
+		sequencerID = "unified-sequencer-1" // fallback to default
+	}
 
 	// Count Level 1 batches (our local finalizations) in last 24h
-	ourBatchesKey := fmt.Sprintf("metrics:validator:%s:batches", validatorID)
+	ourBatchesKey := fmt.Sprintf("metrics:validator:%s:batches", sequencerID)
 	level1Batches, _ := sw.redis.ZCount(ctx, ourBatchesKey,
 		strconv.FormatInt(last24h, 10),
 		strconv.FormatInt(now, 10)).Result()
@@ -637,7 +638,7 @@ func (sw *StateWorker) aggregateParticipationMetrics(ctx context.Context) {
 		var validators []string
 		if json.Unmarshal([]byte(validatorsJSON), &validators) == nil {
 			for _, v := range validators {
-				if v == validatorID {
+				if v == sequencerID {
 					level2Inclusions++
 					break
 				}

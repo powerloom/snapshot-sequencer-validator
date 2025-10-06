@@ -55,6 +55,39 @@ type DailyStats struct {
 	Timestamp        time.Time                `json:"timestamp"`
 }
 
+// FinalizedBatch represents a Level 1 or Level 2 batch
+type FinalizedBatch struct {
+	EpochID        string   `json:"epoch_id"`
+	Level          int      `json:"level"` // 1 for local, 2 for aggregated
+	ValidatorID    string   `json:"validator_id,omitempty"` // Level 1 only
+	ValidatorIDs   []string `json:"validator_ids,omitempty"` // Level 2 only
+	ValidatorCount int      `json:"validator_count,omitempty"` // Level 2 only
+	ProjectCount   int      `json:"project_count"`
+	IPFSCid        string   `json:"ipfs_cid,omitempty"`
+	MerkleRoot     string   `json:"merkle_root,omitempty"`
+	Timestamp      int64    `json:"timestamp"`
+	Type           string   `json:"type"` // "local" or "aggregated"
+}
+
+// EpochInfo represents epoch timeline information
+type EpochInfo struct {
+	EpochID        string `json:"epoch_id"`
+	Status         string `json:"status"` // "open", "closed"
+	Phase          string `json:"phase"` // "submission", "finalization", "aggregation", "complete"
+	StartTime      int64  `json:"start_time"`
+	Duration       int    `json:"duration"`
+	DataMarket     string `json:"data_market,omitempty"`
+	Level1Batch    bool   `json:"level1_batch_exists"`
+	Level2Batch    bool   `json:"level2_batch_exists"`
+}
+
+// QueueStatus represents queue depth and status
+type QueueStatus struct {
+	QueueName string `json:"queue_name"`
+	Depth     int64  `json:"depth"`
+	Status    string `json:"status"` // "empty", "healthy", "moderate", "high", "critical"
+}
+
 func NewMonitorAPI(redisClient *redis.Client, protocol, market string) *MonitorAPI {
 	return &MonitorAPI{
 		redis:      redisClient,
@@ -142,7 +175,7 @@ func (m *MonitorAPI) DashboardSummary(c *gin.Context) {
 		response.RecentActivity["batches_5m"] = summary["batches_5m"]
 	}
 
-	// Add participation metrics
+	// Add participation metrics (state-tracker should provide these)
 	if participation != nil {
 		response.Metrics["participation_rate"] = participation["participation_rate"]
 		response.Metrics["inclusion_rate"] = participation["inclusion_rate"]
@@ -150,7 +183,17 @@ func (m *MonitorAPI) DashboardSummary(c *gin.Context) {
 		response.Metrics["level2_inclusions_24h"] = participation["level2_inclusions_24h"]
 		response.Metrics["epochs_participated_24h"] = participation["epochs_participated_24h"]
 		response.Metrics["epochs_total_24h"] = participation["epochs_total_24h"]
+	} else {
+		// Fallback: set to 0 if state-tracker hasn't calculated yet
+		response.Metrics["level1_batches_24h"] = 0
+		response.Metrics["level2_inclusions_24h"] = 0
+		response.Metrics["participation_rate"] = 0
+		response.Metrics["inclusion_rate"] = 0
 	}
+
+	// Remove validation_rate - it's not a real metric
+	delete(response.Metrics, "validation_rate")
+	delete(response.Metrics, "validations_total")
 
 	// Add current epoch status
 	if currentEpoch != nil {
@@ -383,6 +426,364 @@ func (m *MonitorAPI) Health(c *gin.Context) {
 	})
 }
 
+// @Summary Finalized batches
+// @Description Get Level 1 (local) or Level 2 (aggregated) finalized batches
+// @Tags batches
+// @Produce json
+// @Param level query int false "Batch level (1 or 2, default both)"
+// @Param epoch_id query string false "Specific epoch ID"
+// @Param limit query int false "Number of batches to retrieve (default 50)"
+// @Success 200 {array} FinalizedBatch
+// @Router /batches/finalized [get]
+func (m *MonitorAPI) FinalizedBatches(c *gin.Context) {
+	levelParam := c.DefaultQuery("level", "0")
+	level, _ := strconv.Atoi(levelParam)
+	epochID := c.Query("epoch_id")
+	limitParam := c.DefaultQuery("limit", "50")
+	limit, _ := strconv.Atoi(limitParam)
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+
+	var batches []FinalizedBatch
+
+	// If specific epoch requested
+	if epochID != "" {
+		if level == 1 || level == 0 {
+			// Get Level 1 batch
+			level1Key := fmt.Sprintf("metrics:batch:local:%s", epochID)
+			level1Data, err := m.redis.Get(m.ctx, level1Key).Result()
+			if err == nil {
+				var batchData map[string]interface{}
+				if json.Unmarshal([]byte(level1Data), &batchData) == nil {
+					batch := FinalizedBatch{
+						EpochID:      epochID,
+						Level:        1,
+						Type:         "local",
+						ProjectCount: int(batchData["project_count"].(float64)),
+						Timestamp:    int64(batchData["timestamp"].(float64)),
+					}
+					if vid, ok := batchData["validator_id"].(string); ok {
+						batch.ValidatorID = vid
+					}
+					if cid, ok := batchData["ipfs_cid"].(string); ok {
+						batch.IPFSCid = cid
+					}
+					batches = append(batches, batch)
+				}
+			}
+		}
+
+		if level == 2 || level == 0 {
+			// Get Level 2 batch
+			level2Key := fmt.Sprintf("metrics:batch:aggregated:%s", epochID)
+			level2Data, err := m.redis.Get(m.ctx, level2Key).Result()
+			if err == nil {
+				var batchData map[string]interface{}
+				if json.Unmarshal([]byte(level2Data), &batchData) == nil {
+					// Get validator list
+					validatorsKey := fmt.Sprintf("metrics:batch:%s:validators", epochID)
+					validatorsJSON, _ := m.redis.Get(m.ctx, validatorsKey).Result()
+					var validators []string
+					if validatorsJSON != "" {
+						json.Unmarshal([]byte(validatorsJSON), &validators)
+					}
+
+					batch := FinalizedBatch{
+						EpochID:        epochID,
+						Level:          2,
+						Type:           "aggregated",
+						ValidatorIDs:   validators,
+						ValidatorCount: len(validators),
+						ProjectCount:   int(batchData["project_count"].(float64)),
+						Timestamp:      int64(batchData["timestamp"].(float64)),
+					}
+					batches = append(batches, batch)
+				}
+			}
+		}
+	} else {
+		// Get recent batches from timeline
+		now := time.Now().Unix()
+		start := now - 3600 // Last hour by default
+
+		entries, _ := m.redis.ZRevRangeByScore(m.ctx, "metrics:batches:timeline", &redis.ZRangeBy{
+			Min:   strconv.FormatInt(start, 10),
+			Max:   "+inf",
+			Count: int64(limit),
+		}).Result()
+
+		for _, entry := range entries {
+			parts := strings.Split(entry, ":")
+			if len(parts) < 2 {
+				continue
+			}
+			batchType := parts[0]
+			batchEpoch := parts[1]
+
+			if batchType == "local" && (level == 1 || level == 0) {
+				level1Key := fmt.Sprintf("metrics:batch:local:%s", batchEpoch)
+				level1Data, err := m.redis.Get(m.ctx, level1Key).Result()
+				if err == nil {
+					var batchData map[string]interface{}
+					if json.Unmarshal([]byte(level1Data), &batchData) == nil {
+						batch := FinalizedBatch{
+							EpochID:      batchEpoch,
+							Level:        1,
+							Type:         "local",
+							ProjectCount: int(batchData["project_count"].(float64)),
+							Timestamp:    int64(batchData["timestamp"].(float64)),
+						}
+						if vid, ok := batchData["validator_id"].(string); ok {
+							batch.ValidatorID = vid
+						}
+						if cid, ok := batchData["ipfs_cid"].(string); ok {
+							batch.IPFSCid = cid
+						}
+						batches = append(batches, batch)
+					}
+				}
+			} else if batchType == "aggregated" && (level == 2 || level == 0) {
+				level2Key := fmt.Sprintf("metrics:batch:aggregated:%s", batchEpoch)
+				level2Data, err := m.redis.Get(m.ctx, level2Key).Result()
+				if err == nil {
+					var batchData map[string]interface{}
+					if json.Unmarshal([]byte(level2Data), &batchData) == nil {
+						validatorsKey := fmt.Sprintf("metrics:batch:%s:validators", batchEpoch)
+						validatorsJSON, _ := m.redis.Get(m.ctx, validatorsKey).Result()
+						var validators []string
+						if validatorsJSON != "" {
+							json.Unmarshal([]byte(validatorsJSON), &validators)
+						}
+
+						batch := FinalizedBatch{
+							EpochID:        batchEpoch,
+							Level:          2,
+							Type:           "aggregated",
+							ValidatorIDs:   validators,
+							ValidatorCount: len(validators),
+							ProjectCount:   int(batchData["project_count"].(float64)),
+							Timestamp:      int64(batchData["timestamp"].(float64)),
+						}
+						batches = append(batches, batch)
+					}
+				}
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, batches)
+}
+
+// @Summary Aggregation results
+// @Description Get network-wide aggregated batches with validator contributions
+// @Tags aggregation
+// @Produce json
+// @Param limit query int false "Number of results (default 20)"
+// @Success 200 {array} FinalizedBatch
+// @Router /aggregation/results [get]
+func (m *MonitorAPI) AggregationResults(c *gin.Context) {
+	limitParam := c.DefaultQuery("limit", "20")
+	limit, _ := strconv.Atoi(limitParam)
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+
+	// Get recent Level 2 aggregated batches from timeline
+	now := time.Now().Unix()
+	start := now - 86400 // Last 24 hours
+
+	entries, _ := m.redis.ZRevRangeByScore(m.ctx, "metrics:batches:timeline", &redis.ZRangeBy{
+		Min:   strconv.FormatInt(start, 10),
+		Max:   "+inf",
+		Count: int64(limit * 2), // Get more to filter only aggregated
+	}).Result()
+
+	var batches []FinalizedBatch
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry, "aggregated:") {
+			continue
+		}
+
+		epochID := strings.TrimPrefix(entry, "aggregated:")
+
+		level2Key := fmt.Sprintf("metrics:batch:aggregated:%s", epochID)
+		level2Data, err := m.redis.Get(m.ctx, level2Key).Result()
+		if err != nil {
+			continue
+		}
+
+		var batchData map[string]interface{}
+		if json.Unmarshal([]byte(level2Data), &batchData) != nil {
+			continue
+		}
+
+		// Get validator list
+		validatorsKey := fmt.Sprintf("metrics:batch:%s:validators", epochID)
+		validatorsJSON, _ := m.redis.Get(m.ctx, validatorsKey).Result()
+		var validators []string
+		if validatorsJSON != "" {
+			json.Unmarshal([]byte(validatorsJSON), &validators)
+		}
+
+		batch := FinalizedBatch{
+			EpochID:        epochID,
+			Level:          2,
+			Type:           "aggregated",
+			ValidatorIDs:   validators,
+			ValidatorCount: len(validators),
+			ProjectCount:   int(batchData["project_count"].(float64)),
+			Timestamp:      int64(batchData["timestamp"].(float64)),
+		}
+
+		batches = append(batches, batch)
+
+		if len(batches) >= limit {
+			break
+		}
+	}
+
+	c.JSON(http.StatusOK, batches)
+}
+
+// @Summary Epochs timeline
+// @Description Get epoch progression with phases and batch status
+// @Tags epochs
+// @Produce json
+// @Param limit query int false "Number of epochs (default 50)"
+// @Success 200 {array} EpochInfo
+// @Router /epochs/timeline [get]
+func (m *MonitorAPI) EpochsTimeline(c *gin.Context) {
+	limitParam := c.DefaultQuery("limit", "50")
+	limit, _ := strconv.Atoi(limitParam)
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+
+	// Get recent epochs from timeline (entries are "open:{id}" or "close:{id}")
+	entries, _ := m.redis.ZRevRange(m.ctx, "metrics:epochs:timeline", 0, int64(limit*2)).Result()
+
+	epochMap := make(map[string]*EpochInfo)
+	var epochOrder []string
+
+	for _, entry := range entries {
+		parts := strings.Split(entry, ":")
+		if len(parts) < 2 {
+			continue
+		}
+		action := parts[0]
+		epochID := parts[1]
+
+		if _, exists := epochMap[epochID]; !exists {
+			epochMap[epochID] = &EpochInfo{
+				EpochID: epochID,
+			}
+			epochOrder = append(epochOrder, epochID)
+		}
+
+		if action == "open" {
+			epochMap[epochID].Status = "open"
+		} else if action == "close" {
+			epochMap[epochID].Status = "closed"
+		}
+	}
+
+	// Get detailed info for each epoch
+	var epochs []EpochInfo
+	for _, epochID := range epochOrder {
+		if len(epochs) >= limit {
+			break
+		}
+
+		epochInfo := epochMap[epochID]
+
+		// Get epoch info hash
+		infoKey := fmt.Sprintf("metrics:epoch:%s:info", epochID)
+		infoData, err := m.redis.HGetAll(m.ctx, infoKey).Result()
+		if err == nil {
+			if startStr, ok := infoData["start"]; ok {
+				if startInt, err := strconv.ParseInt(startStr, 10, 64); err == nil {
+					epochInfo.StartTime = startInt
+				}
+			}
+			if durStr, ok := infoData["duration"]; ok {
+				if durInt, err := strconv.Atoi(durStr); err == nil {
+					epochInfo.Duration = durInt
+				}
+			}
+			if market, ok := infoData["data_market"]; ok {
+				epochInfo.DataMarket = market
+			}
+		}
+
+		// Check for Level 1 batch
+		level1Key := fmt.Sprintf("metrics:batch:local:%s", epochID)
+		level1Exists, _ := m.redis.Exists(m.ctx, level1Key).Result()
+		epochInfo.Level1Batch = level1Exists > 0
+
+		// Check for Level 2 batch
+		level2Key := fmt.Sprintf("metrics:batch:aggregated:%s", epochID)
+		level2Exists, _ := m.redis.Exists(m.ctx, level2Key).Result()
+		epochInfo.Level2Batch = level2Exists > 0
+
+		// Determine phase
+		if epochInfo.Status == "open" {
+			epochInfo.Phase = "submission"
+		} else if epochInfo.Level2Batch {
+			epochInfo.Phase = "complete"
+		} else if epochInfo.Level1Batch {
+			epochInfo.Phase = "aggregation"
+		} else {
+			epochInfo.Phase = "finalization"
+		}
+
+		epochs = append(epochs, *epochInfo)
+	}
+
+	c.JSON(http.StatusOK, epochs)
+}
+
+// @Summary Queue status
+// @Description Get real-time queue depths and processing rates
+// @Tags queues
+// @Produce json
+// @Success 200 {array} QueueStatus
+// @Router /queues/status [get]
+func (m *MonitorAPI) QueuesStatus(c *gin.Context) {
+	queues := []QueueStatus{
+		{
+			QueueName: "submission_queue",
+			Depth:     0,
+			Status:    "empty",
+		},
+		{
+			QueueName: "finalization_queue",
+			Depth:     0,
+			Status:    "empty",
+		},
+		{
+			QueueName: "aggregation_queue",
+			Depth:     0,
+			Status:    "empty",
+		},
+	}
+
+	// Get actual queue depths
+	submissionDepth, _ := m.redis.LLen(m.ctx, m.keyBuilder.SubmissionQueue()).Result()
+	queues[0].Depth = submissionDepth
+	queues[0].Status = getQueueStatus(int(submissionDepth))
+
+	finalizationDepth, _ := m.redis.LLen(m.ctx, m.keyBuilder.FinalizationQueue()).Result()
+	queues[1].Depth = finalizationDepth
+	queues[1].Status = getQueueStatus(int(finalizationDepth))
+
+	aggregationDepth, _ := m.redis.LLen(m.ctx, m.keyBuilder.AggregationQueue()).Result()
+	queues[2].Depth = aggregationDepth
+	queues[2].Status = getQueueStatus(int(aggregationDepth))
+
+	c.JSON(http.StatusOK, queues)
+}
+
 
 
 // Helper function to determine queue status
@@ -468,11 +869,21 @@ func main() {
 
 	v1 := router.Group("/api/v1")
 	{
-		// Primary endpoints (read from state-tracker prepared data)
+		// Health check
 		v1.GET("/health", api.Health)
+
+		// Dashboard and stats endpoints
 		v1.GET("/dashboard/summary", api.DashboardSummary)
 		v1.GET("/stats/hourly", api.HourlyStats)
 		v1.GET("/stats/daily", api.DailyStats)
+
+		// P0/P1 Endpoints - Core visibility
+		v1.GET("/batches/finalized", api.FinalizedBatches)
+		v1.GET("/aggregation/results", api.AggregationResults)
+		v1.GET("/epochs/timeline", api.EpochsTimeline)
+		v1.GET("/queues/status", api.QueuesStatus)
+
+		// Timeline events
 		v1.GET("/timeline/recent", api.RecentTimeline)
 
 		// Legacy compatibility endpoint
