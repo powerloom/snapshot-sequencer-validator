@@ -448,8 +448,8 @@ var SwaggerInfo = &swag.Spec{
 	Host:             "",
 	BasePath:         "/api/v1",
 	Schemes:          []string{},
-	Title:            "DSV Pipeline Monitor API (Direct Redis)",
-	Description:      "Monitoring API that reads pre-aggregated data from state-tracker worker",
+	Title:            "DSV Monitoring API",
+	Description:      "A comprehensive monitoring API for the Decentralized Sequencer Validator",
 	InfoInstanceName: "swagger",
 	SwaggerTemplate:  docTemplate,
 }
