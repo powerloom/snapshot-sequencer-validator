@@ -20,7 +20,7 @@ services:
       context: .
       dockerfile: Dockerfile.p2p-gateway
     environment:
-      - SEQUENCER_ID=p2p-gateway-${SEQUENCER_ID:-1}
+      - SEQUENCER_ID=${SEQUENCER_ID:-validator1}
       - P2P_PORT=${P2P_PORT:-9001}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
@@ -54,7 +54,7 @@ services:
       context: .
       dockerfile: Dockerfile.snapshot-sequencer
     environment:
-      - SEQUENCER_ID=dequeuer-${SEQUENCER_ID:-1}
+      - SEQUENCER_ID=${SEQUENCER_ID:-validator1}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_DB=${REDIS_DB:-0}
@@ -97,7 +97,7 @@ services:
       context: .
       dockerfile: Dockerfile.snapshot-sequencer
     environment:
-      - SEQUENCER_ID=event-monitor-${SEQUENCER_ID:-1}
+      - SEQUENCER_ID=${SEQUENCER_ID:-validator1}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_DB=${REDIS_DB:-0}
@@ -141,7 +141,7 @@ services:
       context: .
       dockerfile: Dockerfile.snapshot-sequencer
     environment:
-      - SEQUENCER_ID=finalizer-${SEQUENCER_ID:-1}
+      - SEQUENCER_ID=${SEQUENCER_ID:-validator1}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_DB=${REDIS_DB:-0}
@@ -184,7 +184,7 @@ services:
       context: .
       dockerfile: Dockerfile.aggregator
     environment:
-      - SEQUENCER_ID=aggregator-${SEQUENCER_ID:-1}
+      - SEQUENCER_ID=${SEQUENCER_ID:-validator1}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_DB=${REDIS_DB:-0}
