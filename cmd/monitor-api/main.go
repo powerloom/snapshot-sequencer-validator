@@ -987,13 +987,10 @@ func main() {
 	// Get configuration
 	redisHost := getEnv("REDIS_HOST", "localhost")
 	redisPort := getEnv("REDIS_PORT", "6379")
-	protocol := getEnv("PROTOCOL", "uniswapv2")
+	protocol := getEnv("PROTOCOL_STATE_CONTRACT", "")
 
 	// Parse DATA_MARKET_ADDRESSES (could be comma-separated or JSON array)
-	marketsEnv := getEnv("MARKET", "")
-	if marketsEnv == "" {
-		marketsEnv = getEnv("DATA_MARKET_ADDRESSES", "0x21cb57C1f2352ad215a463DD867b838749CD3b8f")
-	}
+	marketsEnv := getEnv("DATA_MARKET_ADDRESSES", "")
 
 	// Extract first market address (handle comma-separated or JSON array)
 	market := marketsEnv
@@ -1008,6 +1005,14 @@ func main() {
 		}
 	}
 	market = strings.TrimSpace(market)
+
+	// Validate required configuration
+	if protocol == "" {
+		log.Fatal("PROTOCOL_STATE_CONTRACT is required")
+	}
+	if market == "" {
+		log.Fatal("DATA_MARKET_ADDRESSES is required")
+	}
 
 	port := getEnv("MONITOR_API_PORT", "8080")
 
