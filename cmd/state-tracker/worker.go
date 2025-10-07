@@ -44,10 +44,7 @@ type StateChangeEvent struct {
 }
 
 // NewStateWorker creates a new state worker instance
-func NewStateWorker(redisClient *redis.Client) *StateWorker {
-	protocol := viper.GetString("protocol")
-	market := viper.GetString("market")
-	keyBuilder := redislib.NewKeyBuilder(protocol, market)
+func NewStateWorker(redisClient *redis.Client, keyBuilder *redislib.KeyBuilder) *StateWorker {
 
 	return &StateWorker{
 		redis:      redisClient,
@@ -271,11 +268,11 @@ func (sw *StateWorker) aggregateCurrentMetrics(ctx context.Context) {
 
 	// Store summary with TTL
 	summaryJSON, _ := json.Marshal(summary)
-	sw.redis.Set(ctx, "dashboard:summary", summaryJSON, 60*time.Second)
+	sw.redis.Set(ctx, sw.keyBuilder.DashboardSummary(), summaryJSON, 60*time.Second)
 
 	// Also store as hash for easier access
-	sw.redis.HMSet(ctx, "stats:current", summary)
-	sw.redis.Expire(ctx, "stats:current", 60*time.Second)
+	sw.redis.HMSet(ctx, sw.keyBuilder.StatsCurrent(), summary)
+	sw.redis.Expire(ctx, sw.keyBuilder.StatsCurrent(), 60*time.Second)
 
 	datasetsGenerated.WithLabelValues("dashboard_summary").Inc()
 
@@ -395,7 +392,7 @@ func (sw *StateWorker) aggregateHourPeriod(ctx context.Context, hourStart, hourE
 	}
 
 	// Store with hour as key
-	hourKey := fmt.Sprintf("stats:hourly:%d", hourStart.Unix())
+	hourKey := sw.keyBuilder.StatsHourly(hourStart.Unix())
 	statsJSON, _ := json.Marshal(hourStats)
 	sw.redis.Set(ctx, hourKey, statsJSON, 2*time.Hour)
 
@@ -478,7 +475,7 @@ func (sw *StateWorker) aggregateDailyStats(ctx context.Context) {
 
 	// Store daily stats
 	statsJSON, _ := json.Marshal(dailyStats)
-	sw.redis.Set(ctx, "stats:daily", statsJSON, 24*time.Hour)
+	sw.redis.Set(ctx, sw.keyBuilder.StatsDaily(), statsJSON, 24*time.Hour)
 
 	datasetsGenerated.WithLabelValues("daily_stats").Inc()
 
@@ -638,7 +635,7 @@ func (sw *StateWorker) aggregateParticipationMetrics(ctx context.Context) {
 	}
 
 	metricsJSON, _ := json.Marshal(participationMetrics)
-	sw.redis.Set(ctx, "metrics:participation", metricsJSON, 60*time.Second)
+	sw.redis.Set(ctx, sw.keyBuilder.MetricsParticipation(), metricsJSON, 60*time.Second)
 
 	log.WithFields(logrus.Fields{
 		"participation_rate": fmt.Sprintf("%.1f%%", participationRate),
@@ -722,7 +719,7 @@ func (sw *StateWorker) aggregateCurrentEpochStatus(ctx context.Context) {
 	}
 
 	statusJSON, _ := json.Marshal(currentEpochStatus)
-	sw.redis.Set(ctx, "metrics:current_epoch", statusJSON, 30*time.Second)
+	sw.redis.Set(ctx, sw.keyBuilder.MetricsCurrentEpoch(), statusJSON, 30*time.Second)
 
 	log.WithFields(logrus.Fields{
 		"epoch_id":       epochID,

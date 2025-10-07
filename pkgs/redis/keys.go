@@ -158,6 +158,53 @@ func (kb *KeyBuilder) MetricsBatchPart(epochID string, partID int) string {
 	return fmt.Sprintf("%s:%s:metrics:part:%s:%d", kb.ProtocolState, kb.DataMarket, epochID, partID)
 }
 
+// State-Tracker Keys (namespaced)
+
+// DashboardSummary returns the namespaced key for dashboard summary data
+func (kb *KeyBuilder) DashboardSummary() string {
+	return fmt.Sprintf("%s:%s:dashboard:summary", kb.ProtocolState, kb.DataMarket)
+}
+
+// StatsCurrent returns the namespaced key for current statistics
+func (kb *KeyBuilder) StatsCurrent() string {
+	return fmt.Sprintf("%s:%s:stats:current", kb.ProtocolState, kb.DataMarket)
+}
+
+// StatsDaily returns the namespaced key for daily statistics
+func (kb *KeyBuilder) StatsDaily() string {
+	return fmt.Sprintf("%s:%s:stats:daily", kb.ProtocolState, kb.DataMarket)
+}
+
+// StatsHourly returns the namespaced key for hourly statistics
+func (kb *KeyBuilder) StatsHourly(timestamp int64) string {
+	return fmt.Sprintf("%s:%s:stats:hourly:%d", kb.ProtocolState, kb.DataMarket, timestamp)
+}
+
+// MetricsSubmissionsTimeline returns the namespaced key for submissions timeline
+func (kb *KeyBuilder) MetricsSubmissionsTimeline() string {
+	return fmt.Sprintf("%s:%s:metrics:submissions:timeline", kb.ProtocolState, kb.DataMarket)
+}
+
+// MetricsValidationsTimeline returns the namespaced key for validations timeline
+func (kb *KeyBuilder) MetricsValidationsTimeline() string {
+	return fmt.Sprintf("%s:%s:metrics:validations:timeline", kb.ProtocolState, kb.DataMarket)
+}
+
+// MetricsPartsTimeline returns the namespaced key for parts timeline
+func (kb *KeyBuilder) MetricsPartsTimeline() string {
+	return fmt.Sprintf("%s:%s:metrics:parts:timeline", kb.ProtocolState, kb.DataMarket)
+}
+
+// MetricsParticipation returns the namespaced key for participation metrics
+func (kb *KeyBuilder) MetricsParticipation() string {
+	return fmt.Sprintf("%s:%s:metrics:participation", kb.ProtocolState, kb.DataMarket)
+}
+
+// MetricsCurrentEpoch returns the namespaced key for current epoch status
+func (kb *KeyBuilder) MetricsCurrentEpoch() string {
+	return fmt.Sprintf("%s:%s:metrics:current_epoch", kb.ProtocolState, kb.DataMarket)
+}
+
 // Monitoring Keys (not namespaced)
 
 // PipelineHealth returns the key for component health status
