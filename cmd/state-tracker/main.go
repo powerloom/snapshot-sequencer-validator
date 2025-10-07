@@ -2,16 +2,17 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/go-redis/redis/v8"
 	redislib "github.com/powerloom/snapshot-sequencer-validator/pkgs/redis"
-	"github.com/powerloom/snapshot-sequencer-validator/config"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sirupsen/logrus"
@@ -53,25 +54,44 @@ func init() {
 	prometheus.MustRegister(aggregationDuration)
 }
 
+// getEnv gets an environment variable or returns a default value
+func getEnv(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
+}
+
 
 func main() {
-	// Load configuration using centralized config package
-	if err := config.LoadConfig(); err != nil {
-		log.WithError(err).Fatal("Failed to load configuration")
-	}
-	cfg := config.SettingsObj
-
 	// Setup logging
 	log.SetFormatter(&logrus.JSONFormatter{})
-	if cfg.LogLevel == "debug" {
+	if os.Getenv("LOG_LEVEL") == "debug" {
 		log.SetLevel(logrus.DebugLevel)
 	}
 
-	// Extract protocol and market from loaded configuration
-	protocol := cfg.ProtocolStateContract
-	market := ""
-	if len(cfg.DataMarketAddresses) > 0 {
-		market = cfg.DataMarketAddresses[0]
+	// Get configuration from environment variables (direct loading)
+	redisHost := getEnv("REDIS_HOST", "localhost")
+	redisPort := getEnv("REDIS_PORT", "6379")
+	protocol := getEnv("PROTOCOL_STATE_CONTRACT", "")
+
+	// Parse DATA_MARKET_ADDRESSES (could be comma-separated or JSON array)
+	marketsEnv := getEnv("DATA_MARKET_ADDRESSES", "")
+
+	// Extract first market address (handle comma-separated or JSON array)
+	var market string
+	if strings.HasPrefix(marketsEnv, "[") {
+		// JSON array format
+		var markets []string
+		if err := json.Unmarshal([]byte(marketsEnv), &markets); err == nil && len(markets) > 0 {
+			market = markets[0]
+		}
+	} else {
+		// Comma-separated format
+		markets := strings.Split(marketsEnv, ",")
+		if len(markets) > 0 {
+			market = strings.TrimSpace(markets[0])
+		}
 	}
 
 	// Validate required configuration
@@ -89,19 +109,19 @@ func main() {
 	}).Info("State-tracker configuration loaded")
 
 	// Log Redis configuration for debugging
-	redisAddr := fmt.Sprintf("%s:%s", cfg.RedisHost, cfg.RedisPort)
+	redisAddr := fmt.Sprintf("%s:%s", redisHost, redisPort)
 	log.WithFields(logrus.Fields{
-		"host": cfg.RedisHost,
-		"port": cfg.RedisPort,
+		"host": redisHost,
+		"port": redisPort,
 		"addr": redisAddr,
-		"db":   cfg.RedisDB,
+		"db":   0,
 	}).Info("State-tracker connecting to Redis")
 
 	// Connect to Redis
 	redisClient := redis.NewClient(&redis.Options{
 		Addr:     redisAddr,
-		Password: cfg.RedisPassword,
-		DB:       cfg.RedisDB,
+		Password: getEnv("REDIS_PASSWORD", ""),
+		DB:       0,
 	})
 
 	ctx := context.Background()
