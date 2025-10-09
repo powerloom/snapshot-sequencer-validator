@@ -162,6 +162,35 @@ AGGREGATOR_REPLICAS=1     # Typically a singleton
 FINALIZER_REPLICAS=3      # Can scale horizontally
 EVENT_MONITOR_REPLICAS=1  # Typically a singleton
 
+#### P2P Network Configuration
+```bash
+# Gossipsub topic configuration
+# Configure custom topic names for different deployment scenarios
+# All topics are now configurable via environment variables
+
+# Snapshot submission topics
+# Format: {prefix}/0 (discovery), {prefix}/all (submissions)
+GOSSIPSUB_SNAPSHOT_SUBMISSION_PREFIX=/powerloom/snapshot-submissions
+
+# Finalized batch topics
+# Format: {prefix}/0 (discovery), {prefix}/all (batches)
+GOSSIPSUB_FINALIZED_BATCH_PREFIX=/powerloom/finalized-batches
+
+# Validator consensus topics
+GOSSIPSUB_VALIDATOR_PRESENCE_TOPIC=/powerloom/validator/presence
+GOSSIPSUB_CONSENSUS_VOTES_TOPIC=/powerloom/consensus/votes
+GOSSIPSUB_CONSENSUS_PROPOSALS_TOPIC=/powerloom/consensus/proposals
+
+# Network discovery
+RENDEZVOUS_POINT=powerloom-snapshot-sequencer-network
+BOOTSTRAP_MULTIADDR=/ip4/<BOOTSTRAP_NODE_IPV4_ADDR>/tcp/<PORT>/p2p/<PEER_ID>
+
+# P2P networking
+P2P_PORT=9001
+PUBLIC_IP=<your-vps-ip>  # Optional for NAT traversal
+PRIVATE_KEY=<your-generated-private-key>
+```
+
 # Batch Aggregation Configuration (moved to Aggregator)
 VOTING_THRESHOLD=0.67     # Percentage of validators required for batch aggregation
 MIN_VALIDATORS=3          # Minimum validators for valid batch
