@@ -249,9 +249,10 @@ func main() {
 		// Also advertise on the submission topics for discovery
 		go func() {
 			time.Sleep(5 * time.Second) // Wait a bit for DHT to stabilize
+			discoveryTopic, submissionsTopic := cfg.GetSnapshotSubmissionTopics()
 			topics := []string{
-				"/powerloom/snapshot-submissions/0",
-				"/powerloom/snapshot-submissions/all",
+				discoveryTopic,
+				submissionsTopic,
 			}
 			for _, topic := range topics {
 				log.Infof("Advertising on topic: %s", topic)
@@ -260,7 +261,8 @@ func main() {
 		}()
 
 		// Get standardized gossipsub parameters for snapshot submissions mesh
-		gossipParams, peerScoreParams, peerScoreThresholds, paramHash := gossipconfig.ConfigureSnapshotSubmissionsMesh(h.ID())
+		discoveryTopic, submissionsTopic := cfg.GetSnapshotSubmissionTopics()
+		gossipParams, peerScoreParams, peerScoreThresholds, paramHash := gossipconfig.ConfigureSnapshotSubmissionsMesh(h.ID(), discoveryTopic, submissionsTopic)
 
 		// Create pubsub with standardized parameters
 		ps, err = pubsub.NewGossipSub(ctx, h,
@@ -347,7 +349,7 @@ func main() {
 		if ps != nil && ipfsClient != nil {
 			var err error
 			sequencer.p2pConsensus, err = consensus.NewP2PConsensus(
-				ctx, h, ps, redisClient, ipfsClient, sequencerID,
+				ctx, h, ps, redisClient, ipfsClient, sequencerID, cfg,
 			)
 			if err != nil {
 				log.Errorf("Failed to initialize P2P consensus: %v", err)
@@ -481,10 +483,11 @@ func (s *UnifiedSequencer) Start() {
 }
 
 func (s *UnifiedSequencer) runListener() {
-	// Join required topics
+	// Get configurable topics
+	discoveryTopic, submissionsTopic := s.config.GetSnapshotSubmissionTopics()
 	topics := []string{
-		"/powerloom/snapshot-submissions/0",
-		"/powerloom/snapshot-submissions/all",
+		discoveryTopic,
+		submissionsTopic,
 	}
 
 	subs := make(map[string]*pubsub.Subscription)
@@ -542,7 +545,9 @@ func (s *UnifiedSequencer) logListenerStats(topics []string) {
 
 func (s *UnifiedSequencer) handleSubmissionMessages(sub *pubsub.Subscription) {
 	topicName := sub.Topic()
-	isDiscoveryTopic := topicName == "/powerloom/snapshot-submissions/0"
+	// Get discovery topic to compare
+	discoveryTopic, _ := s.config.GetSnapshotSubmissionTopics()
+	isDiscoveryTopic := topicName == discoveryTopic
 	topicLabel := "SUBMISSIONS"
 	if isDiscoveryTopic {
 		topicLabel = "DISCOVERY/TEST"
@@ -565,7 +570,7 @@ func (s *UnifiedSequencer) handleSubmissionMessages(sub *pubsub.Subscription) {
 		}
 
 		topicLabel := "SUBMISSION"
-		if topicName == "/powerloom/snapshot-submissions/0" {
+		if topicName == discoveryTopic {
 			topicLabel = "TEST/DISCOVERY"
 		}
 		log.Infof("📨 RECEIVED %s on %s from peer %s (size: %d bytes)",

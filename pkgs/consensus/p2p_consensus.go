@@ -13,15 +13,12 @@ import (
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	"github.com/powerloom/snapshot-sequencer-validator/config"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/ipfs"
 	log "github.com/sirupsen/logrus"
 )
 
 const (
-	// Gossipsub topics for batch aggregation
-	ValidatorPresenceTopic   = "/powerloom/validator/presence"     // For validator heartbeat/discovery
-	FinalizedBatchesTopic    = "/powerloom/finalized-batches/all"  // For exchanging finalized batches
-
 	// Consensus parameters
 	MinValidatorsForConsensus = 2  // Minimum validators needed for consensus
 	ConsensusThreshold        = 0.67 // 67% agreement required
@@ -82,7 +79,7 @@ type AggregationStatus struct {
 }
 
 // NewP2PConsensus creates a new P2P consensus handler
-func NewP2PConsensus(ctx context.Context, h host.Host, ps *pubsub.PubSub, redisClient *redis.Client, ipfsClient *ipfs.Client, sequencerID string) (*P2PConsensus, error) {
+func NewP2PConsensus(ctx context.Context, h host.Host, ps *pubsub.PubSub, redisClient *redis.Client, ipfsClient *ipfs.Client, sequencerID string, cfg *config.Settings) (*P2PConsensus, error) {
 	consensusCtx, cancel := context.WithCancel(ctx)
 
 	pc := &P2PConsensus{
@@ -98,7 +95,7 @@ func NewP2PConsensus(ctx context.Context, h host.Host, ps *pubsub.PubSub, redisC
 	}
 
 	// Join topics
-	if err := pc.setupTopics(); err != nil {
+	if err := pc.setupTopics(cfg); err != nil {
 		cancel()
 		return nil, fmt.Errorf("failed to setup topics: %w", err)
 	}
@@ -114,16 +111,19 @@ func NewP2PConsensus(ctx context.Context, h host.Host, ps *pubsub.PubSub, redisC
 }
 
 // setupTopics initializes P2P topics and subscriptions
-func (pc *P2PConsensus) setupTopics() error {
+func (pc *P2PConsensus) setupTopics(cfg *config.Settings) error {
+	// Get configurable topics
+	_, batchAllTopic := cfg.GetFinalizedBatchTopics()
+
 	// Join validator presence topic for discovery
-	discoveryTopic, err := pc.pubsub.Join(ValidatorPresenceTopic)
+	discoveryTopic, err := pc.pubsub.Join(cfg.GossipsubValidatorPresenceTopic)
 	if err != nil {
 		return fmt.Errorf("failed to join discovery topic: %w", err)
 	}
 	pc.discoveryTopic = discoveryTopic
 
 	// Join batch topic
-	batchTopic, err := pc.pubsub.Join(FinalizedBatchesTopic)
+	batchTopic, err := pc.pubsub.Join(batchAllTopic)
 	if err != nil {
 		return fmt.Errorf("failed to join batch topic: %w", err)
 	}
@@ -142,7 +142,7 @@ func (pc *P2PConsensus) setupTopics() error {
 	}
 	pc.batchSub = batchSub
 
-	log.Infof("Joined aggregation topics: %s, %s", ValidatorPresenceTopic, FinalizedBatchesTopic)
+	log.Infof("Joined aggregation topics: %s, %s", cfg.GossipsubValidatorPresenceTopic, batchAllTopic)
 	return nil
 }
 

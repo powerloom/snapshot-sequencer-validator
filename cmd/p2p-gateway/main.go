@@ -144,10 +144,14 @@ func NewP2PGateway(cfg *config.Settings) (*P2PGateway, error) {
 }
 
 func (g *P2PGateway) setupTopics() error {
-	// Join required topics - BOTH discovery and main topics like working version
+	// Get configurable topics
+	discoveryTopic, submissionsTopic := g.config.GetSnapshotSubmissionTopics()
+	batchDiscoveryTopic, batchAllTopic := g.config.GetFinalizedBatchTopics()
+
+	// Join snapshot submission topics
 	topics := []string{
-		"/powerloom/snapshot-submissions/0",   // Discovery topic
-		"/powerloom/snapshot-submissions/all", // Main submissions
+		discoveryTopic,   // Discovery topic
+		submissionsTopic, // Main submissions
 	}
 
 	for _, topicName := range topics {
@@ -162,7 +166,7 @@ func (g *P2PGateway) setupTopics() error {
 		}
 
 		// Store the main submission topic and subscription
-		if topicName == "/powerloom/snapshot-submissions/all" {
+		if topicName == submissionsTopic {
 			g.submissionTopic = topic
 			g.submissionSub = sub
 		}
@@ -174,7 +178,7 @@ func (g *P2PGateway) setupTopics() error {
 	}
 
 	// Finalized batches topic
-	batchTopic, err := g.p2pHost.Pubsub.Join("/powerloom/finalized-batches/all")
+	batchTopic, err := g.p2pHost.Pubsub.Join(batchAllTopic)
 	if err != nil {
 		return fmt.Errorf("failed to join batch topic: %w", err)
 	}
@@ -184,10 +188,10 @@ func (g *P2PGateway) setupTopics() error {
 	if err != nil {
 		return fmt.Errorf("failed to subscribe to batch topic: %w", err)
 	}
-	log.Infof("📡 Subscribed to topic: /powerloom/finalized-batches/all")
+	log.Infof("📡 Subscribed to topic: %s", batchAllTopic)
 
 	// Validator presence topic
-	presenceTopic, err := g.p2pHost.Pubsub.Join("/powerloom/validator/presence")
+	presenceTopic, err := g.p2pHost.Pubsub.Join(g.config.GossipsubValidatorPresenceTopic)
 	if err != nil {
 		return fmt.Errorf("failed to join presence topic: %w", err)
 	}
@@ -197,14 +201,16 @@ func (g *P2PGateway) setupTopics() error {
 	if err != nil {
 		return fmt.Errorf("failed to subscribe to presence topic: %w", err)
 	}
-	log.Infof("📡 Subscribed to topic: /powerloom/validator/presence")
+	log.Infof("📡 Subscribed to topic: %s", g.config.GossipsubValidatorPresenceTopic)
 
 	log.Info("P2P Gateway: Subscribed to all topics")
 	return nil
 }
 
 func (g *P2PGateway) handleSubmissionMessages(sub *pubsub.Subscription, topicName string) {
-	isDiscoveryTopic := topicName == "/powerloom/snapshot-submissions/0"
+	// Get discovery topic to compare
+	discoveryTopic, _ := g.config.GetSnapshotSubmissionTopics()
+	isDiscoveryTopic := topicName == discoveryTopic
 	topicLabel := "SUBMISSIONS"
 	if isDiscoveryTopic {
 		topicLabel = "DISCOVERY/TEST"
@@ -227,7 +233,7 @@ func (g *P2PGateway) handleSubmissionMessages(sub *pubsub.Subscription, topicNam
 		}
 
 		topicLabel := "SUBMISSION"
-		if topicName == "/powerloom/snapshot-submissions/0" {
+		if topicName == discoveryTopic {
 			topicLabel = "TEST/DISCOVERY"
 		}
 		log.Infof("📨 RECEIVED %s on %s from peer %s (size: %d bytes)",

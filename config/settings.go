@@ -108,6 +108,13 @@ type Settings struct {
 	APIPort      int
 	APIAuthToken string
 
+	// Gossipsub Topic Configuration
+	GossipsubSnapshotSubmissionPrefix string   // Base prefix for snapshot submission topics
+	GossipsubFinalizedBatchPrefix     string   // Base prefix for finalized batch topics
+	GossipsubValidatorPresenceTopic   string   // Validator presence/heartbeat topic
+	GossipsubConsensusVotesTopic      string   // Consensus voting topic
+	GossipsubConsensusProposalsTopic  string   // Consensus proposals topic
+
 	// Monitoring & Debugging
 	SlackWebhookURL string
 	MetricsEnabled  bool
@@ -203,6 +210,13 @@ func LoadConfig() error {
 		APIHost:      getEnv("API_HOST", "0.0.0.0"),
 		APIPort:      getEnvAsInt("API_PORT", 8080),
 		APIAuthToken: getEnv("API_AUTH_TOKEN", ""),
+
+		// Gossipsub Topic Configuration
+		GossipsubSnapshotSubmissionPrefix: getEnv("GOSSIPSUB_SNAPSHOT_SUBMISSION_PREFIX", "/powerloom/snapshot-submissions"),
+		GossipsubFinalizedBatchPrefix:     getEnv("GOSSIPSUB_FINALIZED_BATCH_PREFIX", "/powerloom/finalized-batches"),
+		GossipsubValidatorPresenceTopic:   getEnv("GOSSIPSUB_VALIDATOR_PRESENCE_TOPIC", "/powerloom/validator/presence"),
+		GossipsubConsensusVotesTopic:      getEnv("GOSSIPSUB_CONSENSUS_VOTES_TOPIC", "/powerloom/consensus/votes"),
+		GossipsubConsensusProposalsTopic:  getEnv("GOSSIPSUB_CONSENSUS_PROPOSALS_TOPIC", "/powerloom/consensus/proposals"),
 
 		// Monitoring & Debugging
 		SlackWebhookURL: getEnv("SLACK_WEBHOOK_URL", ""),
@@ -564,4 +578,14 @@ func fetchChainIDFromRPC(rpcURL string) (int64, error) {
 	}
 
 	return chainID.Int64(), nil
+}
+
+// GetSnapshotSubmissionTopics returns the discovery and submission topics
+func (s *Settings) GetSnapshotSubmissionTopics() (discoveryTopic, submissionsTopic string) {
+	return s.GossipsubSnapshotSubmissionPrefix + "/0", s.GossipsubSnapshotSubmissionPrefix + "/all"
+}
+
+// GetFinalizedBatchTopics returns the discovery and batch topics
+func (s *Settings) GetFinalizedBatchTopics() (discoveryTopic, batchTopic string) {
+	return s.GossipsubFinalizedBatchPrefix + "/0", s.GossipsubFinalizedBatchPrefix + "/all"
 }

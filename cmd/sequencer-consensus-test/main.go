@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/powerloom/snapshot-sequencer-validator/config"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/consensus"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/submissions"
 	"github.com/go-redis/redis/v8"
@@ -31,10 +32,6 @@ import (
 
 const (
 	RendezvousString = "powerloom-snapshot-sequencer-network"
-	DiscoveryTopic   = "/powerloom/snapshot-submissions/0"
-	SubmissionsTopic = "/powerloom/snapshot-submissions/all"
-	ConsensusTopic   = "/powerloom/consensus/votes"
-	BatchTopic       = "/powerloom/consensus/batches"
 )
 
 type Validator struct {
@@ -51,6 +48,12 @@ type Validator struct {
 	sequencerID  string
 	isProcessing bool
 	processMutex sync.Mutex
+
+	// Topic names for reference
+	discoveryTopic       string
+	submissionsTopic    string
+	consensusVotesTopic string
+	batchTopic         string
 }
 
 func main() {
@@ -60,13 +63,23 @@ func main() {
 		log.SetLevel(log.DebugLevel)
 	}
 
+	// Load configuration
+	if err := config.LoadConfig(); err != nil {
+		log.Warnf("Failed to load configuration: %v (using defaults)", err)
+		// Continue with environment variables and defaults
+	}
+	cfg := config.SettingsObj
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Get configuration from environment
+	// Get configuration from environment (with fallback to config)
 	sequencerID := os.Getenv("SEQUENCER_ID")
 	if sequencerID == "" {
-		sequencerID = "validator-default"
+		sequencerID = cfg.SequencerID
+		if sequencerID == "" {
+			sequencerID = "validator-default"
+		}
 	}
 	
 	p2pPort := os.Getenv("P2P_PORT")
@@ -207,30 +220,40 @@ func main() {
 		log.Fatalf("Failed to create dequeuer: %v", err)
 	}
 
+	// Get configurable topics
+	discoveryTopic, submissionsTopic := cfg.GetSnapshotSubmissionTopics()
+	_, batchAllTopic := cfg.GetFinalizedBatchTopics()
+	consensusVotesTopic := cfg.GossipsubConsensusVotesTopic
+	consensusProposalsTopic := cfg.GossipsubConsensusProposalsTopic
+
 	validator := &Validator{
-		host:        host,
-		ctx:         ctx,
-		ps:          ps,
-		topics:      make(map[string]*pubsub.Topic),
-		subs:        make(map[string]*pubsub.Subscription),
-		batchGen:    consensus.NewDummyBatchGenerator(sequencerID),
-		votes:       make(map[uint64]map[string]*consensus.FinalizedBatch),
-		redisClient: redisClient,
-		dequeuer:    dequeuer,
-		sequencerID: sequencerID,
+		host:                host,
+		ctx:                 ctx,
+		ps:                  ps,
+		topics:              make(map[string]*pubsub.Topic),
+		subs:                make(map[string]*pubsub.Subscription),
+		batchGen:            consensus.NewDummyBatchGenerator(sequencerID),
+		votes:               make(map[uint64]map[string]*consensus.FinalizedBatch),
+		redisClient:         redisClient,
+		dequeuer:            dequeuer,
+		sequencerID:         sequencerID,
+		discoveryTopic:      discoveryTopic,
+		submissionsTopic:   submissionsTopic,
+		consensusVotesTopic: consensusVotesTopic,
+		batchTopic:         batchAllTopic,
 	}
 
 	// Join topics
-	if err := validator.joinTopic(DiscoveryTopic); err != nil {
+	if err := validator.joinTopic(discoveryTopic); err != nil {
 		log.Fatalf("Failed to join discovery topic: %v", err)
 	}
-	if err := validator.joinTopic(SubmissionsTopic); err != nil {
+	if err := validator.joinTopic(submissionsTopic); err != nil {
 		log.Fatalf("Failed to join submissions topic: %v", err)
 	}
-	if err := validator.joinTopic(ConsensusTopic); err != nil {
-		log.Fatalf("Failed to join consensus topic: %v", err)
+	if err := validator.joinTopic(consensusVotesTopic); err != nil {
+		log.Fatalf("Failed to join consensus votes topic: %v", err)
 	}
-	if err := validator.joinTopic(BatchTopic); err != nil {
+	if err := validator.joinTopic(batchAllTopic); err != nil {
 		log.Fatalf("Failed to join batch topic: %v", err)
 	}
 
@@ -286,9 +309,13 @@ func (v *Validator) joinTopic(topicName string) error {
 }
 
 func (v *Validator) handleDiscoveryMessages() {
-	sub := v.subs[DiscoveryTopic]
-	log.Infof("🎧 Validator listening on discovery topic: %s", DiscoveryTopic)
-	
+	sub := v.subs[v.discoveryTopic]
+	if sub == nil {
+		log.Error("Discovery topic subscription not found")
+		return
+	}
+	log.Infof("🎧 Validator listening on discovery topic: %s", v.discoveryTopic)
+
 	messageCount := 0
 	for {
 		msg, err := sub.Next(v.ctx)
@@ -315,8 +342,12 @@ func (v *Validator) handleDiscoveryMessages() {
 }
 
 func (v *Validator) handleSubmissionMessages() {
-	sub := v.subs[SubmissionsTopic]
-	log.Infof("🎧 Validator listening for submissions on: %s", SubmissionsTopic)
+	sub := v.subs[v.submissionsTopic]
+	if sub == nil {
+		log.Error("Submissions topic subscription not found")
+		return
+	}
+	log.Infof("🎧 Validator listening for submissions on: %s", v.submissionsTopic)
 	
 	messageCount := 0
 	for {
@@ -520,8 +551,8 @@ func (v *Validator) broadcastBatch(batch *consensus.FinalizedBatch) {
 		log.Errorf("Failed to marshal batch: %v", err)
 		return
 	}
-	
-	topic := v.topics[BatchTopic]
+
+	topic := v.topics[v.batchTopic]
 	if topic == nil {
 		log.Error("Batch topic not initialized")
 		return
@@ -536,7 +567,11 @@ func (v *Validator) broadcastBatch(batch *consensus.FinalizedBatch) {
 }
 
 func (v *Validator) handleConsensusMessages() {
-	sub := v.subs[BatchTopic]
+	sub := v.subs[v.batchTopic]
+	if sub == nil {
+		log.Error("Batch topic subscription not found")
+		return
+	}
 	for {
 		msg, err := sub.Next(v.ctx)
 		if err != nil {

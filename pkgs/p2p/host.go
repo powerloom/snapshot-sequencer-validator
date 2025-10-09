@@ -148,9 +148,10 @@ func NewP2PHost(ctx context.Context, cfg *config.Settings) (*P2PHost, error) {
 	// Also advertise on the submission topics for discovery
 	go func() {
 		time.Sleep(5 * time.Second) // Wait a bit for DHT to stabilize
+		discoveryTopic, submissionsTopic := cfg.GetSnapshotSubmissionTopics()
 		topics := []string{
-			"/powerloom/snapshot-submissions/0",
-			"/powerloom/snapshot-submissions/all",
+			discoveryTopic,
+			submissionsTopic,
 		}
 		for _, topic := range topics {
 			log.Infof("Advertising on topic: %s", topic)
@@ -159,7 +160,8 @@ func NewP2PHost(ctx context.Context, cfg *config.Settings) (*P2PHost, error) {
 	}()
 
 	// Get standardized gossipsub parameters for snapshot submissions mesh
-	gossipParams, peerScoreParams, peerScoreThresholds, paramHash := gossipconfig.ConfigureSnapshotSubmissionsMesh(h.ID())
+	discoveryTopic, submissionsTopic := cfg.GetSnapshotSubmissionTopics()
+	gossipParams, peerScoreParams, peerScoreThresholds, paramHash := gossipconfig.ConfigureSnapshotSubmissionsMesh(h.ID(), discoveryTopic, submissionsTopic)
 
 	// Create pubsub with standardized parameters
 	ps, err := pubsub.NewGossipSub(hostCtx, h,

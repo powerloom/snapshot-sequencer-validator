@@ -10,13 +10,10 @@ import (
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	"github.com/powerloom/snapshot-sequencer-validator/config"
 )
 
-const (
-	// Two-level topics for finalized batch broadcasting (no dynamic epoch topics)
-	FinalizedBatchDiscoveryTopic = "/powerloom/finalized-batches/0"   // Discovery/rendezvous
-	FinalizedBatchAllTopic       = "/powerloom/finalized-batches/all" // Actual voting messages
-)
+// No longer using constants - topics are now configurable
 
 // BatchBroadcaster handles P2P communication for finalized batches
 type BatchBroadcaster struct {
@@ -43,7 +40,7 @@ type FinalizedBatchMessage struct {
 }
 
 // NewBatchBroadcaster creates a new P2P broadcaster for finalized batches
-func NewBatchBroadcaster(ctx context.Context, h host.Host, ps *pubsub.PubSub, sequencerID string) (*BatchBroadcaster, error) {
+func NewBatchBroadcaster(ctx context.Context, h host.Host, ps *pubsub.PubSub, sequencerID string, cfg *config.Settings) (*BatchBroadcaster, error) {
 	bb := &BatchBroadcaster{
 		host:            h,
 		pubsub:          ps,
@@ -51,29 +48,32 @@ func NewBatchBroadcaster(ctx context.Context, h host.Host, ps *pubsub.PubSub, se
 		sequencerID:     sequencerID,
 		IncomingBatches: make(chan *FinalizedBatchMessage, 100),
 	}
-	
+
+	// Get configurable topics
+	discoveryTopic, allTopic := cfg.GetFinalizedBatchTopics()
+
 	// Join discovery topic for peer discovery
-	discoveryTopic, err := ps.Join(FinalizedBatchDiscoveryTopic)
+	discoveryTopicJoined, err := ps.Join(discoveryTopic)
 	if err != nil {
 		return nil, fmt.Errorf("failed to join discovery topic: %w", err)
 	}
-	bb.discoveryTopic = discoveryTopic
-	
+	bb.discoveryTopic = discoveryTopicJoined
+
 	// Join the "all" topic for actual voting messages
-	allTopic, err := ps.Join(FinalizedBatchAllTopic)
+	allTopicJoined, err := ps.Join(allTopic)
 	if err != nil {
 		return nil, fmt.Errorf("failed to join all topic: %w", err)
 	}
-	bb.allTopic = allTopic
+	bb.allTopic = allTopicJoined
 	
 	// Subscribe to both topics
-	discoverySub, err := discoveryTopic.Subscribe()
+	discoverySub, err := discoveryTopicJoined.Subscribe()
 	if err != nil {
 		return nil, fmt.Errorf("failed to subscribe to discovery topic: %w", err)
 	}
 	bb.discoverySub = discoverySub
-	
-	allSub, err := allTopic.Subscribe()
+
+	allSub, err := allTopicJoined.Subscribe()
 	if err != nil {
 		return nil, fmt.Errorf("failed to subscribe to all topic: %w", err)
 	}
