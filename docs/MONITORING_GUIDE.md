@@ -6,6 +6,119 @@ The enhanced monitoring system provides comprehensive visibility into the parall
 
 The system now supports both P2PSnapshotSubmission batch format (multiple submissions per message) and single SnapshotSubmission format, with updated Redis key patterns for better organization.
 
+## RESTful Monitor API (NEW - FULLY OPERATIONAL)
+
+The monitoring system now includes a complete RESTful API with 10 professional endpoints and interactive Swagger UI for comprehensive monitoring and debugging.
+
+### Accessing the Monitor API
+
+```bash
+# Monitor API runs on default port 8080 (configurable via MONITOR_API_PORT)
+http://localhost:8080/swagger/index.html
+
+# Interactive Swagger UI provides:
+# - Complete API documentation
+# - Interactive testing of all endpoints
+# - Request/response examples
+# - Protocol/market query parameter support
+```
+
+### All 10 Monitoring Endpoints
+
+| Endpoint | Purpose | Query Parameters |
+|----------|---------|-----------------|
+| `/api/v1/health` | Service health check | None |
+| `/api/v1/dashboard/summary` | Real-time dashboard metrics | protocol, market |
+| `/api/v1/epochs/timeline` | Epoch progression timeline | protocol, market |
+| `/api/v1/batches/finalized` | Recently finalized batches | protocol, market |
+| `/api/v1/aggregation/results` | Network aggregation results | protocol, market |
+| `/api/v1/timeline/recent` | Recent activity feed | protocol, market |
+| `/api/v1/queues/status` | Queue monitoring | protocol, market |
+| `/api/v1/pipeline/overview` | Pipeline status summary | protocol, market |
+| `/api/v1/stats/daily` | Daily aggregated statistics | protocol, market |
+| `/api/v1/stats/hourly` | Hourly performance metrics | protocol, market |
+
+### Using Query Parameters
+
+All endpoints support protocol/market filtering for multi-market environments:
+
+```bash
+# Filter by specific protocol and market
+curl "http://localhost:8080/api/v1/dashboard/summary?protocol=powerloom&market=0x21cb57C1f2352ad215a463DD867b838749CD3b8f"
+
+# Multiple markets (comma-separated)
+curl "http://localhost:8080/api/v1/batches/finalized?market=0x21cb57C1f2352ad215a463DD867b838749CD3b8f,0x0C2E22fe7526fAeF28E7A58c84f8723dEFcE200c"
+
+# JSON array format
+curl "http://localhost:8080/api/v1/aggregation/results?market=[\"0x21cb57C1f2352ad215a463DD867b838749CD3b8f\",\"0x0C2E22fe7526fAeF28E7A58c84f8723dEFcE200c\"]"
+```
+
+### Working Endpoints Status
+
+✅ **All 10 endpoints operational with real data:**
+- **Health Check**: Shows `data_fresh: true` with actual pipeline data
+- **Dashboard**: Real metrics with participation rates, current epoch status
+- **Epoch Timeline**: Actual epoch progression with correct status reading
+- **Finalized Batches**: Batch data with validator attribution and IPFS CIDs
+- **Aggregation Results**: Network-wide consensus with validator counting
+- **Timeline Activity**: Recent submissions and batch completions
+- **Queue Status**: Real-time queue depths and processing rates
+- **Pipeline Overview**: Complete pipeline status with health indicators
+- **Daily/Stats**: Actual aggregated data from pipeline metrics
+
+### Key Features
+
+- **Real-time Data**: All endpoints read from actual pipeline data sources
+- **Proper Namespacing**: Uses `{protocol}:{market}:*` Redis keys correctly
+- **Multi-market Support**: Handles comma-separated and JSON array market configurations
+- **Production-safe**: Uses SCAN operations instead of KEYS
+- **Validator Attribution**: Tracks which validators contributed to each batch
+- **IPFS Integration**: Includes proper IPFS CIDs and Merkle roots in responses
+
+### Monitoring Workflow
+
+```bash
+# 1. Check overall health
+curl "http://localhost:8080/api/v1/health"
+
+# 2. Get dashboard summary
+curl "http://localhost:8080/api/v1/dashboard/summary"
+
+# 3. View recent epochs
+curl "http://localhost:8080/api/v1/epochs/timeline"
+
+# 4. Check finalized batches
+curl "http://localhost:8080/api/v1/batches/finalized"
+
+# 5. Monitor network aggregation
+curl "http://localhost:8080/api/v1/aggregation/results"
+```
+
+### Shell-Based Monitoring Client
+
+The system includes a pure bash monitoring client for quick terminal-based checks:
+
+```bash
+# Basic monitoring (uses monitor-api by default)
+./scripts/monitor_api_client.sh
+
+# With custom port
+./scripts/monitor_api_client.sh 9090
+
+# With protocol and market filtering
+./scripts/monitor_api_client.sh 8080 powerloom 0x21cb57C1f2352ad215a463DD867b838749CD3b8f
+
+# Multiple markets
+./scripts/monitor_api_client.sh 8080 powerloom "0x21cb57C1f2352ad215a463DD867b838749CD3b8f,0x0C2E22fe7526fAeF28E7A58c84f8723dEFcE200c"
+```
+
+**Features:**
+- No external dependencies (pure bash/curl/grep/sed/awk)
+- Accepts port, protocol, and market as arguments
+- Integrated with `dsv.sh monitor` command
+- Handles both comma-separated and JSON array market formats
+- Provides real-time status updates
+
 ## Quick Start
 
 ### Basic Monitoring

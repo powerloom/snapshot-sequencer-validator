@@ -51,7 +51,6 @@ show_usage() {
     echo "  clean                 - Stop and remove all containers/volumes"
     echo ""
     echo "Monitoring:"
-    echo "  monitor       - Show pipeline status (legacy)"
     echo "  dashboard     - Open dashboard in browser (http://localhost:9091/swagger)"
     echo "  logs          - Show all logs"
     echo "  p2p-logs      - P2P Gateway logs"
@@ -174,15 +173,6 @@ open_dashboard() {
     fi
 }
 
-# Monitor pipeline
-monitor_pipeline() {
-    if [ -f "scripts/monitor_api_client.sh" ]; then
-        bash scripts/monitor_api_client.sh "${MONITOR_API_PORT}" "${PROTOCOL}" "${DATA_MARKET_ADDRESSES}"
-    else
-        print_color "$CYAN" "Monitor API: http://localhost:\${MONITOR_API_PORT:-8080}/swagger/index.html"
-        print_color "$YELLOW" "Use the Monitor API service for pipeline monitoring"
-    fi
-}
 
 # Clean Redis cache state (stale keys from old deployments)
 clean_cache() {
@@ -317,10 +307,7 @@ case "${1:-}" in
     status|ps)
         show_status
         ;;
-    monitor)
-        monitor_pipeline
-        ;;
-    dashboard)
+      dashboard)
         open_dashboard
         ;;
     clean-cache)

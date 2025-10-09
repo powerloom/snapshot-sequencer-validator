@@ -236,7 +236,7 @@ DEDUP_TTL_SECONDS=7200
 #### Monitor API Configuration
 ```bash
 # Monitor API settings
-MONITOR_API_PORT=8080    # Port for monitor API service
+MONITOR_API_PORT=9091    # Port for monitor API service
 ENABLE_MONITOR_API=true   # Enable/disable monitor API service
 
 # Monitor API configuration (auto-generated from other settings)
@@ -261,7 +261,7 @@ The `dsv.sh` script is the primary tool for managing your sequencer deployment.
 ./dsv.sh clean         # Stop and remove all containers/volumes
 
 # Monitoring
-./dsv.sh monitor       # Monitor pipeline status
+./dsv.sh dashboard     # Open monitoring dashboard in browser
 ./dsv.sh logs          # Show all logs (with optional tail count)
 
 # Component-specific logs
@@ -310,13 +310,13 @@ The `dsv.sh` script is the primary tool for managing your sequencer deployment.
 #   - bin/sequencer-consensus-test
 ```
 
-**monitor**: Shows pipeline status from Redis
+**dashboard**: Opens monitoring dashboard in browser
 ```bash
-./dsv.sh monitor
-# Connects to Redis container to show:
-# - Active submission windows
-# - Queue depths
-# - Recent finalized batches
+./dsv.sh dashboard
+# Opens Swagger UI at http://localhost:${MONITOR_API_PORT:-9091}/swagger/index.html
+# Default port: 9091 (configurable via MONITOR_API_PORT environment variable)
+# Provides interactive monitoring with 10 REST endpoints
+# Supports protocol/market filtering for multi-market environments
 ```
 
 ### Docker Image Building
@@ -347,17 +347,17 @@ docker compose -f docker-compose.separated.yml build
 The complete `monitor-api` provides a comprehensive, professional monitoring solution with 10 REST endpoints and interactive Swagger UI:
 
 ```bash
-# Access monitor API (default port 8080, configurable via MONITOR_API_PORT)
-http://localhost:8080/swagger/index.html
+# Access monitor API (default port 9091, configurable via MONITOR_API_PORT)
+http://localhost:9091/swagger/index.html
 
 # Or with custom port
-http://localhost:9090/swagger/index.html  # if MONITOR_API_PORT=9090
+http://localhost:8080/swagger/index.html  # if MONITOR_API_PORT=8080
 
 # Swagger UI provides interactive documentation and testing
 ```
 
 **Configuration:**
-Set `MONITOR_API_PORT` in your `.env` file to customize the port (default: 8080).
+Set `MONITOR_API_PORT` in your `.env` file to customize the port (default: 9091).
 
 **All 10 Monitoring Endpoints:**
 1. `/api/v1/health`: Service health check
@@ -420,31 +420,21 @@ The system includes a pure bash monitoring client for quick terminal-based check
 **Features:**
 - No external dependencies (pure bash/curl/grep/sed/awk)
 - Accepts port, protocol, and market as arguments
-- Integrated with `dsv.sh monitor` command
+- Use with `./scripts/monitor_api_client.sh` for terminal monitoring
 - Handles both comma-separated and JSON array market formats
 - Provides real-time status updates
 
 ### Legacy Monitoring Tools
 
-For quick terminal-based monitoring:
+For quick terminal-based monitoring, use the shell script directly:
 
 ```bash
-# Quick monitoring via legacy script
-./dsv.sh monitor
+# Terminal monitoring using shell client
+./scripts/monitor_api_client.sh
 ```
 
-The legacy monitoring script provides quick insights into the Decentralized Sequencer Validator system:
+The shell monitoring client provides quick insights into the Decentralized Sequencer Validator system:
 
-### Legacy Batch Status Monitoring
-
-For quick terminal-based monitoring:
-
-```bash
-# Quick monitoring via legacy script
-./dsv.sh monitor
-```
-
-The legacy monitoring script provides quick insights into the Decentralized Sequencer Validator system:
 
 **Key Monitoring Sections:**
 1. **Active Submission Windows**
@@ -482,8 +472,8 @@ The legacy monitoring script provides quick insights into the Decentralized Sequ
    - IPFS-backed, Merkle-rooted batch results
 
 **Recommended Monitoring Workflow:**
-1. Use Swagger UI for detailed, interactive monitoring
-2. Use `./dsv.sh monitor` for quick system overview
+1. Use Swagger UI for detailed, interactive monitoring (`./dsv.sh dashboard`)
+2. Use `./scripts/monitor_api_client.sh` for quick terminal overview
 3. Check container logs with `./dsv.sh logs` for additional details
 4. Use component-specific log commands for targeted debugging
 
@@ -872,7 +862,7 @@ curl "http://localhost:8080/api/v1/dashboard/summary?market=0x21cb57C1f2352ad215
 **Solution**:
 ```bash
 # Check if port is accessible
-curl -I http://localhost:8080/swagger/index.html
+curl -I http://localhost:9091/swagger/index.html
 
 # Verify firewall settings
 sudo ufw status | grep 8080
