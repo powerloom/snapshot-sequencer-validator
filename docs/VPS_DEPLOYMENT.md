@@ -233,6 +233,17 @@ DEDUP_LOCAL_CACHE_SIZE=10000
 DEDUP_TTL_SECONDS=7200
 ```
 
+#### Monitor API Configuration
+```bash
+# Monitor API settings
+MONITOR_API_PORT=8080    # Port for monitor API service
+ENABLE_MONITOR_API=true   # Enable/disable monitor API service
+
+# Monitor API configuration (auto-generated from other settings)
+# Uses PROTOCOL_STATE_CONTRACT and DATA_MARKET_ADDRESSES from environment
+# No additional configuration required for basic operation
+```
+
 ## Launch Scripts Reference
 
 ### dsv.sh - Decentralized Sequencer Validator Control Script
@@ -260,6 +271,7 @@ The `dsv.sh` script is the primary tool for managing your sequencer deployment.
 ./dsv.sh dequeuer-logs [N]    # Dequeuer logs
 ./dsv.sh event-logs [N]       # Event monitor logs
 ./dsv.sh redis-logs [N]       # Redis logs
+./dsv.sh monitor-api-logs [N] # Monitor API logs
 
 # Development
 ./dsv.sh build         # Build Go binaries (NOT Docker images)
@@ -330,9 +342,9 @@ docker compose -f docker-compose.separated.yml build
 
 ## Monitoring Tools
 
-### RESTful Monitor API Service
+### RESTful Monitor API Service (FULLY OPERATIONAL)
 
-The new `monitor-api` provides a comprehensive, professional monitoring solution with 11 REST endpoints and interactive Swagger UI:
+The complete `monitor-api` provides a comprehensive, professional monitoring solution with 10 REST endpoints and interactive Swagger UI:
 
 ```bash
 # Access monitor API (default port 8080, configurable via MONITOR_API_PORT)
@@ -347,18 +359,81 @@ http://localhost:9090/swagger/index.html  # if MONITOR_API_PORT=9090
 **Configuration:**
 Set `MONITOR_API_PORT` in your `.env` file to customize the port (default: 8080).
 
-**Monitoring Endpoints:**
+**All 10 Monitoring Endpoints:**
 1. `/api/v1/health`: Service health check
-2. `/api/v1/pipeline/overview`: Complete pipeline status
-3. `/api/v1/submissions/windows`: Active submission windows
-4. `/api/v1/submissions/queue`: Submission queue details
-5. `/api/v1/batches/ready`: Batches ready for finalization
-6. `/api/v1/batches/finalization-queue`: Finalization queue status
-7. `/api/v1/workers/status`: Worker health and activity
-8. `/api/v1/batches/parts`: Current batch parts
-9. `/api/v1/batches/finalized`: Recently finalized batches
-10. `/api/v1/aggregation/queue`: Aggregation queue status
-11. `/api/v1/aggregation/results`: Aggregation results
+2. `/api/v1/dashboard/summary`: Real-time dashboard metrics
+3. `/api/v1/epochs/timeline`: Epoch progression timeline
+4. `/api/v1/batches/finalized`: Recently finalized batches
+5. `/api/v1/aggregation/results`: Network aggregation results
+6. `/api/v1/timeline/recent`: Recent activity feed
+7. `/api/v1/queues/status`: Queue monitoring
+8. `/api/v1/pipeline/overview`: Pipeline status summary
+9. `/api/v1/stats/daily`: Daily aggregated statistics
+10. `/api/v1/stats/hourly`: Hourly performance metrics
+
+### Monitor API Status
+
+✅ **All 10 endpoints fully operational with real data:**
+- **Health Check**: Shows `data_fresh: true` with actual pipeline data
+- **Dashboard**: Real metrics with participation rates, current epoch status
+- **Epoch Timeline**: Actual epoch progression with correct status reading
+- **Finalized Batches**: Batch data with validator attribution and IPFS CIDs
+- **Aggregation Results**: Network-wide consensus with validator counting
+- **Timeline Activity**: Recent submissions and batch completions
+- **Queue Status**: Real-time queue depths and processing rates
+- **Pipeline Overview**: Complete pipeline status with health indicators
+- **Daily/Stats**: Actual aggregated data from pipeline metrics
+
+### Query Parameters
+
+All endpoints support protocol/market filtering for multi-market environments:
+
+```bash
+# Filter by specific protocol and market
+curl "http://localhost:8080/api/v1/dashboard/summary?protocol=powerloom&market=0x21cb57C1f2352ad215a463DD867b838749CD3b8f"
+
+# Multiple markets (comma-separated)
+curl "http://localhost:8080/api/v1/batches/finalized?market=0x21cb57C1f2352ad215a463DD867b838749CD3b8f,0x0C2E22fe7526fAeF28E7A58c84f8723dEFcE200c"
+
+# JSON array format
+curl "http://localhost:8080/api/v1/aggregation/results?market=[\"0x21cb57C1f2352ad215a463DD867b838749CD3b8f\",\"0x0C2E22fe7526fAeF28E7A58c84f8723dEFcE200c\"]"
+```
+
+### Shell-Based Monitoring Client
+
+The system includes a pure bash monitoring client for quick terminal-based checks:
+
+```bash
+# Basic monitoring (uses monitor-api by default)
+./scripts/monitor_api_client.sh
+
+# With custom port
+./scripts/monitor_api_client.sh 9090
+
+# With protocol and market filtering
+./scripts/monitor_api_client.sh 8080 powerloom 0x21cb57C1f2352ad215a463DD867b838749CD3b8f
+
+# Multiple markets
+./scripts/monitor_api_client.sh 8080 powerloom "0x21cb57C1f2352ad215a463DD867b838749CD3b8f,0x0C2E22fe7526fAeF28E7A58c84f8723dEFcE200c"
+```
+
+**Features:**
+- No external dependencies (pure bash/curl/grep/sed/awk)
+- Accepts port, protocol, and market as arguments
+- Integrated with `dsv.sh monitor` command
+- Handles both comma-separated and JSON array market formats
+- Provides real-time status updates
+
+### Legacy Monitoring Tools
+
+For quick terminal-based monitoring:
+
+```bash
+# Quick monitoring via legacy script
+./dsv.sh monitor
+```
+
+The legacy monitoring script provides quick insights into the Decentralized Sequencer Validator system:
 
 ### Legacy Batch Status Monitoring
 
@@ -731,6 +806,81 @@ docker exec <container-name> curl -s http://localhost:8001/peers
 
 ## Troubleshooting
 
+### Monitoring API Troubleshooting
+
+#### Monitor API Not Starting
+
+**Problem**: Monitor API fails to start or returns errors
+
+**Solution**:
+```bash
+# Check if monitor-api container is running
+docker ps | grep monitor
+
+# View monitor logs
+./dsv.sh monitor-api-logs
+
+# Check environment variables
+docker exec <monitor-container> printenv | grep MONITOR_API_PORT
+
+# Verify Redis connection
+docker exec <monitor-container> curl -s http://localhost:8080/api/v1/health
+```
+
+#### Empty or Zero Data Responses
+
+**Problem**: Monitor API returns empty responses or zero values
+
+**Solution**:
+```bash
+# Check if pipeline components are running
+./dsv.sh status
+
+# Verify Redis data exists
+docker exec redis redis-cli SCAN 0 MATCH "powerloom:*" COUNT 10
+
+# Check state-tracker logs
+./dsv.sh monitor-api-logs | grep "state-tracker"
+
+# Verify environment variables are consistent
+grep -E "PROTOCOL_STATE_CONTRACT|DATA_MARKET_ADDRESSES" .env
+```
+
+#### Query Parameter Issues
+
+**Problem**: Filtering by protocol/market returns no data
+
+**Solution**:
+```bash
+# Test without filters first
+curl "http://localhost:8080/api/v1/dashboard/summary"
+
+# Check available markets in Redis
+docker exec redis redis-cli SCAN 0 MATCH "powerloom:*" COUNT 5
+
+# Verify market address format
+# Should be: 0x21cb57C1f2352ad215a463DD867b838749CD3b8f (with 0x prefix)
+
+# Test single market filter
+curl "http://localhost:8080/api/v1/dashboard/summary?market=0x21cb57C1f2352ad215a463DD867b838749CD3b8f"
+```
+
+#### CORS or Connection Issues
+
+**Problem**: Browser errors when accessing Swagger UI
+
+**Solution**:
+```bash
+# Check if port is accessible
+curl -I http://localhost:8080/swagger/index.html
+
+# Verify firewall settings
+sudo ufw status | grep 8080
+
+# Check container port mapping
+docker ps | grep monitor
+```
+
 ### Common Issues and Solutions
 
 #### Event Monitor Not Loading ABI
@@ -1056,7 +1206,40 @@ docker images | grep snapshot-sequencer
 docker exec <container> grep -A5 "RedisPassword" /app/main.go
 ```
 
-## Recent Updates (October 2, 2025)
+## Recent Updates (October 8, 2025)
+
+### New Features
+- ✅ **Complete Monitoring API Implementation** (FULLY OPERATIONAL)
+  - All 10 REST endpoints working correctly with real data
+  - Interactive Swagger UI documentation and testing
+  - Protocol/market query parameter support for multi-market environments
+  - Proper Redis namespacing with `{protocol}:{market}:*` keys
+  - Production-safe SCAN operations instead of KEYS
+  - Validator attribution and IPFS CID integration
+  - Shell-based monitoring client with no external dependencies
+  - Added `MONITOR_API_PORT` and `ENABLE_MONITOR_API` configuration
+
+### Monitoring API Status
+✅ **All endpoints operational:**
+- `/api/v1/health` - Service health with `data_fresh: true`
+- `/api/v1/dashboard/summary` - Real metrics with participation rates
+- `/api/v1/epochs/timeline` - Correct epoch progression status
+- `/api/v1/batches/finalized` - Batch data with validator attribution
+- `/api/v1/aggregation/results` - Network consensus with validator counting
+- `/api/v1/timeline/recent` - Recent activity feed
+- `/api/v1/queues/status` - Real-time queue monitoring
+- `/api/v1/pipeline/overview` - Complete pipeline status
+- `/api/v1/stats/daily` - Actual aggregated statistics
+- `/api/v1/stats/hourly` - Hourly performance metrics
+
+### Technical Fixes
+- Fixed state-tracker configuration to use correct environment variables
+- Enhanced aggregation logic with proper validator counting
+- Fixed docker-compose to use consistent environment variables across all services
+- Corrected Redis key namespacing across all endpoints
+- Implemented proper IPFS CID extraction for Level 2 metrics
+
+### Previous Updates (October 2, 2025)
 
 ### New Features
 - ✅ EIP-712 Signature Verification Implementation
@@ -1112,5 +1295,5 @@ docker exec <container> grep -A5 "RedisPassword" /app/main.go
 
 ---
 
-*Last Updated: October 2, 2025*
-*Version: 1.2.0*
+*Last Updated: October 8, 2025*
+*Version: 1.3.0*
