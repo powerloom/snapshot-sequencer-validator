@@ -44,7 +44,7 @@ show_usage() {
     echo "Usage: $0 <command> [options]"
     echo ""
     echo "Main Commands:"
-    echo "  start [--no-monitor]  - Start services (monitoring enabled by default)"
+    echo "  start [--with-ipfs] [--no-monitor]  - Start services (monitoring enabled by default)"
     echo "  stop                  - Stop all services"
     echo "  restart               - Restart all services"
     echo "  status                - Show service status"
@@ -59,6 +59,7 @@ show_usage() {
     echo "  dequeuer-logs - Dequeuer logs"
     echo "  event-logs    - Event monitor logs"
     echo "  redis-logs    - Redis logs"
+    echo "  ipfs-logs     - IPFS node logs"
     echo ""
     echo "Development:"
     echo "  build         - Build all binaries"
@@ -72,11 +73,22 @@ is_separated_running() {
 
 # Start production (separated) mode
 start_services() {
-    # Check for --no-monitor flag
+    # Check for flags
     local enable_monitoring=true
-    if [ "${1:-}" = "--no-monitor" ]; then
-        enable_monitoring=false
-    fi
+    local enable_ipfs=false
+    local compose_args="-f docker-compose.separated.yml"
+
+    # Parse arguments
+    for arg in "$@"; do
+        case $arg in
+            --no-monitor)
+                enable_monitoring=false
+                ;;
+            --with-ipfs)
+                enable_ipfs=true
+                ;;
+        esac
+    done
 
     print_color "$GREEN" "🚀 Starting Separated Architecture"
 
@@ -90,13 +102,23 @@ start_services() {
         print_color "$YELLOW" "Warning: .env file not found. Using defaults."
     fi
 
-    # Start services with or without monitoring profile
+    # Build profiles argument
+    local profiles=""
     if [ "$enable_monitoring" = true ]; then
-        print_color "$CYAN" "Starting with monitoring enabled..."
-        $DOCKER_COMPOSE_CMD -f docker-compose.separated.yml --profile monitoring up -d --build
+        profiles="$profiles --profile monitoring"
+    fi
+    if [ "$enable_ipfs" = true ]; then
+        profiles="$profiles --profile ipfs"
+    fi
+
+    # Start services with specified profiles
+    print_color "$CYAN" "Starting services..."
+    if [ -n "$profiles" ]; then
+        print_color "$CYAN" "With profiles:$profiles"
+        $DOCKER_COMPOSE_CMD $compose_args $profiles up -d --build
     else
-        print_color "$CYAN" "Starting without monitoring (--no-monitor flag used)..."
-        $DOCKER_COMPOSE_CMD -f docker-compose.separated.yml up -d --build
+        print_color "$CYAN" "Without additional profiles"
+        $DOCKER_COMPOSE_CMD $compose_args up -d --build
     fi
 
     if [ $? -eq 0 ]; then
@@ -108,11 +130,18 @@ start_services() {
         echo "  • Finalizer (batch creation)"
         echo "  • Dequeuer (submission processing)"
         echo "  • Event Monitor (epoch tracking)"
+        if [ "$enable_ipfs" = true ]; then
+            echo "  • IPFS Node (ports ${IPFS_API_PORT:-5001}/${IPFS_GATEWAY_PORT:-8080})"
+        fi
         if [ "$enable_monitoring" = true ]; then
             echo "  • State Tracker (data aggregation)"
             echo "  • Monitor API (dashboard)"
         fi
         echo ""
+        if [ "$enable_ipfs" = true ]; then
+            print_color "$YELLOW" "Note: Make sure IPFS_HOST=ipfs:5001 in .env for DSV services to use local IPFS"
+            echo ""
+        fi
         if [ "$enable_monitoring" = true ]; then
             echo "View dashboard: http://localhost:${MONITOR_API_PORT:-9091}/swagger/index.html"
         fi
@@ -127,8 +156,8 @@ start_services() {
 stop_services() {
     print_color "$YELLOW" "Stopping all services..."
     if is_separated_running; then
-        # Stop all services including monitoring profile
-        $DOCKER_COMPOSE_CMD -f docker-compose.separated.yml --profile monitoring down
+        # Stop all services including monitoring and ipfs profiles
+        $DOCKER_COMPOSE_CMD -f docker-compose.separated.yml --profile monitoring --profile ipfs down
     else
         # Try to stop any running containers
         $DOCKER_COMPOSE_CMD down 2>/dev/null || true
@@ -337,6 +366,9 @@ case "${1:-}" in
         ;;
     redis-logs)
         show_service_logs "redis" "$2"
+        ;;
+    ipfs-logs)
+        show_service_logs "ipfs" "$2"
         ;;
     clean)
         clean_all
