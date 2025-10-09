@@ -146,7 +146,7 @@ func NewP2PGateway(cfg *config.Settings) (*P2PGateway, error) {
 func (g *P2PGateway) setupTopics() error {
 	// Get configurable topics
 	discoveryTopic, submissionsTopic := g.config.GetSnapshotSubmissionTopics()
-	batchDiscoveryTopic, batchAllTopic := g.config.GetFinalizedBatchTopics()
+	_, batchAllTopic := g.config.GetFinalizedBatchTopics()
 
 	// Join snapshot submission topics
 	topics := []string{

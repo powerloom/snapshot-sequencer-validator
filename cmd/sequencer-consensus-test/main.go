@@ -30,9 +30,6 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-const (
-	RendezvousString = "powerloom-snapshot-sequencer-network"
-)
 
 type Validator struct {
 	host         host.Host
@@ -49,8 +46,9 @@ type Validator struct {
 	isProcessing bool
 	processMutex sync.Mutex
 
-	// Topic names for reference
-	discoveryTopic       string
+	// Network configuration for reference
+	rendezvousPoint string
+	discoveryTopic  string
 	submissionsTopic    string
 	consensusVotesTopic string
 	batchTopic         string
@@ -192,14 +190,14 @@ func main() {
 	}
 
 	// Setup mDNS for local discovery
-	mdnsService := mdns.NewMdnsService(host, RendezvousString, &discoveryNotifee{h: host})
+	mdnsService := mdns.NewMdnsService(host, cfg.Rendezvous, &discoveryNotifee{h: host})
 	if err := mdnsService.Start(); err != nil {
 		log.Errorf("Failed to start mDNS: %v", err)
 	}
 
 	// Setup routing discovery
 	routingDiscovery := routing.NewRoutingDiscovery(kademliaDHT)
-	util.Advertise(ctx, routingDiscovery, RendezvousString)
+	util.Advertise(ctx, routingDiscovery, cfg.Rendezvous)
 
 	// Create pubsub
 	ps, err := pubsub.NewGossipSub(ctx, host,
@@ -224,7 +222,6 @@ func main() {
 	discoveryTopic, submissionsTopic := cfg.GetSnapshotSubmissionTopics()
 	_, batchAllTopic := cfg.GetFinalizedBatchTopics()
 	consensusVotesTopic := cfg.GossipsubConsensusVotesTopic
-	consensusProposalsTopic := cfg.GossipsubConsensusProposalsTopic
 
 	validator := &Validator{
 		host:                host,
@@ -237,6 +234,7 @@ func main() {
 		redisClient:         redisClient,
 		dequeuer:            dequeuer,
 		sequencerID:         sequencerID,
+		rendezvousPoint:     cfg.Rendezvous,
 		discoveryTopic:      discoveryTopic,
 		submissionsTopic:   submissionsTopic,
 		consensusVotesTopic: consensusVotesTopic,
@@ -471,7 +469,7 @@ func (v *Validator) queueSubmission(submission *submissions.SnapshotSubmission, 
 }
 
 func (v *Validator) discoverPeers(routingDiscovery *routing.RoutingDiscovery) {
-	peerChan, err := routingDiscovery.FindPeers(v.ctx, RendezvousString)
+	peerChan, err := routingDiscovery.FindPeers(v.ctx, v.rendezvousPoint)
 	if err != nil {
 		log.Errorf("Peer discovery failed: %v", err)
 		return
