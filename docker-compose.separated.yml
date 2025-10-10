@@ -381,7 +381,7 @@ services:
       - IPFS_CLEANUP_INTERVAL_HOURS=${IPFS_CLEANUP_INTERVAL_HOURS:-72}
     # Proper containerization with tini as init system
     entrypoint: ["/sbin/tini", "--"]
-    command: ["/scripts/ipfs-cleanup.sh"]
+    command: ["sh", "/scripts/ipfs-cleanup.sh"]
     # Resource limits for cleanup service
     ulimits:
       nofile:
