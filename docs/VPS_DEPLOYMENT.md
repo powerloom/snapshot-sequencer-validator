@@ -105,7 +105,33 @@ cp .env.example .env
 nano .env
 ```
 
-### 2. Configure Essential Variables
+### 2. IPFS Service Options
+
+#### Option A: Use External IPFS Service
+```bash
+# Configure to use external IPFS node
+IPFS_HOST=127.0.0.1:5001  # Your external IPFS node address
+```
+
+#### Option B: Use Built-in IPFS Service (Recommended)
+```bash
+# Configure for built-in IPFS service
+IPFS_HOST=ipfs:5001  # Use local IPFS service from --with-ipfs flag
+```
+
+### 5. Launch Sequencer
+```bash
+# Start production services (separated architecture)
+./dsv.sh start
+
+# Start with local IPFS service (recommended for testing)
+./dsv.sh start --with-ipfs
+
+# For development/testing only (unified mode)
+./dsv.sh dev
+```
+
+### 4. Configure Essential Variables
 ```bash
 # Required P2P settings
 BOOTSTRAP_MULTIADDR=/ip4/<BOOTSTRAP_NODE_IPV4_ADDR>/tcp/<PORT>/p2p/<PEER_ID>
@@ -116,6 +142,29 @@ POWERLOOM_RPC_NODES=http://your-rpc-endpoint:8545
 PROTOCOL_STATE_CONTRACT=0xE88E5f64AEB483d7057645326AdDFA24A3B312DF
 DATA_MARKET_ADDRESSES=0x0C2E22fe7526fAeF28E7A58c84f8723dEFcE200c
 ```
+
+### IPFS Configuration
+
+When using the built-in IPFS service (`--with-ipfs` flag), the following environment variables control cleanup behavior:
+
+```bash
+# IPFS Cleanup Configuration (for built-in IPFS service)
+# Automatically unpins old CIDs to prevent storage bloat
+
+# Maximum age for pins before cleanup (in days)
+# CIDs older than this will be unpinned automatically
+IPFS_CLEANUP_MAX_AGE_DAYS=7
+
+# Cleanup interval (in hours)
+# How often to run the cleanup process
+IPFS_CLEANUP_INTERVAL_HOURS=72  # Every 3 days
+```
+
+**Note**: The built-in IPFS service includes automated cleanup functionality that:
+- Unpins CIDs older than `IPFS_CLEANUP_MAX_AGE_DAYS` (default: 7 days)
+- Runs cleanup every `IPFS_CLEANUP_INTERVAL_HOURS` (default: 72 hours)
+- Uses conservative approach to avoid removing important data
+- Logs all cleanup activities for monitoring
 
 ### 3. Launch Sequencer
 ```bash
@@ -284,6 +333,7 @@ The `dsv.sh` script is the primary tool for managing your sequencer deployment.
 ```bash
 # Main Commands
 ./dsv.sh start         # Start separated architecture (production)
+./dsv.sh start --with-ipfs     # Start with local IPFS service
 ./dsv.sh stop          # Stop all services
 ./dsv.sh restart       # Restart all services
 ./dsv.sh status        # Show service status
@@ -300,6 +350,7 @@ The `dsv.sh` script is the primary tool for managing your sequencer deployment.
 ./dsv.sh dequeuer-logs [N]    # Dequeuer logs
 ./dsv.sh event-logs [N]       # Event monitor logs
 ./dsv.sh redis-logs [N]       # Redis logs
+./dsv.sh ipfs-logs [N]        # IPFS node logs
 ./dsv.sh monitor-api-logs [N] # Monitor API logs
 
 # Development
@@ -319,6 +370,13 @@ The `dsv.sh` script is the primary tool for managing your sequencer deployment.
 # Uses: docker-compose.separated.yml
 # Runs: docker compose -f docker-compose.separated.yml up -d --build
 # Services: p2p-gateway, aggregator, dequeuer, finalizer, event-monitor, redis
+
+# start --with-ipfs**: Launches with local IPFS service
+./dsv.sh start --with-ipfs
+# Uses: docker-compose.separated.yml with ipfs profile
+# Runs: docker compose -f docker-compose.separated.yml --profile ipfs up -d --build
+# Services: p2p-gateway, aggregator, dequeuer, finalizer, event-monitor, redis, ipfs
+# Additional: IPFS node with automatic cleanup enabled
 ```
 
 **dev**: Development mode with unified sequencer
@@ -534,6 +592,12 @@ New dedicated log commands for each component support optional line count for in
 
 # View last 25 lines of event monitor logs and continue following
 ./dsv.sh event-logs 25
+
+# View IPFS logs
+./dsv.sh ipfs-logs
+
+# View last 50 lines of IPFS logs and continue following
+./dsv.sh ipfs-logs 50
 
 # View Redis logs
 ./dsv.sh redis-logs
