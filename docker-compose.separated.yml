@@ -373,7 +373,7 @@ services:
     container_name: dsv-ipfs-cleanup
     volumes:
       - ${IPFS_DATA_DIR:-/data/ipfs}:/data/ipfs:rw  # Read-write access for cleanup
-      - ./scripts:/scripts:ro
+      - ./scripts:/scripts:ro  # Read-only mount for scripts
     environment:
       - IPFS_PATH=/data/ipfs
       # Cleanup configuration
@@ -381,14 +381,7 @@ services:
       - IPFS_CLEANUP_INTERVAL_HOURS=${IPFS_CLEANUP_INTERVAL_HOURS:-72}
     # Proper containerization with tini as init system
     entrypoint: ["/sbin/tini", "--"]
-    command: >
-      sh -c "
-        echo 'Starting IPFS cleanup service...'
-        # Make sure the cleanup script is executable
-        chmod +x /scripts/ipfs-cleanup.sh
-        # Run the cleanup scheduler
-        exec /scripts/ipfs-cleanup.sh
-      "
+    command: ["/scripts/ipfs-cleanup.sh"]
     # Resource limits for cleanup service
     ulimits:
       nofile:
