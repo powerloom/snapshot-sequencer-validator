@@ -297,7 +297,6 @@ services:
     container_name: dsv-ipfs
     volumes:
       - ${IPFS_DATA_DIR:-/data/ipfs}:/data/ipfs
-      - ./scripts:/scripts:ro  # Mount scripts directory for cleanup
     ports:
       - "${IPFS_API_PORT:-5001}:5001"    # IPFS API port (required for DSV)
       - "${IPFS_SWARM_PORT:-4001}:4001"  # IPFS Swarm port for P2P communication
@@ -305,40 +304,50 @@ services:
       - IPFS_PROFILE=server
       - IPFS_PATH=/data/ipfs
       # Cleanup configuration
-      - IPFS_CLEANUP_MAX_AGE_DAYS=${IPFS_CLEANUP_MAX_AGE_DAYS:-7}
-      - IPFS_CLEANUP_INTERVAL_HOURS=${IPFS_CLEANUP_INTERVAL_HOURS:-72}
-      # Data directory configuration
-      - IPFS_DATA_DIR=${IPFS_DATA_DIR:-/data/ipfs}
-    # Proper containerization with tini as init system
-    entrypoint: ["/sbin/tini", "--"]
-    command: >
-      sh -c "
+      - DATA_CLEANUP_DAYS=${IPFS_CLEANUP_MAX_AGE_DAYS:-7}
+      - CLEANUP_SCHEDULE=0 */${IPFS_CLEANUP_INTERVAL_HOURS:-72} * * *
+    entrypoint: >
+      sh -c '
+        echo "Setting up data cleanup cron job..."
+        mkdir -p /var/spool/cron/crontabs
+
+        cleanup_cmd="date && echo Starting IPFS cleanup process... && find /data/ipfs -type f -mtime +$${DATA_CLEANUP_DAYS} -name *.data -print -delete && echo Cleanup process completed."
+        echo "$${CLEANUP_SCHEDULE} $${cleanup_cmd} >> /proc/1/fd/1 2>&1" > /var/spool/cron/crontabs/root
+        chmod 0644 /var/spool/cron/crontabs/root
+
+        echo "Cron job set up. Will clean files older than $${DATA_CLEANUP_DAYS} days every $${IPFS_CLEANUP_INTERVAL_HOURS:-72} hours ($${CLEANUP_SCHEDULE})"
+
         # Initialize IPFS repository if not exists
         if [ ! -f /data/ipfs/config ]; then
-          echo 'Initializing IPFS repository...'
+          echo "Initializing IPFS repository..."
           ipfs init --profile server
+
           # Configure for server deployment
           ipfs config Addresses.API /ip4/0.0.0.0/tcp/5001
           ipfs config Addresses.Gateway /ip4/0.0.0.0/tcp/8080
           ipfs config Addresses.Swarm /ip4/0.0.0.0/tcp/4001
           ipfs config Swarm.ConnMgr.HighWater 2000
           ipfs config Swarm.ConnMgr.LowWater 500
-          ipfs config Datastore.StorageMax '\"200GB\"'
+          ipfs config Datastore.StorageMax "200GB"
+
           # Enable pubsub for P2P messaging
           ipfs config Pubsub.Enabled true
+
           # Set up CORS for API access
-          ipfs config API.HTTPHeaders.Access-Control-Allow-Origin '[\"*\"]'
-          ipfs config API.HTTPHeaders.Access-Control-Allow-Methods '[\"PUT\", \"POST\", \"GET\"]'
+          ipfs config API.HTTPHeaders.Access-Control-Allow-Origin "[*]"
+          ipfs config API.HTTPHeaders.Access-Control-Allow-Methods "[\"PUT\", \"POST\", \"GET\"]"
+
           # Optimize for performance
-          ipfs config Datastore.StorageMax '\"200GB\"'
           ipfs config --json Experimental.FilestoreEnabled true
-          echo 'IPFS configuration completed'
+          echo "IPFS configuration completed"
         fi
 
-        # Start IPFS daemon in foreground with proper signal handling
-        echo 'Starting IPFS daemon...'
-        exec ipfs daemon --migrate=true --enable-pubsub-experiment
-      "
+        echo "Starting cron daemon..."
+        crond
+
+        echo "Starting IPFS daemon..."
+        exec /sbin/tini -- ipfs daemon --migrate=true --enable-pubsub-experiment
+      '
     # System resource limits for optimal IPFS performance
     ulimits:
       nofile:
@@ -367,43 +376,7 @@ services:
         max-size: "50m"  # Increased log size for IPFS debugging
         max-file: "5"
 
-  # IPFS Cleanup Service - Sidecar for periodic cleanup
-  ipfs-cleanup:
-    image: ipfs/kubo:master-latest
-    container_name: dsv-ipfs-cleanup
-    volumes:
-      - ${IPFS_DATA_DIR:-/data/ipfs}:/data/ipfs:rw  # Read-write access for cleanup
-      - ./scripts:/scripts:ro  # Read-only mount for scripts
-    environment:
-      - IPFS_PATH=/data/ipfs
-      # Cleanup configuration
-      - IPFS_CLEANUP_MAX_AGE_DAYS=${IPFS_CLEANUP_MAX_AGE_DAYS:-7}
-      - IPFS_CLEANUP_INTERVAL_HOURS=${IPFS_CLEANUP_INTERVAL_HOURS:-72}
-    # Proper containerization with tini as init system
-    entrypoint: ["/sbin/tini", "--"]
-    command: ["sh", "/scripts/ipfs-cleanup.sh"]
-    # Resource limits for cleanup service
-    ulimits:
-      nofile:
-        soft: 100000
-        hard: 100000
-      nproc:
-        soft: 1024
-        hard: 1024
-    depends_on:
-      ipfs:
-        condition: service_healthy
-    networks:
-      - sequencer-net
-    restart: unless-stopped
-    profiles:
-      - ipfs
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-
+  
 volumes:
   redis-data:
   ipfs-data:
