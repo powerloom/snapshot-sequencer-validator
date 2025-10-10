@@ -293,14 +293,14 @@ services:
 
 # IPFS Node - Optional local IPFS service for reduced latency
   ipfs:
-    image: ipfs/go-ipfs:latest
+    image: ipfs/kubo:master-latest
     container_name: dsv-ipfs
     volumes:
       - ${IPFS_DATA_DIR:-/data/ipfs}:/data/ipfs
-      - ./scripts:/scripts:ro  # Mount scripts directory
+      - ./scripts:/scripts:ro  # Mount scripts directory for cleanup
     ports:
-      - "${IPFS_API_PORT:-5001}:5001"  # IPFS API (only this needed for DSV)
-      # Gateway port 8080 kept internal only
+      - "${IPFS_API_PORT:-5001}:5001"    # IPFS API port (required for DSV)
+      - "${IPFS_SWARM_PORT:-4001}:4001"  # IPFS Swarm port for P2P communication
     environment:
       - IPFS_PROFILE=server
       - IPFS_PATH=/data/ipfs
@@ -309,26 +309,97 @@ services:
       - IPFS_CLEANUP_INTERVAL_HOURS=${IPFS_CLEANUP_INTERVAL_HOURS:-72}
       # Data directory configuration
       - IPFS_DATA_DIR=${IPFS_DATA_DIR:-/data/ipfs}
+    # Proper containerization with tini as init system
+    entrypoint: ["/sbin/tini", "--"]
     command: >
       sh -c "
-        # Start IPFS daemon in background
-        ipfs daemon --migrate=true &
+        # Initialize IPFS repository if not exists
+        if [ ! -f /data/ipfs/config ]; then
+          echo 'Initializing IPFS repository...'
+          ipfs init --profile server
+          # Configure for server deployment
+          ipfs config Addresses.API /ip4/0.0.0.0/tcp/5001
+          ipfs config Addresses.Gateway /ip4/0.0.0.0/tcp/8080
+          ipfs config Addresses.Swarm /ip4/0.0.0.0/tcp/4001
+          ipfs config Swarm.ConnMgr.HighWater 2000
+          ipfs config Swarm.ConnMgr.LowWater 500
+          ipfs config Datastore.StorageMax '\"200GB\"'
+          # Enable pubsub for P2P messaging
+          ipfs config Pubsub.Enabled true
+          # Set up CORS for API access
+          ipfs config API.HTTPHeaders.Access-Control-Allow-Origin '[\"*\"]'
+          ipfs config API.HTTPHeaders.Access-Control-Allow-Methods '[\"PUT\", \"POST\", \"GET\"]'
+          # Optimize for performance
+          ipfs config Datastore.StorageMax '\"200GB\"'
+          ipfs config --json Experimental.FilestoreEnabled true
+          echo 'IPFS configuration completed'
+        fi
 
-        # Wait for IPFS to be ready
-        sleep 30
-
-        # Start cleanup scheduler
-        /scripts/ipfs-cleanup.sh
-
-        # Keep container running
-        wait
+        # Start IPFS daemon in foreground with proper signal handling
+        echo 'Starting IPFS daemon...'
+        exec ipfs daemon --migrate=true --enable-pubsub-experiment
       "
+    # System resource limits for optimal IPFS performance
+    ulimits:
+      nofile:
+        soft: 1000000
+        hard: 1000000
+      memlock:
+        soft: -1      # Unlimited memory lock
+        hard: -1
+      nproc:
+        soft: 32768   # High process limit for concurrent connections
+        hard: 32768
     healthcheck:
       test: ["CMD", "ipfs", "id"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 60s  # Increased startup time for cleanup initialization
+      retries: 5
+      start_period: 60s  # Allow time for initialization
+    networks:
+      - sequencer-net
+    restart: unless-stopped
+    profiles:
+      - ipfs
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"  # Increased log size for IPFS debugging
+        max-file: "5"
+
+  # IPFS Cleanup Service - Sidecar for periodic cleanup
+  ipfs-cleanup:
+    image: ipfs/kubo:master-latest
+    container_name: dsv-ipfs-cleanup
+    volumes:
+      - ${IPFS_DATA_DIR:-/data/ipfs}:/data/ipfs:rw  # Read-write access for cleanup
+      - ./scripts:/scripts:ro
+    environment:
+      - IPFS_PATH=/data/ipfs
+      # Cleanup configuration
+      - IPFS_CLEANUP_MAX_AGE_DAYS=${IPFS_CLEANUP_MAX_AGE_DAYS:-7}
+      - IPFS_CLEANUP_INTERVAL_HOURS=${IPFS_CLEANUP_INTERVAL_HOURS:-72}
+    # Proper containerization with tini as init system
+    entrypoint: ["/sbin/tini", "--"]
+    command: >
+      sh -c "
+        echo 'Starting IPFS cleanup service...'
+        # Make sure the cleanup script is executable
+        chmod +x /scripts/ipfs-cleanup.sh
+        # Run the cleanup scheduler
+        exec /scripts/ipfs-cleanup.sh
+      "
+    # Resource limits for cleanup service
+    ulimits:
+      nofile:
+        soft: 100000
+        hard: 100000
+      nproc:
+        soft: 1024
+        hard: 1024
+    depends_on:
+      ipfs:
+        condition: service_healthy
     networks:
       - sequencer-net
     restart: unless-stopped
