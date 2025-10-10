@@ -296,7 +296,7 @@ services:
     image: ipfs/go-ipfs:latest
     container_name: dsv-ipfs
     volumes:
-      - ipfs-data:/data/ipfs
+      - ${IPFS_DATA_DIR:-/data/ipfs}:/data/ipfs
       - ./scripts:/scripts:ro  # Mount scripts directory
     ports:
       - "${IPFS_API_PORT:-5001}:5001"  # IPFS API (only this needed for DSV)
@@ -307,6 +307,8 @@ services:
       # Cleanup configuration
       - IPFS_CLEANUP_MAX_AGE_DAYS=${IPFS_CLEANUP_MAX_AGE_DAYS:-7}
       - IPFS_CLEANUP_INTERVAL_HOURS=${IPFS_CLEANUP_INTERVAL_HOURS:-72}
+      # Data directory configuration
+      - IPFS_DATA_DIR=${IPFS_DATA_DIR:-/data/ipfs}
     command: >
       sh -c "
         # Start IPFS daemon in background

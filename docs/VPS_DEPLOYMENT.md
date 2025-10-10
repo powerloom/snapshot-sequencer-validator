@@ -82,6 +82,67 @@ The Powerloom Decentralized Sequencer Validator uses a separated architecture fo
 - 2GB+ RAM, 10GB+ disk space
 - Open ports: 9001 (P2P), 9090 (metrics, optional)
 
+### CRITICAL: IPFS Data Directory Prerequisites
+
+> ⚠️ **MUST BE COMPLETED BEFORE STARTING SERVICES** ⚠️
+>
+> The IPFS service requires a properly configured host directory. **Docker bind mounts fail if the host directory doesn't exist**, which will cause container startup failures.
+
+#### Host Directory Setup Commands
+Run these commands EXACTLY on your VPS before starting the sequencer:
+
+```bash
+# CRITICAL: Create the IPFS data directory first
+sudo mkdir -p /data/ipfs
+
+# Set proper ownership for IPFS user (1000:1000)
+sudo chown -R 1000:1000 /data/ipfs
+
+# Set correct permissions for Docker bind mount
+sudo chmod -R 755 /data/ipfs
+
+# Verify the directory exists and has correct permissions
+ls -la /data/ipfs
+# Should show: drwxr-xr-X 1000 1000 (user:group)
+
+# Verify disk capacity (should show 1.8TB partition)
+df -h /data
+```
+
+#### Why This Is Required
+- **Docker Bind Mounts**: Require existing host directories, not volumes
+- **User Permissions**: IPFS runs as user 1000:1000, needs write access
+- **Startup Failure**: Without this, IPFS container will fail to start
+- **Performance**: Direct disk I/O to large storage partition for better performance
+
+#### What Happens If Not Done
+- ❌ **Container Startup Failure**: IPFS container will crash on startup
+- ❌ **Bind Mount Errors**: Docker cannot create non-existent directories
+- ❌ **Permission Denied**: IPFS daemon cannot write data
+- ❌ **Service Unavailable**: Built-in IPFS service will not be accessible
+
+#### Directory Location Options
+The default location `/data/ipfs` uses the large 1.8TB partition, but you can customize:
+
+```bash
+# Alternative locations (create with same commands above):
+sudo mkdir -p /mnt/ssd/ipfs     # For dedicated SSD storage
+sudo mkdir -p /storage/ipfs     # For custom storage location
+sudo chown -R 1000:1000 /path/to/custom/location
+sudo chmod -R 755 /path/to/custom/location
+
+# Then update .env:
+IPFS_DATA_DIR=/mnt/ssd/ipfs    # Or your custom location
+```
+
+#### Verify Setup is Complete
+Before running `./dsv.sh start --with-ipfs`, confirm:
+```bash
+ls -la /data/ipfs              # Directory exists
+df -h /data                    # 1.8TB partition available
+docker run --rm -v /data/ipfs:/data/ipfs alpine ls /data/ipfs  # Test Docker access
+```
+
 ### Generate P2P Identity
 ```bash
 # Generate unique key for your validator
@@ -105,7 +166,23 @@ cp .env.example .env
 nano .env
 ```
 
-### 2. IPFS Service Options
+### 2. CRITICAL: IPFS Data Directory Setup
+
+> ⚠️ **MUST COMPLETE THIS STEP BEFORE CONTINUING** ⚠️
+
+If you plan to use the built-in IPFS service (`--with-ipfs` flag), you MUST create the host directory first:
+
+```bash
+# CRITICAL: Create IPFS data directory with correct permissions
+sudo mkdir -p /data/ipfs
+sudo chown -R 1000:1000 /data/ipfs
+sudo chmod -R 755 /data/ipfs
+
+# Verify setup
+ls -la /data/ipfs  # Should show: drwxr-xr-X 1000 1000
+```
+
+### 3. IPFS Service Options
 
 #### Option A: Use External IPFS Service
 ```bash
@@ -145,6 +222,53 @@ DATA_MARKET_ADDRESSES=0x0C2E22fe7526fAeF28E7A58c84f8723dEFcE200c
 
 ### IPFS Configuration
 
+#### Host Bind Mount Storage (NEW - October 2025)
+The IPFS service now uses host bind mounts instead of Docker volumes for better storage capacity and performance:
+
+**Benefits of Host Bind Mounts:**
+- **Larger Storage Capacity**: Access to the 1.8TB `/data` partition instead of container storage limits
+- **Better Performance**: Direct disk I/O without Docker layer overhead
+- **Data Persistence**: Data survives container restarts and redeploys
+- **Easier Management**: Standard filesystem tools for backup and monitoring
+
+**Configuration:**
+```bash
+# IPFS Data Directory Configuration (NEW - October 2025)
+# Host directory for IPFS data storage
+# Default: /data/ipfs (uses large 1.8TB partition)
+IPFS_DATA_DIR=/data/ipfs
+
+# Example configurations for different storage setups:
+# - Large partition: IPFS_DATA_DIR=/data/ipfs
+# - Dedicated SSD: IPFS_DATA_DIR=/mnt/ssd/ipfs
+# - Custom location: IPFS_DATA_DIR=/storage/ipfs
+```
+
+**Directory Setup:**
+```bash
+# Create the IPFS data directory on the host
+sudo mkdir -p /data/ipfs
+sudo chown -R 1000:1000 /data/ipfs  # IPFS user:group
+sudo chmod -R 755 /data/ipfs
+
+# Verify disk capacity
+df -h /data
+
+# Set proper permissions for IPFS daemon
+sudo chown -R 1000:1000 /data/ipfs
+```
+
+**Data Migration (from Docker volumes):**
+```bash
+# If migrating from Docker volumes:
+docker run --rm -v dsv-ipfs-data:/source -v /data/ipfs:/target alpine sh -c \
+  "cp -r /source/. /target/ && echo 'Migration completed'"
+
+# Update .env to use host directory:
+IPFS_DATA_DIR=/data/ipfs
+```
+
+#### IPFS Cleanup Configuration
 When using the built-in IPFS service (`--with-ipfs` flag), the following environment variables control cleanup behavior:
 
 ```bash
@@ -165,6 +289,17 @@ IPFS_CLEANUP_INTERVAL_HOURS=72  # Every 3 days
 - Runs cleanup every `IPFS_CLEANUP_INTERVAL_HOURS` (default: 72 hours)
 - Uses conservative approach to avoid removing important data
 - Logs all cleanup activities for monitoring
+
+#### Storage Performance Considerations
+- **SSD Recommended**: Use SSD storage for `/data` partition for better IPFS performance
+- **RAID Configuration**: Consider RAID 1 for redundancy if using multiple disks
+- **Backup Strategy**: Regular backups of `/data/ipfs` directory are recommended
+- **Monitoring**: Monitor disk usage with `df -h /data` and `du -sh /data/ipfs`
+
+#### Permission Requirements
+- **Directory Ownership**: IPFS runs as user 1000:1000, ensure proper permissions
+- **Filesystem Access**: Host directory must be writable by IPFS user
+- **SELinux/AppArmor**: May require adjustments for bind mount access
 
 ### 3. Launch Sequencer
 ```bash
@@ -333,7 +468,7 @@ The `dsv.sh` script is the primary tool for managing your sequencer deployment.
 ```bash
 # Main Commands
 ./dsv.sh start         # Start separated architecture (production)
-./dsv.sh start --with-ipfs     # Start with local IPFS service
+./dsv.sh start --with-ipfs     # Start with local IPFS service (requires IPFS directory setup first)
 ./dsv.sh stop          # Stop all services
 ./dsv.sh restart       # Restart all services
 ./dsv.sh status        # Show service status
@@ -376,7 +511,9 @@ The `dsv.sh` script is the primary tool for managing your sequencer deployment.
 # Uses: docker-compose.separated.yml with ipfs profile
 # Runs: docker compose -f docker-compose.separated.yml --profile ipfs up -d --build
 # Services: p2p-gateway, aggregator, dequeuer, finalizer, event-monitor, redis, ipfs
-# Additional: IPFS node with automatic cleanup enabled
+# Additional: IPFS node with automatic cleanup enabled and host bind mount storage
+# Note: IPFS data stored at ${IPFS_DATA_DIR:-/data/ipfs} (default: 1.8TB /data partition)
+# ⚠️ **PREREQUISITE**: Must run `sudo mkdir -p /data/ipfs && sudo chown -R 1000:1000 /data/ipfs && sudo chmod -R 755 /data/ipfs` BEFORE starting services
 ```
 
 **dev**: Development mode with unified sequencer
@@ -1071,6 +1208,101 @@ DATA_MARKET_ADDRESSES=0x123...,0x456...,0x789...
 POWERLOOM_RPC_NODES=http://rpc1.com,http://rpc2.com
 
 # Avoid JSON arrays unless necessary
+```
+
+#### IPFS Storage Issues
+
+**Problem**: IPFS fails to start due to permission or storage issues
+
+**Solution**:
+```bash
+# Check IPFS data directory permissions
+ls -la /data/ipfs
+# Should show: drwxr-xr-X 1000 1000 (user:group)
+
+# Fix permissions
+sudo chown -R 1000:1000 /data/ipfs
+sudo chmod -R 755 /data/ipfs
+
+# Check disk space
+df -h /data
+# Should show available space (1.8TB partition)
+
+# Check if directory exists
+sudo ls -la /data/ipfs
+
+# If directory missing:
+sudo mkdir -p /data/ipfs
+sudo chown -R 1000:1000 /data/ipfs
+sudo chmod -R 755 /data/ipfs
+```
+
+### CRITICAL: IPFS Directory Not Created
+
+**Problem**: "bind mount source path does not exist" error when starting services with `--with-ipfs`
+
+**Root Cause**: The `/data/ipfs` directory was not created on the host system before starting the Docker service.
+
+**Complete Solution**:
+```bash
+# CRITICAL: This is the complete setup sequence
+# 1. Create directory
+sudo mkdir -p /data/ipfs
+
+# 2. Set ownership (IPFS runs as user 1000:1000)
+sudo chown -R 1000:1000 /data/ipfs
+
+# 3. Set permissions (755 allows owner full access, group/others read/execute)
+sudo chmod -R 755 /data/ipfs
+
+# 4. Verify setup
+ls -la /data/ipfs
+# Expected: drwxr-xr-X 1000 1000
+
+# 5. Test Docker access
+docker run --rm -v /data/ipfs:/data/ipfs alpine ls /data/ipfs
+
+# 6. Now start services
+./dsv.sh start --with-ipfs
+```
+
+**Common Error Messages**:
+- `bind mount source path does not exist`
+- `failed to create directory /data/ipfs: permission denied`
+- `cannot access /data/ipfs: no such file or directory`
+
+**Always run the directory setup commands BEFORE starting services** to avoid these errors.
+
+**Problem**: Docker bind mount fails
+
+**Solution**:
+```bash
+# Check if host directory exists
+ls -la /data/ipfs
+
+# If permissions are wrong:
+sudo chown -R 1000:1000 /data/ipfs
+sudo chmod -R 755 /data/ipfs
+
+# Test Docker access to host directory
+docker run --rm -v /data/ipfs:/data/ipfs alpine ls /data/ipfs
+
+# If SELinux is enabled:
+sudo setsebool -P docker_bind_mount 1
+```
+
+**Problem**: IPFS performance issues
+
+**Solution**:
+```bash
+# Check disk I/O performance
+iostat -x 1 5
+
+# Monitor IPFS memory usage
+docker stats dsv-ipfs
+
+# Check for storage fragmentation
+du -sh /data/ipfs/*
 ```
 
 ### Submission Processing Issues

@@ -90,6 +90,34 @@ start_services() {
         esac
     done
 
+    # Check IPFS directory if --with-ipfs flag is used
+    if [ "$enable_ipfs" = true ]; then
+        IPFS_DIR="${IPFS_DATA_DIR:-/data/ipfs}"
+
+        if [ ! -d "$IPFS_DIR" ]; then
+            print_color "$RED" "❌ CRITICAL: IPFS data directory does not exist"
+            print_color "$YELLOW" "Directory needed: $IPFS_DIR"
+            print_color "$YELLOW" "Run these commands BEFORE starting services:"
+            print_color "$YELLOW" "  sudo mkdir -p $IPFS_DIR"
+            print_color "$YELLOW" "  sudo chown -R 1000:1000 $IPFS_DIR"
+            print_color "$YELLOW" "  sudo chmod -R 755 $IPFS_DIR"
+            print_color "$YELLOW" ""
+            print_color "$YELLOW" "Then try again: ./dsv.sh start --with-ipfs"
+            exit 1
+        fi
+
+        # Check permissions
+        if [ ! -r "$IPFS_DIR" ] || [ ! -w "$IPFS_DIR" ]; then
+            print_color "$RED" "❌ CRITICAL: IPFS data directory has incorrect permissions"
+            print_color "$YELLOW" "Directory: $IPFS_DIR"
+            print_color "$YELLOW" "Required: Read/write access for user 1000:1000"
+            print_color "$YELLOW" "Fix with: sudo chown -R 1000:1000 $IPFS_DIR && sudo chmod -R 755 $IPFS_DIR"
+            exit 1
+        fi
+
+        print_color "$GREEN" "✅ IPFS directory verified: $IPFS_DIR"
+    fi
+
     print_color "$GREEN" "🚀 Starting Separated Architecture"
 
     if [ ! -f docker-compose.separated.yml ]; then
