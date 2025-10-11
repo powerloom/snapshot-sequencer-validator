@@ -248,7 +248,7 @@ services:
       - PROTOCOL_STATE_CONTRACT=${PROTOCOL_STATE_CONTRACT}
       - DATA_MARKET_ADDRESSES=${DATA_MARKET_ADDRESSES}
     ports:
-      - "${MONITOR_API_PORT:-9091}:${MONITOR_API_PORT:-9091}"
+      - "127.0.0.1:${MONITOR_API_PORT:-9091}:${MONITOR_API_PORT:-9091}"
     depends_on:
       redis:
         condition: service_healthy

@@ -3,6 +3,12 @@
 # Monitor API Client - Simple curl-based monitoring
 # Usage: ./monitor_api_client.sh [port] [protocol] [market]
 # No jq dependency, uses grep/sed/awk for parsing
+#
+# SECURITY NOTE:
+# The monitor-api service is bound to localhost (127.0.0.1) for security.
+# To access from remote machines, use SSH tunneling:
+#   ssh -L 9091:localhost:9091 user@vps-ip
+# Then access via http://localhost:9091 on your local machine
 
 set -e
 
@@ -187,6 +193,7 @@ main() {
 
     echo ""
     echo -e "${YELLOW}📊 Full API documentation: http://localhost:${MONITOR_API_PORT}/swagger/index.html${NC}"
+    echo -e "${YELLOW}🔐 Remote access: ssh -L ${MONITOR_API_PORT}:localhost:${MONITOR_API_PORT} user@vps-ip${NC}"
 }
 
 main
