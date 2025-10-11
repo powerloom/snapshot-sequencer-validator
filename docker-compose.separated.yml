@@ -4,8 +4,6 @@ services:
     volumes:
       - redis-data:/data
     command: redis-server --appendonly yes --maxmemory 2gb
-    ports:
-      - "${REDIS_BIND_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
