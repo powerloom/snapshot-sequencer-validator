@@ -484,7 +484,8 @@ func main() {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	<-sigCh
 
-	log.Info("Shutting down unified sequencer...")
+	componentPrefix := strings.ToUpper(sequencer.primaryComponent)
+	log.Infof("[%s] Shutting down %s component", componentPrefix, componentPrefix)
 	cancel()
 	sequencer.wg.Wait()
 }
