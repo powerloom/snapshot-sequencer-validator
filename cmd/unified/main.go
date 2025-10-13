@@ -37,6 +37,61 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// detectPrimaryComponent identifies the main component role for logging purposes
+func detectPrimaryComponent(enableListener, enableDequeuer, enableFinalizer, enableBatchAggregation, enableEventMonitor bool) string {
+	// Count enabled components
+	enabledCount := 0
+	primaryComponent := "unknown"
+
+	if enableListener {
+		enabledCount++
+		primaryComponent = "listener"
+	}
+	if enableDequeuer {
+		enabledCount++
+		primaryComponent = "dequeuer"
+	}
+	if enableFinalizer {
+		enabledCount++
+		primaryComponent = "finalizer"
+	}
+	if enableBatchAggregation {
+		enabledCount++
+		primaryComponent = "batch-aggregator"
+	}
+	if enableEventMonitor {
+		enabledCount++
+		primaryComponent = "event-monitor"
+	}
+
+	// If multiple components are enabled, return "multi-component"
+	if enabledCount > 1 {
+		return "multi-component"
+	}
+
+	return primaryComponent
+}
+
+// getComponentEmoji returns appropriate emoji for component identification
+func getComponentEmoji(component string) string {
+	switch component {
+	case "dequeuer":
+		return "🚀"
+	case "finalizer":
+		return "📦"
+	case "event-monitor":
+		return "🔍"
+	case "listener":
+		return "📡"
+	case "batch-aggregator":
+		return "🔄"
+	case "multi-component":
+		return "🔧"
+	default:
+		return "⚙️"
+	}
+}
+
 type UnifiedSequencer struct {
 	// Core components
 	host        host.Host
@@ -62,9 +117,10 @@ type UnifiedSequencer struct {
 	p2pConsensus *consensus.P2PConsensus // P2P consensus handler
 
 	// Configuration
-	config      *config.Settings
-	sequencerID string
-	wg          sync.WaitGroup
+	config          *config.Settings
+	sequencerID     string
+	primaryComponent string
+	wg              sync.WaitGroup
 }
 
 func main() {
@@ -90,12 +146,28 @@ func main() {
 	enableBatchAggregation := cfg.EnableBatchAggregation
 	enableEventMonitor := cfg.EnableEventMonitor
 
-	log.Infof("Starting Unified Sequencer with components:")
-	log.Infof("  - Listener: %v", enableListener)
-	log.Infof("  - Dequeuer: %v", enableDequeuer)
-	log.Infof("  - Finalizer: %v", enableFinalizer)
-	log.Infof("  - Batch Aggregation: %v", enableBatchAggregation)
-	log.Infof("  - Event Monitor: %v", enableEventMonitor)
+	// Detect primary component for clear identification
+	primaryComponent := detectPrimaryComponent(enableListener, enableDequeuer, enableFinalizer, enableBatchAggregation, enableEventMonitor)
+	componentEmoji := getComponentEmoji(primaryComponent)
+
+	// Component-specific startup banner
+	if primaryComponent == "multi-component" {
+		log.Infof("========================================")
+		log.Infof("🔧 MULTI-COMPONENT SEQUENCER STARTING")
+		log.Infof("========================================")
+		log.Infof("Components enabled:")
+		if enableListener { log.Infof("  - Listener: %v", enableListener) }
+		if enableDequeuer { log.Infof("  - Dequeuer: %v", enableDequeuer) }
+		if enableFinalizer { log.Infof("  - Finalizer: %v", enableFinalizer) }
+		if enableBatchAggregation { log.Infof("  - Batch Aggregation: %v", enableBatchAggregation) }
+		if enableEventMonitor { log.Infof("  - Event Monitor: %v", enableEventMonitor) }
+	} else {
+		componentName := strings.ToUpper(strings.ReplaceAll(primaryComponent, "-", " "))
+		log.Infof("========================================")
+		log.Infof("%s %s COMPONENT STARTING", componentEmoji, componentName)
+		log.Infof("========================================")
+		log.Infof("Role: %s only", componentName)
+	}
 
 	// Get sequencer ID from configuration
 	sequencerID := cfg.SequencerID
@@ -104,7 +176,8 @@ func main() {
 	var redisClient *redis.Client
 	if enableListener || enableDequeuer || enableFinalizer || enableEventMonitor {
 		redisAddr := fmt.Sprintf("%s:%s", cfg.RedisHost, cfg.RedisPort)
-		log.Infof("Connecting to Redis at %s (DB: %d)", redisAddr, cfg.RedisDB)
+		componentPrefix := strings.ToUpper(primaryComponent)
+		log.Infof("[%s] Connecting to Redis at %s (DB: %d)", componentPrefix, redisAddr, cfg.RedisDB)
 
 		redisOpts := &redis.Options{
 			Addr: redisAddr,
@@ -120,7 +193,7 @@ func main() {
 		if err := redisClient.Ping(ctx).Err(); err != nil {
 			log.Fatalf("Failed to connect to Redis: %v", err)
 		}
-		log.Infof("Connected to Redis at %s", redisAddr)
+		log.Infof("[%s] Connected to Redis at %s", componentPrefix, redisAddr)
 	}
 
 	// Initialize deduplicator if Redis is available
@@ -331,6 +404,7 @@ func main() {
 		enableEventMonitor:     enableEventMonitor,
 		config:                 cfg,
 		sequencerID:            sequencerID,
+		primaryComponent:       primaryComponent,
 	}
 
 	// Initialize components based on flags
@@ -416,9 +490,11 @@ func main() {
 }
 
 func (s *UnifiedSequencer) Start() {
+	componentPrefix := strings.ToUpper(s.primaryComponent)
+
 	// Start P2P listener component
 	if s.enableListener && s.ps != nil {
-		log.Info("Starting P2P Listener component...")
+		log.Infof("[%s] Starting P2P Listener component...", componentPrefix)
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
@@ -428,11 +504,12 @@ func (s *UnifiedSequencer) Start() {
 
 	// Start dequeuer component
 	if s.enableDequeuer && s.redisClient != nil {
-		log.Info("Starting Dequeuer component...")
+		log.Infof("[%s] Starting Dequeuer component...", componentPrefix)
 		workers := s.config.DequeueWorkers
 		if workers == 0 {
 			workers = 5 // Default fallback
 		}
+		log.Infof("[%s] Starting %d dequeuer workers", componentPrefix, workers)
 		for i := 0; i < workers; i++ {
 			s.wg.Add(1)
 			go func(workerID int) {
@@ -451,7 +528,10 @@ func (s *UnifiedSequencer) Start() {
 
 	// Start finalizer component
 	if s.enableFinalizer && s.redisClient != nil {
-		log.Info("Starting Finalizer component...")
+		log.Infof("[%s] Starting Finalizer component...", componentPrefix)
+		if s.ipfsClient != nil {
+			log.Infof("[%s] ✅ IPFS client connected", componentPrefix)
+		}
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
@@ -461,7 +541,7 @@ func (s *UnifiedSequencer) Start() {
 
 	// Start consensus component
 	if s.enableBatchAggregation && s.ps != nil {
-		log.Info("Starting Batch Aggregation component (P2P finalization exchange)...")
+		log.Infof("[%s] Starting Batch Aggregation component (P2P finalization exchange)...", componentPrefix)
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
@@ -471,7 +551,7 @@ func (s *UnifiedSequencer) Start() {
 
 	// Start event monitor component
 	if s.enableEventMonitor && s.eventMonitor != nil {
-		log.Info("Starting Event Monitor component...")
+		log.Infof("[%s] Starting Event Monitor component...", componentPrefix)
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
@@ -479,7 +559,7 @@ func (s *UnifiedSequencer) Start() {
 		}()
 	}
 
-	log.Info("All enabled components started successfully")
+	log.Infof("[%s] ✅ All enabled components started successfully", componentPrefix)
 }
 
 func (s *UnifiedSequencer) runListener() {
