@@ -32,6 +32,12 @@ services:
       # Protocol/Market config
       - PROTOCOL_STATE_CONTRACT=${PROTOCOL_STATE_CONTRACT}
       - DATA_MARKET_ADDRESSES=${DATA_MARKET_ADDRESSES}
+      # Gossipsub topic configuration
+      - GOSSIPSUB_SNAPSHOT_SUBMISSION_PREFIX=${GOSSIPSUB_SNAPSHOT_SUBMISSION_PREFIX:-/powerloom/snapshot-submissions}
+      - GOSSIPSUB_FINALIZED_BATCH_PREFIX=${GOSSIPSUB_FINALIZED_BATCH_PREFIX:-/powerloom/finalized-batches}
+      - GOSSIPSUB_VALIDATOR_PRESENCE_TOPIC=${GOSSIPSUB_VALIDATOR_PRESENCE_TOPIC:-/powerloom/validator/presence}
+      - GOSSIPSUB_CONSENSUS_VOTES_TOPIC=${GOSSIPSUB_CONSENSUS_VOTES_TOPIC:-/powerloom/consensus/votes}
+      - GOSSIPSUB_CONSENSUS_PROPOSALS_TOPIC=${GOSSIPSUB_CONSENSUS_PROPOSALS_TOPIC:-/powerloom/consensus/proposals}
     depends_on:
       redis:
         condition: service_healthy
