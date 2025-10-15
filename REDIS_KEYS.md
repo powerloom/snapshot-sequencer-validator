@@ -17,6 +17,27 @@ P2P Gateway ←→ Redis ←→ Dequeuer
 
 ## Key Definitions
 
+### State Tracker Keys
+
+#### Active Epoch Management
+- `ActiveEpochs()` - SET: Currently active epoch IDs
+  - Written by: Event Monitor
+  - Read by: State Tracker (deterministic aggregation)
+  - Purpose: Direct access to active epochs instead of SCAN operations
+  - Format: Set of epoch IDs
+
+- `EpochValidators({epochId})` - SET: Validator IDs participating in each epoch
+  - Written by: Event Monitor/Aggregator
+  - Read by: State Tracker (deterministic aggregation)
+  - Purpose: Efficient validator detection per epoch
+  - Format: Set of validator IDs
+
+- `EpochProcessed({epochId})` - SET: Processed submission IDs per epoch
+  - Written by: Dequeuer
+  - Read by: State Tracker (deterministic aggregation)
+  - Purpose: Fast submission counting without expensive operations
+  - Format: Set of submission IDs
+
 ### P2P Gateway Keys
 
 #### Incoming (from network to Redis) - ALL NAMESPACED

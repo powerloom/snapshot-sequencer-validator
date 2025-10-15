@@ -1521,7 +1521,42 @@ docker images | grep snapshot-sequencer
 docker exec <container> grep -A5 "RedisPassword" /app/main.go
 ```
 
-## Recent Updates (October 8, 2025)
+## Recent Updates (October 15, 2025)
+
+### State-Tracker Performance Improvements
+- ✅ **Deterministic Aggregation Implementation** (NEW - October 15, 2025)
+  - Replaced inefficient SCAN operations with set operations for better performance
+  - Enhanced Active Epoch detection using `ActiveEpochs()` and `EpochValidators()` sets
+  - Simplified current epoch detection with fallback mechanisms
+  - Significant reduction in Redis load and improved scalability
+  - More predictable behavior with deterministic aggregation
+
+### Performance Benefits
+- **Eliminated SCAN Operations**: All queries now use direct key access or set/sorted set operations
+- **Reduced Redis Round Trips**: Through efficient set operations for active epoch and validator detection
+- **Improved Scalability**: Better performance with high submission volumes
+- **Deterministic Behavior**: More reliable epoch detection and metrics aggregation
+- **Backward Compatibility**: Graceful fallback mechanisms if new keys aren't available
+
+### Technical Implementation Details
+#### New Redis Keys Used:
+- `ActiveEpochs()`: Set of currently active epoch IDs
+- `EpochValidators(epochID)`: Set of validator IDs for each epoch
+- `EpochProcessed(epochID)`: Set of processed submission IDs per epoch
+
+#### Performance Improvements:
+- **Reduced Redis Load**: Eliminated expensive SCAN operations in production code
+- **Faster Metric Aggregation**: Direct set operations instead of timeline parsing
+- **Better Validator Detection**: Efficient validator access instead of batch timeline iteration
+- **Simpler Logic**: More reliable current epoch detection with fallback
+
+### Backward Compatibility
+- All changes maintain fallback mechanisms using timeline-based detection
+- Existing monitoring API endpoints continue to work without changes
+- No breaking changes to data formats or Redis key structures
+- Graceful degradation if new keys aren't available in the system
+
+### Previous Updates (October 8, 2025)
 
 ### New Features
 - ✅ **Complete Monitoring API Implementation** (FULLY OPERATIONAL)

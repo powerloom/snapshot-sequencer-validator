@@ -1,15 +1,17 @@
 # State Tracker Service
 
-The State Tracker service maintains the current and historical state of all entities in the DSV system. It tracks state transitions for epochs, submissions, and validators, providing efficient query APIs without using expensive SCAN operations.
+The State Tracker service maintains the current and historical state of all entities in the DSV system. It tracks state transitions for epochs, submissions, and validators, providing efficient query APIs with deterministic aggregation capabilities.
 
 ## Features
 
 - **State Management**: Tracks state transitions for epochs, submissions, and validators
-- **Efficient Indexing**: Uses Redis sorted sets and hashes for fast queries
+- **Deterministic Aggregation**: Uses Redis set operations instead of expensive SCAN operations for improved performance
+- **Efficient Indexing**: Uses Redis sorted sets, hashes, and sets for fast queries
 - **Event-Driven**: Subscribes to events from the Event Emitter
 - **REST API**: Provides comprehensive query endpoints
 - **Prometheus Metrics**: Exports metrics for monitoring
 - **Historical Data**: Maintains timeline of state changes
+- **Backward Compatibility**: Graceful fallback mechanisms for older data formats
 
 ## State Transitions
 
@@ -56,8 +58,17 @@ offline → online → active → inactive
 
 ## Redis Index Structure
 
-The service maintains efficient indexes without using SCAN:
+The service maintains efficient indexes with deterministic aggregation:
 
+### New Deterministic Aggregation Keys
+```
+# Set Operations for Deterministic Aggregation (NEW - October 2025)
+ActiveEpochs()                       # Set of currently active epoch IDs
+EpochValidators({epochId})           # Set of validator IDs for each epoch
+EpochProcessed({epochId})            # Set of processed submission IDs per epoch
+```
+
+### Traditional Index Structure (Backward Compatibility)
 ```
 # Sorted Sets for Time-Based Queries
 metrics:submissions:by_time          # Score: timestamp, Member: submission_id
@@ -191,6 +202,27 @@ Get timeline for last hour:
 ```bash
 curl "http://localhost:8085/api/v1/state/timeline?type=epoch&start=$(date -v-1H +%s)&end=$(date +%s)"
 ```
+
+## Performance Improvements (October 2025)
+
+### Deterministic Aggregation Benefits
+- **Eliminated SCAN Operations**: Replaced inefficient SCAN operations with deterministic set operations
+- **Reduced Redis Load**: Significant reduction in Redis round trips and CPU usage
+- **Improved Scalability**: Better performance with high submission volumes and frequent epochs
+- **Deterministic Behavior**: More reliable metrics aggregation without race conditions
+- **Faster Response Times**: Direct key access provides quicker metric calculations
+
+### Technical Implementation
+- **ActiveEpochs Set**: Direct access to currently active epochs instead of timeline parsing
+- **EpochValidators Sets**: Efficient validator detection per epoch instead of batch timeline iteration
+- **EpochProcessed Sets**: Fast submission counting per epoch without expensive operations
+- **Fallback Mechanisms**: Graceful degradation to timeline-based detection when new keys aren't available
+
+### Backward Compatibility
+- **No Breaking Changes**: All existing APIs continue to work without modification
+- **Graceful Degradation**: Automatically falls back to timeline-based detection when needed
+- **Data Format Consistency**: No changes to existing data structures or formats
+- **Monitoring Continuity**: All monitoring endpoints provide consistent data
 
 ## Architecture Notes
 
