@@ -140,6 +140,14 @@ func NewP2PGateway(cfg *config.Settings) (*P2PGateway, error) {
 		return nil, fmt.Errorf("failed to setup topics: %w", err)
 	}
 
+	// Initialize stream infrastructure if enabled
+	if cfg.EnableStreamNotifications {
+		if err := gateway.initializeStreams(); err != nil {
+			log.WithError(err).Warn("Failed to initialize stream infrastructure, falling back to queue-based approach")
+			cfg.EnableStreamNotifications = false
+		}
+	}
+
 	return gateway, nil
 }
 
@@ -205,6 +213,279 @@ func (g *P2PGateway) setupTopics() error {
 
 	log.Info("P2P Gateway: Subscribed to all topics")
 	return nil
+}
+
+// initializeStreams sets up Redis streams for deterministic aggregation
+func (g *P2PGateway) initializeStreams() error {
+	streamKey := g.keyBuilder.AggregationStream()
+
+	log.WithField("stream", streamKey).Info("Initializing Redis streams infrastructure")
+
+	// Initialize the aggregation stream with proper configuration
+	// Use XGROUP CREATE MKSTREAM to atomically create both stream and group
+	groupName := g.config.StreamConsumerGroup
+
+	// Try to create consumer group with stream (atomic operation)
+	err := g.redisClient.XGroupCreateMkStream(g.ctx, streamKey, groupName, "0").Err()
+	if err != nil {
+		if err.Error() == "BUSYGROUP Consumer Group name already exists" {
+			log.WithFields(logrus.Fields{
+				"stream": streamKey,
+				"group":  groupName,
+			}).Info("Consumer group already exists, verifying stream state")
+
+			// Verify the stream exists and is accessible
+			info, err := g.redisClient.XInfoStream(g.ctx, streamKey).Result()
+			if err != nil {
+				return fmt.Errorf("stream exists but is not accessible: %w", err)
+			}
+
+			log.WithFields(logrus.Fields{
+				"stream":     streamKey,
+				"entries":    info.Length,
+				"last_id":    info.LastGeneratedID,
+				"groups":     info.Groups,
+			}).Info("Stream verified and ready")
+		} else {
+			return fmt.Errorf("failed to create consumer group and stream: %w", err)
+		}
+	} else {
+		log.WithFields(logrus.Fields{
+			"stream": streamKey,
+			"group":  groupName,
+		}).Info("Created new stream and consumer group")
+	}
+
+	// Set up stream monitoring
+	go g.monitorStreamHealth()
+
+	// Set up periodic stream cleanup
+	go g.cleanupOldStreamEntries()
+
+	return nil
+}
+
+// monitorStreamHealth monitors the health of the aggregation stream
+func (g *P2PGateway) monitorStreamHealth() {
+	ticker := time.NewTicker(60 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-g.ctx.Done():
+			return
+		case <-ticker.C:
+			streamKey := g.keyBuilder.AggregationStream()
+			groupName := g.config.StreamConsumerGroup
+
+			// Check stream info
+			info, err := g.redisClient.XInfoStream(g.ctx, streamKey).Result()
+			if err != nil {
+				log.WithError(err).Error("Failed to get stream info")
+				continue
+			}
+
+			// Check consumer group info
+			groups, err := g.redisClient.XInfoGroups(g.ctx, streamKey).Result()
+			if err != nil {
+				log.WithError(err).Error("Failed to get consumer groups")
+				continue
+			}
+
+			// Find our consumer group
+			var ourGroup *redis.XInfoGroup
+			for _, group := range groups {
+				if group.Name == groupName {
+					ourGroup = &group
+					break
+				}
+			}
+
+			if ourGroup == nil {
+				log.WithField("group", groupName).Error("Our consumer group not found")
+				// Try to recreate it
+				if err := g.redisClient.XGroupCreateMkStream(g.ctx, streamKey, groupName, "0").Err(); err != nil {
+					log.WithError(err).Error("Failed to recreate consumer group")
+				}
+				continue
+			}
+
+			// Log stream health metrics
+			log.WithFields(logrus.Fields{
+				"stream":         streamKey,
+				"entries":        info.Length,
+				"pending":        ourGroup.Pending,
+				"last_id":        info.LastGeneratedID,
+				"consumers":      ourGroup.Consumers,
+				"group":          groupName,
+			}).Debug("Stream health check")
+
+			// Emit stream health event
+			payload, _ := json.Marshal(map[string]interface{}{
+				"stream_entries":  info.Length,
+				"pending_messages": ourGroup.Pending,
+				"active_consumers": ourGroup.Consumers,
+				"last_id":         info.LastGeneratedID,
+			})
+			g.eventEmitter.Emit(&events.Event{
+				Type:      events.EventStreamHealth,
+				Severity:  events.SeverityDebug,
+				Component: "p2p-gateway",
+				Timestamp: time.Now(),
+				Payload:   json.RawMessage(payload),
+			})
+		}
+	}
+}
+
+// cleanupOldStreamEntries removes old entries from the aggregation stream to prevent memory bloat
+func (g *P2PGateway) cleanupOldStreamEntries() {
+	ticker := time.NewTicker(30 * time.Minute) // Cleanup every 30 minutes
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-g.ctx.Done():
+			return
+		case <-ticker.C:
+			streamKey := g.keyBuilder.AggregationStream()
+
+			// Get stream info to check current size
+			info, err := g.redisClient.XInfoStream(g.ctx, streamKey).Result()
+			if err != nil {
+				log.WithError(err).Debug("Failed to get stream info for cleanup")
+				continue
+			}
+
+			// Only trim if stream has more than 1000 entries
+			if info.Length <= 1000 {
+				continue
+			}
+
+			// Trim to keep only the last 1000 entries
+			result, err := g.redisClient.XTrimMaxLenApprox(g.ctx, streamKey, 1000, 0).Result()
+			if err != nil {
+				log.WithError(err).Error("Failed to trim stream")
+				continue
+			}
+
+			if result > 0 {
+				log.WithFields(logrus.Fields{
+					"stream":      streamKey,
+					"trimmed":     result,
+					"remaining":   info.Length - result,
+					"previous":    info.Length,
+				}).Info("Cleaned up old stream entries")
+
+				// Emit stream cleanup event
+				payload, _ := json.Marshal(map[string]interface{}{
+					"trimmed_entries":   result,
+					"remaining_entries": info.Length - result,
+					"stream_key":        streamKey,
+				})
+				g.eventEmitter.Emit(&events.Event{
+					Type:      events.EventStreamCleanup,
+					Severity:  events.SeverityInfo,
+					Component: "p2p-gateway",
+					Timestamp: time.Now(),
+					Payload:   json.RawMessage(payload),
+				})
+			}
+		}
+	}
+}
+
+// ensureStreamExists ensures the aggregation stream exists, recreating it if necessary
+func (g *P2PGateway) ensureStreamExists() error {
+	streamKey := g.keyBuilder.AggregationStream()
+	groupName := g.config.StreamConsumerGroup
+
+	// Check if stream exists
+	info, err := g.redisClient.XInfoStream(g.ctx, streamKey).Result()
+	if err != nil {
+		// Stream doesn't exist, try to create it with consumer group
+		log.WithField("stream", streamKey).Info("Stream does not exist, creating it")
+		if err := g.redisClient.XGroupCreateMkStream(g.ctx, streamKey, groupName, "0").Err(); err != nil {
+			return fmt.Errorf("failed to create stream and consumer group: %w", err)
+		}
+		log.WithFields(logrus.Fields{
+			"stream": streamKey,
+			"group":  groupName,
+		}).Info("Created new stream and consumer group")
+		return nil
+	}
+
+	// Stream exists, check if our consumer group exists
+	groups, err := g.redisClient.XInfoGroups(g.ctx, streamKey).Result()
+	if err != nil {
+		return fmt.Errorf("failed to get consumer groups: %w", err)
+	}
+
+	// Check if our group exists
+	groupExists := false
+	for _, group := range groups {
+		if group.Name == groupName {
+			groupExists = true
+			break
+		}
+	}
+
+	if !groupExists {
+		// Consumer group doesn't exist, create it
+		if err := g.redisClient.XGroupCreate(g.ctx, streamKey, groupName, "0").Err(); err != nil {
+			return fmt.Errorf("failed to create consumer group: %w", err)
+		}
+		log.WithFields(logrus.Fields{
+			"stream": streamKey,
+			"group":  groupName,
+		}).Info("Created consumer group for existing stream")
+	}
+
+	log.WithFields(logrus.Fields{
+		"stream":  streamKey,
+		"group":   groupName,
+		"entries": info.Length,
+	}).Debug("Stream verified and ready")
+
+	return nil
+}
+
+// addToStreamWithRetry adds a message to the stream with retry logic
+func (g *P2PGateway) addToStreamWithRetry(values map[string]interface{}) error {
+	streamKey := g.keyBuilder.AggregationStream()
+	maxRetries := 3
+	retryDelay := 100 * time.Millisecond
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		// Ensure stream exists before adding
+		if err := g.ensureStreamExists(); err != nil {
+			log.WithError(err).Error("Failed to ensure stream exists")
+			time.Sleep(retryDelay)
+			continue
+		}
+
+		// Add message to stream
+		err := g.redisClient.XAdd(g.ctx, &redis.XAddArgs{
+			Stream: streamKey,
+			Values: values,
+		}).Err()
+
+		if err == nil {
+			return nil
+		}
+
+		log.WithError(err).WithFields(logrus.Fields{
+			"attempt": attempt + 1,
+			"max":     maxRetries,
+			"stream":  streamKey,
+		}).Warn("Failed to add message to stream, retrying")
+
+		if attempt < maxRetries-1 {
+			time.Sleep(retryDelay * time.Duration(attempt+1)) // Exponential backoff
+		}
+	}
+
+	return fmt.Errorf("failed to add message to stream after %d attempts", maxRetries)
 }
 
 func (g *P2PGateway) handleSubmissionMessages(sub *pubsub.Subscription, topicName string) {
@@ -396,11 +677,48 @@ func (g *P2PGateway) handleIncomingBatches() {
 			counter.Add(float64(len(msg.Data)))
 		}
 
-		// Route to Redis for aggregator processing (namespaced by protocol:market)
+		// Route to Redis for aggregator processing with ATOMIC PIPELINE OPERATIONS
 		// Include validator ID in the key so we can track who sent what
-		key := g.keyBuilder.IncomingBatch(fmt.Sprintf("%v", epochID), validatorID)
-		if err := g.redisClient.Set(g.ctx, key, msg.Data, 30*time.Minute).Err(); err != nil {
-			log.WithError(err).Error("Failed to store incoming batch")
+		epochIDStr := fmt.Sprintf("%v", epochID)
+		key := g.keyBuilder.IncomingBatch(epochIDStr, validatorID)
+
+		// ATOMIC PIPELINE OPERATIONS for deterministic batch processing
+		pipe := g.redisClient.Pipeline()
+
+		// Store batch data
+		pipe.Set(g.ctx, key, msg.Data, 30*time.Minute)
+
+		// Add to epoch validator set (for deterministic batch discovery)
+		pipe.SAdd(g.ctx, g.keyBuilder.EpochValidators(epochIDStr), validatorID)
+		pipe.Expire(g.ctx, g.keyBuilder.EpochValidators(epochIDStr), 2*time.Hour)
+
+		// CRITICAL: Add stream notification if enabled (replaces queue-based approach)
+		if g.config.EnableStreamNotifications {
+			streamValues := map[string]interface{}{
+				"epoch":     epochIDStr,
+				"validator": validatorID,
+				"batch_key": key,
+				"timestamp": time.Now().Unix(),
+				"type":      "validator_batch",
+			}
+
+			// Add to stream with retry logic
+			if err := g.addToStreamWithRetry(streamValues); err != nil {
+				log.WithError(err).Error("Failed to add stream notification")
+				// Fall back to queue if stream fails
+				aggQueueKey := g.keyBuilder.AggregationQueue()
+				pipe.LPush(g.ctx, aggQueueKey, epochID)
+			}
+		}
+
+		// Mark epoch as active
+		pipe.HSet(g.ctx, g.keyBuilder.ActiveEpochs(), epochIDStr, time.Now().Unix())
+		pipe.Expire(g.ctx, g.keyBuilder.ActiveEpochs(), 24*time.Hour)
+
+		// Execute atomic pipeline
+		_, err = pipe.Exec(g.ctx)
+		if err != nil {
+			log.WithError(err).Error("Failed to store incoming batch with atomic operations")
 			storageFailedCounter := g.metricsRegistry.GetOrCreate(metrics.MetricConfig{
 				Name:   "batches.storage.failed",
 				Type:   metrics.MetricTypeCounter,
@@ -429,21 +747,24 @@ func (g *P2PGateway) handleIncomingBatches() {
 				Member: epochID,
 			})
 
+			// FALLBACK: Only add to old aggregation queue if stream notifications disabled
 			// Check if epoch is already aggregated before queueing (namespaced)
-			aggregatedKey := g.keyBuilder.BatchAggregated(fmt.Sprintf("%v", epochID))
+			aggregatedKey := g.keyBuilder.BatchAggregated(epochIDStr)
 			exists, _ := g.redisClient.Exists(g.ctx, aggregatedKey).Result()
-			if exists == 0 {
-				// Only add to aggregation queue if not already aggregated (namespaced)
+			if exists == 0 && !g.config.EnableStreamNotifications {
+				// Only add to aggregation queue if not already aggregated and streams disabled
 				aggQueueKey := g.keyBuilder.AggregationQueue()
 				if err := g.redisClient.LPush(g.ctx, aggQueueKey, epochID).Err(); err != nil {
 					log.WithError(err).Error("Failed to add to aggregation queue")
 				}
-			} else {
-				log.WithField("epoch", epochID).Debug("Epoch already aggregated, not re-queueing")
+			} else if exists != 0 {
+				log.WithField("epoch", epochID).Debug("Epoch already aggregated, not processing")
 			}
+
 			log.WithFields(logrus.Fields{
 				"epoch": epochID,
 				"from": validatorID,
+				"stream_enabled": g.config.EnableStreamNotifications,
 			}).Info("P2P Gateway: Received finalized batch from validator")
 		}
 	}

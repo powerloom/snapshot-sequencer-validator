@@ -38,27 +38,7 @@ type Aggregator struct {
 	mu           sync.RWMutex
 }
 
-// scanKeys uses SCAN instead of KEYS for production safety
-func (a *Aggregator) scanKeys(pattern string) ([]string, error) {
-	var keys []string
-	var cursor uint64
 
-	for {
-		scanKeys, nextCursor, err := a.redisClient.Scan(a.ctx, cursor, pattern, 100).Result()
-		if err != nil {
-			return nil, err
-		}
-
-		keys = append(keys, scanKeys...)
-		cursor = nextCursor
-
-		if cursor == 0 {
-			break
-		}
-	}
-
-	return keys, nil
-}
 
 func NewAggregator(cfg *config.Settings) (*Aggregator, error) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -99,7 +79,7 @@ func NewAggregator(cfg *config.Settings) (*Aggregator, error) {
 	}
 	keyBuilder := rediskeys.NewKeyBuilder(protocolState, dataMarket)
 
-	return &Aggregator{
+	aggregator := &Aggregator{
 		ctx:          ctx,
 		cancel:       cancel,
 		redisClient:  redisClient,
@@ -108,7 +88,305 @@ func NewAggregator(cfg *config.Settings) (*Aggregator, error) {
 		keyBuilder:   keyBuilder,
 		epochBatches: make(map[uint64]map[string]*consensus.FinalizedBatch),
 		epochTimers:  make(map[uint64]*time.Timer),
-	}, nil
+	}
+
+	// Initialize stream consumer if enabled
+	if cfg.EnableStreamNotifications {
+		if err := aggregator.initializeStreamConsumer(); err != nil {
+			cancel()
+			return nil, fmt.Errorf("failed to initialize stream consumer: %w", err)
+		}
+	}
+
+	return aggregator, nil
+}
+
+// initializeStreamConsumer sets up the aggregator as a stream consumer
+func (a *Aggregator) initializeStreamConsumer() error {
+	streamKey := a.keyBuilder.AggregationStream()
+	groupName := a.config.StreamConsumerGroup
+	consumerName := a.config.StreamConsumerName
+
+	log.WithFields(logrus.Fields{
+		"stream":     streamKey,
+		"group":      groupName,
+		"consumer":   consumerName,
+	}).Info("Initializing Redis stream consumer")
+
+	// Ensure consumer group exists (create with stream if needed)
+	err := a.redisClient.XGroupCreateMkStream(a.ctx, streamKey, groupName, "0").Err()
+	if err != nil {
+		if err.Error() != "BUSYGROUP Consumer Group name already exists" {
+			return fmt.Errorf("failed to create consumer group: %w", err)
+		}
+		log.WithField("group", groupName).Info("Consumer group already exists")
+	}
+
+	// Start stream consumer goroutine
+	go a.consumeStreamMessages()
+
+	// Start consumer health monitoring
+	go a.monitorConsumerHealth()
+
+	return nil
+}
+
+// consumeStreamMessages consumes messages from the aggregation stream
+func (a *Aggregator) consumeStreamMessages() {
+	streamKey := a.keyBuilder.AggregationStream()
+	groupName := a.config.StreamConsumerGroup
+	consumerName := a.config.StreamConsumerName
+
+	log.WithFields(logrus.Fields{
+		"stream":   streamKey,
+		"group":    groupName,
+		"consumer": consumerName,
+	}).Info("Starting stream consumer")
+
+	for {
+		select {
+		case <-a.ctx.Done():
+			return
+		default:
+			// Read messages from stream
+			messages, err := a.redisClient.XReadGroup(a.ctx, &redis.XReadGroupArgs{
+				Group:    groupName,
+				Consumer: consumerName,
+				Streams:  []string{streamKey, ">"},
+				Count:    int64(a.config.StreamBatchSize),
+				Block:    a.config.StreamReadBlock,
+			}).Result()
+
+			if err != nil {
+				if err == redis.Nil {
+					// No messages available, continue
+					continue
+				}
+				if a.ctx.Err() != nil {
+					// Context cancelled, exit
+					return
+				}
+				log.WithError(err).Error("Failed to read from stream")
+				time.Sleep(5 * time.Second) // Back off on error
+				continue
+			}
+
+			// Process received messages
+			for _, stream := range messages {
+				for _, message := range stream.Messages {
+					if err := a.processStreamMessage(message); err != nil {
+						log.WithError(err).WithFields(logrus.Fields{
+							"message_id": message.ID,
+							"stream":     streamKey,
+						}).Error("Failed to process stream message")
+
+						// Move problematic message to dead letter queue
+						a.moveToDeadLetterQueue(streamKey, groupName, message)
+					}
+				}
+			}
+		}
+	}
+}
+
+// processStreamMessage processes a single stream message
+func (a *Aggregator) processStreamMessage(message redis.XMessage) error {
+	// Extract message fields
+	epoch, ok := message.Values["epoch"].(string)
+	if !ok {
+		return fmt.Errorf("missing epoch field in message")
+	}
+
+	validator, ok := message.Values["validator"].(string)
+	if !ok {
+		return fmt.Errorf("missing validator field in message")
+	}
+
+	_, ok = message.Values["batch_key"].(string)
+	if !ok {
+		return fmt.Errorf("missing batch_key field in message")
+	}
+
+	timestamp, ok := message.Values["timestamp"].(string)
+	if !ok {
+		return fmt.Errorf("missing timestamp field in message")
+	}
+
+	msgType, ok := message.Values["type"].(string)
+	if !ok {
+		return fmt.Errorf("missing type field in message")
+	}
+
+	log.WithFields(logrus.Fields{
+		"message_id": message.ID,
+		"epoch":      epoch,
+		"validator":  validator,
+		"type":       msgType,
+		"timestamp":  timestamp,
+	}).Debug("Processing stream message")
+
+	// Only process validator batch messages
+	if msgType != "validator_batch" {
+		log.WithField("type", msgType).Debug("Ignoring non-validator-batch message")
+		return nil
+	}
+
+	// Check if epoch is already aggregated
+	aggregatedKey := a.keyBuilder.BatchAggregated(epoch)
+	exists, err := a.redisClient.Exists(a.ctx, aggregatedKey).Result()
+	if err != nil {
+		return fmt.Errorf("failed to check aggregation status: %w", err)
+	}
+
+	if exists > 0 {
+		log.WithField("epoch", epoch).Debug("Epoch already aggregated, skipping message")
+		return nil
+	}
+
+	// Start or extend aggregation window for this epoch
+	a.startAggregationWindow(epoch)
+
+	return nil
+}
+
+// moveToDeadLetterQueue moves problematic messages to a dead letter queue
+func (a *Aggregator) moveToDeadLetterQueue(streamKey, groupName string, message redis.XMessage) {
+	deadLetterKey := streamKey + ":dlq"
+
+	// Add message to dead letter queue with metadata
+	dlqData := map[string]interface{}{
+		"original_id":    message.ID,
+		"values":         message.Values,
+		"error_time":     time.Now().Unix(),
+		"consumer_group": groupName,
+		"error_reason":   "processing_failed",
+	}
+
+	if err := a.redisClient.XAdd(a.ctx, &redis.XAddArgs{
+		Stream: deadLetterKey,
+		Values: dlqData,
+	}).Err(); err != nil {
+		log.WithError(err).Error("Failed to add message to dead letter queue")
+	}
+
+	// Acknowledge the original message to remove it from the pending list
+	a.redisClient.XAck(a.ctx, streamKey, groupName, message.ID)
+
+	log.WithFields(logrus.Fields{
+		"message_id":  message.ID,
+		"dead_letter": deadLetterKey,
+	}).Warn("Moved problematic message to dead letter queue")
+}
+
+// monitorConsumerHealth monitors the health of the stream consumer
+func (a *Aggregator) monitorConsumerHealth() {
+	ticker := time.NewTicker(120 * time.Second) // Check every 2 minutes
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-a.ctx.Done():
+			return
+		case <-ticker.C:
+			streamKey := a.keyBuilder.AggregationStream()
+			groupName := a.config.StreamConsumerGroup
+			consumerName := a.config.StreamConsumerName
+
+			// Check consumer info
+			consumers, err := a.redisClient.XInfoConsumers(a.ctx, streamKey, groupName).Result()
+			if err != nil {
+				log.WithError(err).Error("Failed to get consumer info")
+				continue
+			}
+
+			// Find our consumer
+			var ourConsumer *redis.XInfoConsumer
+			for _, consumer := range consumers {
+				if consumer.Name == consumerName {
+					ourConsumer = &consumer
+					break
+				}
+			}
+
+			if ourConsumer == nil {
+				log.WithField("consumer", consumerName).Warn("Our consumer not found in group")
+				continue
+			}
+
+			// Log consumer health
+			log.WithFields(logrus.Fields{
+				"consumer": consumerName,
+				"pending":  ourConsumer.Pending,
+				"idle":     ourConsumer.Idle,
+			}).Debug("Consumer health check")
+
+			// Check for long idle time (potential consumer stall)
+			if time.Duration(ourConsumer.Idle) > a.config.StreamIdleTimeout {
+				log.WithFields(logrus.Fields{
+					"consumer": consumerName,
+					"idle":     ourConsumer.Idle,
+					"pending":  ourConsumer.Pending,
+				}).Warn("Consumer appears stalled")
+
+				// Attempt to claim stalled messages
+				a.claimStalledMessages(streamKey, groupName, consumerName)
+			}
+		}
+	}
+}
+
+// claimStalledMessages claims messages that have been pending too long
+func (a *Aggregator) claimStalledMessages(streamKey, groupName, consumerName string) {
+	// Get pending messages for our consumer
+	pending, err := a.redisClient.XPendingExt(a.ctx, &redis.XPendingExtArgs{
+		Stream:   streamKey,
+		Group:    groupName,
+		Start:    "-",
+		End:      "+",
+		Count:    10, // Process in batches
+		Consumer: consumerName,
+	}).Result()
+
+	if err != nil {
+		log.WithError(err).Error("Failed to get pending messages")
+		return
+	}
+
+	// Claim messages that have been idle longer than the timeout
+	minIdleTime := a.config.StreamIdleTimeout
+	claimedCount := 0
+
+	for _, pendingMsg := range pending {
+		if pendingMsg.Idle >= minIdleTime {
+			// Claim the message for ourselves
+			messages, err := a.redisClient.XClaim(a.ctx, &redis.XClaimArgs{
+				Stream:   streamKey,
+				Group:    groupName,
+				Consumer: consumerName,
+				MinIdle:  minIdleTime,
+				Messages: []string{pendingMsg.ID},
+			}).Result()
+
+			if err != nil {
+				log.WithError(err).WithField("message_id", pendingMsg.ID).Error("Failed to claim message")
+				continue
+			}
+
+			if len(messages) > 0 {
+				claimedCount++
+				log.WithField("message_id", messages[0].ID).Info("Claimed stalled message")
+
+				// Process the claimed message
+				if err := a.processStreamMessage(messages[0]); err != nil {
+					log.WithError(err).WithField("message_id", messages[0].ID).Error("Failed to process claimed message")
+				}
+			}
+		}
+	}
+
+	if claimedCount > 0 {
+		log.WithField("claimed_count", claimedCount).Info("Processed stalled messages")
+	}
 }
 
 func (a *Aggregator) processAggregationQueue() {
@@ -144,24 +422,30 @@ func (a *Aggregator) processAggregationQueue() {
 				continue
 			}
 
-			// SECOND: Check for Level 2 aggregation (network-wide) - namespaced
-			result, err = a.redisClient.BRPop(a.ctx, time.Second, level2Queue).Result()
-			if err != nil {
-				if err != redis.Nil {
-					log.WithError(err).Debug("No epochs in aggregation queues")
+			// SECOND: Check for Level 2 aggregation (network-wide) - ONLY if stream notifications disabled
+			if !a.config.EnableStreamNotifications {
+				result, err = a.redisClient.BRPop(a.ctx, time.Second, level2Queue).Result()
+				if err != nil {
+					if err != redis.Nil {
+						log.WithError(err).Debug("No epochs in aggregation queues")
+					}
+					continue
 				}
-				continue
+
+				if len(result) < 2 {
+					continue
+				}
+
+				epochID := result[1]
+				log.WithField("epoch", epochID).Info("🌐 LEVEL 2: Starting aggregation window for network-wide validator batches (queue-based)")
+
+				// Start or extend aggregation window for this epoch
+				a.startAggregationWindow(epochID)
+			} else {
+				// Stream notifications enabled - aggregation is triggered by stream messages
+				// Just sleep briefly to prevent busy-waiting
+				time.Sleep(100 * time.Millisecond)
 			}
-
-			if len(result) < 2 {
-				continue
-			}
-
-			epochID := result[1]
-			log.WithField("epoch", epochID).Info("🌐 LEVEL 2: Starting aggregation window for network-wide validator batches")
-
-			// Start or extend aggregation window for this epoch
-			a.startAggregationWindow(epochID)
 		}
 	}
 }
@@ -433,7 +717,8 @@ func (a *Aggregator) aggregateEpoch(epochIDStr string) {
 	// Get our own finalized batch from the unified sequencer's finalizer
 	// Use namespaced key
 	ourBatchKey := a.keyBuilder.FinalizedBatch(epochIDStr)
-	ourBatchData, _ := a.redisClient.Get(a.ctx, ourBatchKey).Result()
+	var ourBatchData string
+	ourBatchData, _ = a.redisClient.Get(a.ctx, ourBatchKey).Result()
 
 	if ourBatchData == "" {
 		log.WithField("epoch", epochIDStr).Warn("No local finalized batch found for epoch")
@@ -449,12 +734,24 @@ func (a *Aggregator) aggregateEpoch(epochIDStr string) {
 		}
 	}
 
-	// Get all incoming batches from OTHER validators for this epoch - namespaced
-	incomingPattern := fmt.Sprintf("%s:%s:incoming:batch:%s:*", a.keyBuilder.ProtocolState, a.keyBuilder.DataMarket, epochIDStr)
-	incomingKeys, err := a.scanKeys(incomingPattern)
+	// Get all validators for this epoch using deterministic approach
+	epochValidatorsKey := a.keyBuilder.EpochValidators(epochIDStr)
+	validatorIDs, err := a.redisClient.SMembers(a.ctx, epochValidatorsKey).Result()
 	if err != nil {
-		log.WithError(err).Error("Failed to scan incoming batch keys")
-		return
+		log.WithError(err).WithField("epoch", epochIDStr).Error("Failed to get epoch validators")
+		// Continue with local batch only if validator set is not available
+		validatorIDs = []string{}
+	}
+
+	// Construct incoming batch keys deterministically
+	incomingKeys := make([]string, 0)
+	for _, validatorID := range validatorIDs {
+		// Skip our own validator ID - we already have our local batch
+		if validatorID == a.config.SequencerID {
+			continue
+		}
+		batchKey := a.keyBuilder.IncomingBatch(epochIDStr, validatorID)
+		incomingKeys = append(incomingKeys, batchKey)
 	}
 
 	totalValidators := len(incomingKeys)
@@ -755,23 +1052,29 @@ func (a *Aggregator) monitorFinalizedBatches() {
 				log.Debug("Reset queued epochs tracking")
 			}
 
-			// Check for new finalized batches - namespaced
-			pattern := fmt.Sprintf("%s:%s:finalized:*", a.keyBuilder.ProtocolState, a.keyBuilder.DataMarket)
-			keys, err := a.scanKeys(pattern)
+			// Check for new finalized batches using active epochs tracking
+			// Get active epochs from the ActiveEpochs set
+			activeEpochsKey := a.keyBuilder.ActiveEpochs()
+			activeEpochs, err := a.redisClient.SMembers(a.ctx, activeEpochsKey).Result()
 			if err != nil {
-				log.WithError(err).Debug("Failed to scan finalized batches")
+				log.WithError(err).Debug("Failed to get active epochs")
 				continue
 			}
 
-			newBatchesFound := 0
-			for _, key := range keys {
-				// Extract epoch ID from namespaced key
-				parts := strings.Split(key, ":")
-				if len(parts) < 4 {
-					continue
+			// Construct finalized batch keys for active epochs
+			keys := make([]string, 0, len(activeEpochs))
+			for _, epochID := range activeEpochs {
+				finalizedKey := a.keyBuilder.FinalizedBatch(epochID)
+				// Check if the finalized batch exists
+				exists, err := a.redisClient.Exists(a.ctx, finalizedKey).Result()
+				if err == nil && exists > 0 {
+					keys = append(keys, finalizedKey)
 				}
-				epochID := parts[len(parts)-1]
+			}
 
+			newBatchesFound := 0
+			// Process each active epoch directly
+			for _, epochID := range activeEpochs {
 				// Skip if already queued this session
 				if queuedEpochs[epochID] {
 					continue
@@ -790,6 +1093,13 @@ func (a *Aggregator) monitorFinalizedBatches() {
 					continue
 				}
 
+				// Check if finalized batch exists for this epoch
+				finalizedKey := a.keyBuilder.FinalizedBatch(epochID)
+				exists, err = a.redisClient.Exists(a.ctx, finalizedKey).Result()
+				if err != nil || exists == 0 {
+					continue // No finalized batch yet
+				}
+
 				// Add to aggregation queue - namespaced
 				aggQueue := a.keyBuilder.AggregationQueue()
 				if err := a.redisClient.LPush(a.ctx, aggQueue, epochID).Err(); err != nil {
@@ -801,12 +1111,13 @@ func (a *Aggregator) monitorFinalizedBatches() {
 				}
 			}
 
-			if len(keys) > 0 {
+			if len(activeEpochs) > 0 {
 				log.WithFields(logrus.Fields{
+					"active_epochs": len(activeEpochs),
 					"finalized_batches": len(keys),
 					"new_queued": newBatchesFound,
 					"already_tracked": len(queuedEpochs) - newBatchesFound,
-				}).Debug("Monitor scan completed")
+				}).Debug("Monitor check completed")
 			}
 		}
 	}
@@ -821,16 +1132,39 @@ func (a *Aggregator) reportMetrics() {
 		case <-a.ctx.Done():
 			return
 		case <-ticker.C:
-			// Count aggregated batches - namespaced
-			pattern := fmt.Sprintf("%s:%s:batch:aggregated:*", a.keyBuilder.ProtocolState, a.keyBuilder.DataMarket)
-			keys, _ := a.scanKeys(pattern)
+			// Count aggregated batches using ActiveEpochs set
+			activeEpochsKey := a.keyBuilder.ActiveEpochs()
+			activeEpochs, _ := a.redisClient.SMembers(a.ctx, activeEpochsKey).Result()
 
-			// Count active validators
-			validatorPattern := "validator:active:*"
-			validators, _ := a.scanKeys(validatorPattern)
+			aggregatedCount := 0
+			for _, epochID := range activeEpochs {
+				aggregatedKey := a.keyBuilder.BatchAggregated(epochID)
+				exists, err := a.redisClient.Exists(a.ctx, aggregatedKey).Result()
+				if err == nil && exists > 0 {
+					aggregatedCount++
+				}
+			}
+
+			// Count active validators (non-namespaced keys for now)
+			// This could be enhanced to use a namespaced active validators set in the future
+			var validators []string
+			// Use a simple pattern to get validator status keys
+			// Note: This is a minor SCAN operation for monitoring only, not critical path
+			cursor := uint64(0)
+			for {
+				scanKeys, nextCursor, err := a.redisClient.Scan(a.ctx, cursor, "validator:active:*", 100).Result()
+				if err != nil {
+					break
+				}
+				validators = append(validators, scanKeys...)
+				cursor = nextCursor
+				if cursor == 0 {
+					break
+				}
+			}
 
 			log.WithFields(logrus.Fields{
-				"aggregated_batches": len(keys),
+				"aggregated_batches": aggregatedCount,
 				"active_validators":  len(validators),
 			}).Info("Aggregator metrics")
 		}
@@ -840,7 +1174,7 @@ func (a *Aggregator) reportMetrics() {
 func (a *Aggregator) Start() error {
 	log.Info("Starting Aggregator")
 
-	// Start all processors
+	// Start queue-based processing
 	go a.processAggregationQueue()
 	go a.monitorFinalizedBatches()
 	go a.reportMetrics()

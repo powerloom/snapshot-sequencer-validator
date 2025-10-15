@@ -97,6 +97,14 @@ type Settings struct {
 	// Aggregation Configuration
 	AggregationWindowDuration time.Duration // Time to wait for validator batches before aggregating (Level 2)
 
+	// Stream Configuration for Deterministic Aggregation
+	StreamConsumerGroup       string        // Consumer group name for aggregator
+	StreamConsumerName        string        // Consumer instance name
+	EnableStreamNotifications bool          // Enable stream-based notifications (feature flag)
+	StreamReadBlock           time.Duration // Block timeout for stream reads
+	StreamBatchSize           int           // Batch size for stream reads
+	StreamIdleTimeout         time.Duration // Idle timeout for stream consumers
+
 	// Slot Validation Configuration
 	EnableSlotValidation bool // Validate snapshotter addresses against protocol state cache (requires protocol-state-cacher)
 
@@ -202,6 +210,14 @@ func LoadConfig() error {
 
 		// Aggregation Configuration
 		AggregationWindowDuration: time.Duration(getEnvAsInt("AGGREGATION_WINDOW_SECONDS", 30)) * time.Second,
+
+		// Stream Configuration for Deterministic Aggregation
+		StreamConsumerGroup:       getEnv("STREAM_CONSUMER_GROUP", "aggregator-group"),
+		StreamConsumerName:        getEnv("STREAM_CONSUMER_NAME", "aggregator-instance"),
+		EnableStreamNotifications: getBoolEnv("ENABLE_STREAM_NOTIFICATIONS", true),
+		StreamReadBlock:           time.Duration(getEnvAsInt("STREAM_READ_BLOCK_MS", 2000)) * time.Millisecond,
+		StreamBatchSize:           getEnvAsInt("STREAM_BATCH_SIZE", 10),
+		StreamIdleTimeout:         time.Duration(getEnvAsInt("STREAM_IDLE_TIMEOUT_MS", 30000)) * time.Millisecond,
 
 		// Slot Validation Configuration
 		EnableSlotValidation: getBoolEnv("ENABLE_SLOT_VALIDATION", false),
@@ -443,6 +459,33 @@ func validateConfig() error {
 		if SettingsObj.RedisHost == "" {
 			return fmt.Errorf("redis configuration required when dequeuer is enabled")
 		}
+	}
+
+	// Validate stream configuration if enabled
+	if SettingsObj.EnableStreamNotifications {
+		if SettingsObj.StreamConsumerGroup == "" {
+			return fmt.Errorf("STREAM_CONSUMER_GROUP required when stream notifications are enabled")
+		}
+		if SettingsObj.StreamConsumerName == "" {
+			return fmt.Errorf("STREAM_CONSUMER_NAME required when stream notifications are enabled")
+		}
+		if SettingsObj.StreamBatchSize <= 0 {
+			return fmt.Errorf("STREAM_BATCH_SIZE must be greater than 0")
+		}
+		if SettingsObj.StreamReadBlock <= 0 {
+			return fmt.Errorf("STREAM_READ_BLOCK_MS must be greater than 0")
+		}
+		if SettingsObj.StreamIdleTimeout <= 0 {
+			return fmt.Errorf("STREAM_IDLE_TIMEOUT_MS must be greater than 0")
+		}
+
+		log.WithFields(log.Fields{
+			"consumer_group": SettingsObj.StreamConsumerGroup,
+			"consumer_name":  SettingsObj.StreamConsumerName,
+			"batch_size":     SettingsObj.StreamBatchSize,
+			"read_block":     SettingsObj.StreamReadBlock,
+			"idle_timeout":   SettingsObj.StreamIdleTimeout,
+		}).Info("Stream notifications configured")
 	}
 
 	return nil

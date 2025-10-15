@@ -61,6 +61,12 @@ show_usage() {
     echo "  redis-logs    - Redis logs"
     echo "  ipfs-logs     - IPFS node logs"
     echo ""
+    echo "Stream Debugging:"
+    echo "  stream-info   - Show Redis streams status"
+    echo "  stream-groups - Show consumer groups"
+    echo "  stream-dlq    - Show dead letter queue"
+    echo "  stream-reset  - Reset stream (dangerous!)"
+    echo ""
     echo "Development:"
     echo "  build         - Build all binaries"
     echo "  dev           - Start unified sequencer (single container)"
@@ -325,6 +331,242 @@ clean_all() {
     fi
 }
 
+# Stream debugging functions
+
+# Show Redis streams information
+show_stream_info() {
+    print_color "$BLUE" "📊 Redis Streams Status"
+    echo ""
+
+    # Find Redis container
+    REDIS_CONTAINER=$(docker ps --format "{{.Names}}" | grep -i redis | head -1)
+
+    if [ -z "$REDIS_CONTAINER" ]; then
+        print_color "$RED" "Error: Redis container not found"
+        print_color "$YELLOW" "Start services first with: ./dsv.sh start"
+        return 1
+    fi
+
+    # Get Redis port
+    REDIS_PORT=$(docker exec "$REDIS_CONTAINER" sh -c 'echo $REDIS_PORT' 2>/dev/null)
+    if [ -z "$REDIS_PORT" ]; then
+        REDIS_PORT=6379
+    fi
+
+    # Find all aggregation streams (namespaced)
+    print_color "$CYAN" "Scanning for aggregation streams..."
+    STREAMS=$(docker exec $REDIS_CONTAINER redis-cli -p $REDIS_PORT --scan --pattern '*:*:stream:aggregation:notifications' 2>/dev/null)
+
+    if [ -z "$STREAMS" ]; then
+        print_color "$YELLOW" "No aggregation streams found"
+        echo ""
+        print_color "$CYAN" "Stream notifications may be disabled. Check ENABLE_STREAM_NOTIFICATIONS in .env"
+        return
+    fi
+
+    for stream in $STREAMS; do
+        print_color "$GREEN" "Stream: $stream"
+
+        # Get stream info
+        INFO=$(docker exec $REDIS_CONTAINER redis-cli -p $REDIS_PORT XINFO STREAM "$stream" 2>/dev/null)
+        if [ $? -eq 0 ]; then
+            echo "$INFO" | while IFS= read -r line; do
+                if [[ $line =~ length ]]; then
+                    print_color "$CYAN" "  ├─ Entries: $(echo $line | cut -d' ' -f2)"
+                elif [[ $line =~ last-generated-id ]]; then
+                    print_color "$CYAN" "  ├─ Last ID: $(echo $line | cut -d' ' -f2)"
+                elif [[ $line =~ groups ]]; then
+                    print_color "$CYAN" "  └─ Groups: $(echo $line | cut -d' ' -f2)"
+                fi
+            done
+        else
+            print_color "$RED" "  └─ Error: Failed to get stream info"
+        fi
+        echo ""
+    done
+}
+
+# Show consumer groups information
+show_stream_groups() {
+    print_color "$BLUE" "👥 Stream Consumer Groups"
+    echo ""
+
+    # Find Redis container
+    REDIS_CONTAINER=$(docker ps --format "{{.Names}}" | grep -i redis | head -1)
+
+    if [ -z "$REDIS_CONTAINER" ]; then
+        print_color "$RED" "Error: Redis container not found"
+        return 1
+    fi
+
+    # Get Redis port
+    REDIS_PORT=$(docker exec "$REDIS_CONTAINER" sh -c 'echo $REDIS_PORT' 2>/dev/null)
+    if [ -z "$REDIS_PORT" ]; then
+        REDIS_PORT=6379
+    fi
+
+    # Find all aggregation streams
+    STREAMS=$(docker exec $REDIS_CONTAINER redis-cli -p $REDIS_PORT --scan --pattern '*:*:stream:aggregation:notifications' 2>/dev/null)
+
+    if [ -z "$STREAMS" ]; then
+        print_color "$YELLOW" "No aggregation streams found"
+        return
+    fi
+
+    for stream in $STREAMS; do
+        print_color "$GREEN" "Stream: $stream"
+
+        # Get consumer groups
+        GROUPS=$(docker exec $REDIS_CONTAINER redis-cli -p $REDIS_PORT XINFO GROUPS "$stream" 2>/dev/null)
+        if [ $? -eq 0 ]; then
+            echo "$GROUPS" | while IFS= read -r line; do
+                if [[ $line =~ name ]]; then
+                    GROUP_NAME=$(echo $line | cut -d' ' -f2)
+                    print_color "$CYAN" "  ├─ Group: $GROUP_NAME"
+                elif [[ $line =~ consumers ]]; then
+                    print_color "$CYAN" "  │  ├─ Consumers: $(echo $line | cut -d' ' -f2)"
+                elif [[ $line =~ pending ]]; then
+                    print_color "$CYAN" "  │  └─ Pending: $(echo $line | cut -d' ' -f2)"
+                elif [[ $line =~ last-delivered-id ]]; then
+                    print_color "$CYAN" "  │     └─ Last Delivered: $(echo $line | cut -d' ' -f2)"
+                fi
+            done
+
+            # Get consumers for each group
+            GROUPS_LIST=$(docker exec $REDIS_CONTAINER redis-cli -p $REDIS_PORT XINFO GROUPS "$stream" 2>/dev/null | grep "name" | cut -d' ' -f2)
+            for group in $GROUPS_LIST; do
+                print_color "$YELLOW" "  └─ Consumers in group '$group':"
+
+                CONSUMERS=$(docker exec $REDIS_CONTAINER redis-cli -p $REDIS_PORT XINFO CONSUMERS "$stream" "$group" 2>/dev/null)
+                if [ $? -eq 0 ]; then
+                    echo "$CONSUMERS" | while IFS= read -r line; do
+                        if [[ $line =~ name ]]; then
+                            CONSUMER_NAME=$(echo $line | cut -d' ' -f2)
+                            print_color "$CYAN" "     ├─ $CONSUMER_NAME"
+                        elif [[ $line =~ pending ]]; then
+                            print_color "$CYAN" "     │  ├─ Pending: $(echo $line | cut -d' ' -f2)"
+                        elif [[ $line =~ idle ]]; then
+                            IDLE_MS=$(echo $line | cut -d' ' -f2)
+                            IDLE_SEC=$((IDLE_MS / 1000))
+                            print_color "$CYAN" "     │  └─ Idle: ${IDLE_SEC}s"
+                        fi
+                    done
+                else
+                    print_color "$RED" "     └─ No consumers found"
+                fi
+            done
+        else
+            print_color "$RED" "  └─ No consumer groups found"
+        fi
+        echo ""
+    done
+}
+
+# Show dead letter queue
+show_stream_dlq() {
+    print_color "$BLUE" "💀 Stream Dead Letter Queue"
+    echo ""
+
+    # Find Redis container
+    REDIS_CONTAINER=$(docker ps --format "{{.Names}}" | grep -i redis | head -1)
+
+    if [ -z "$REDIS_CONTAINER" ]; then
+        print_color "$RED" "Error: Redis container not found"
+        return 1
+    fi
+
+    # Get Redis port
+    REDIS_PORT=$(docker exec "$REDIS_CONTAINER" sh -c 'echo $REDIS_PORT' 2>/dev/null)
+    if [ -z "$REDIS_PORT" ]; then
+        REDIS_PORT=6379
+    fi
+
+    # Find all dead letter queues (stream names ending with :dlq)
+    DLQ_STREAMS=$(docker exec $REDIS_CONTAINER redis-cli -p $REDIS_PORT --scan --pattern '*:*:stream:aggregation:notifications:dlq' 2>/dev/null)
+
+    if [ -z "$DLQ_STREAMS" ]; then
+        print_color "$GREEN" "✅ No messages in dead letter queues"
+        return
+    fi
+
+    for dlq in $DLQ_STREAMS; do
+        print_color "$YELLOW" "Dead Letter Queue: $dlq"
+
+        # Get DLQ info
+        INFO=$(docker exec $REDIS_CONTAINER redis-cli -p $REDIS_PORT XINFO STREAM "$dlq" 2>/dev/null)
+        if [ $? -eq 0 ]; then
+            echo "$INFO" | while IFS= read -r line; do
+                if [[ $line =~ length ]]; then
+                    COUNT=$(echo $line | cut -d' ' -f2)
+                    print_color "$RED" "  ├─ Failed Messages: $COUNT"
+                fi
+            done
+
+            # Show last 5 messages
+            print_color "$CYAN" "  └─ Recent failed messages:"
+            docker exec $REDIS_CONTAINER redis-cli -p $REDIS_PORT XREVRANGE "$dlq" + - COUNT 5 2>/dev/null | while IFS= read -r line; do
+                if [[ $line =~ ^[0-9] ]]; then
+                    MESSAGE_ID=$(echo $line | cut -d' ' -f1)
+                    print_color "$RED" "     ├─ Message ID: $MESSAGE_ID"
+                elif [[ $line =~ error_reason ]]; then
+                    REASON=$(echo $line | cut -d' ' -f2-)
+                    print_color "$RED" "     │  └─ Error: $REASON"
+                elif [[ $line =~ error_time ]]; then
+                    ERROR_TIME=$(echo $line | cut -d' ' -f2)
+                    ERROR_DATE=$(date -d "@$ERROR_TIME" 2>/dev/null || echo "Invalid time")
+                    print_color "$RED" "     │     └─ Time: $ERROR_DATE"
+                fi
+            done
+        fi
+        echo ""
+    done
+}
+
+# Reset streams (dangerous operation)
+reset_streams() {
+    print_color "$RED" "⚠️  DANGER: This will delete all aggregation streams and consumer groups!"
+    print_color "$YELLOW" "This will interrupt ongoing aggregation and may cause data loss."
+    echo ""
+    read -p "Are you absolutely sure? Type 'RESET' to continue: " confirmation
+
+    if [ "$confirmation" != "RESET" ]; then
+        print_color "$YELLOW" "Cancelled"
+        return
+    fi
+
+    # Find Redis container
+    REDIS_CONTAINER=$(docker ps --format "{{.Names}}" | grep -i redis | head -1)
+
+    if [ -z "$REDIS_CONTAINER" ]; then
+        print_color "$RED" "Error: Redis container not found"
+        return 1
+    fi
+
+    # Get Redis port
+    REDIS_PORT=$(docker exec "$REDIS_CONTAINER" sh -c 'echo $REDIS_PORT' 2>/dev/null)
+    if [ -z "$REDIS_PORT" ]; then
+        REDIS_PORT=6379
+    fi
+
+    print_color "$BLUE" "Resetting Redis streams..."
+
+    # Delete all aggregation streams
+    STREAMS=$(docker exec $REDIS_CONTAINER redis-cli -p $REDIS_PORT --scan --pattern '*:*:stream:aggregation:notifications*' 2>/dev/null)
+    DELETED_COUNT=0
+
+    for stream in $STREAMS; do
+        if docker exec $REDIS_CONTAINER redis-cli -p $REDIS_PORT DEL "$stream" >/dev/null 2>&1; then
+            DELETED_COUNT=$((DELETED_COUNT + 1))
+            print_color "$GREEN" "  ✓ Deleted: $stream"
+        else
+            print_color "$RED" "  ✗ Failed to delete: $stream"
+        fi
+    done
+
+    print_color "$GREEN" "✅ Stream reset complete. Deleted $DELETED_COUNT streams."
+    print_color "$YELLOW" "Note: Services will automatically recreate streams as needed."
+}
+
 # Build binaries
 build_binaries() {
     print_color "$BLUE" "Building binaries..."
@@ -400,6 +642,18 @@ case "${1:-}" in
         ;;
     clean)
         clean_all
+        ;;
+    stream-info)
+        show_stream_info
+        ;;
+    stream-groups)
+        show_stream_groups
+        ;;
+    stream-dlq)
+        show_stream_dlq
+        ;;
+    stream-reset)
+        reset_streams
         ;;
     build)
         build_binaries

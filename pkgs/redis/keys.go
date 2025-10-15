@@ -106,6 +106,28 @@ func (kb *KeyBuilder) BatchAggregated(epochID string) string {
 	return fmt.Sprintf("%s:%s:batch:aggregated:%s", kb.ProtocolState, kb.DataMarket, epochID)
 }
 
+// Stream-based Aggregation Keys
+
+// AggregationStream returns the key for aggregation notification stream
+func (kb *KeyBuilder) AggregationStream() string {
+	return fmt.Sprintf("%s:%s:stream:aggregation:notifications", kb.ProtocolState, kb.DataMarket)
+}
+
+// AggregatorConsumerGroup returns the key for aggregator consumer group
+func (kb *KeyBuilder) AggregatorConsumerGroup() string {
+	return fmt.Sprintf("%s:%s:consumers:aggregator", kb.ProtocolState, kb.DataMarket)
+}
+
+// EpochValidators returns the key for validator set tracking per epoch
+func (kb *KeyBuilder) EpochValidators(epochID string) string {
+	return fmt.Sprintf("%s:%s:epoch:%s:validators", kb.ProtocolState, kb.DataMarket, epochID)
+}
+
+// ActiveEpochs returns the key for active epochs tracking
+func (kb *KeyBuilder) ActiveEpochs() string {
+	return fmt.Sprintf("%s:%s:epochs:active", kb.ProtocolState, kb.DataMarket)
+}
+
 // Metrics Keys (namespaced per protocol:market)
 
 // MetricsEpochsTimeline returns the namespaced key for epochs timeline

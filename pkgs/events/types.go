@@ -43,6 +43,10 @@ const (
 	// Queue events
 	EventQueueDepthChanged EventType = "queue_depth_changed"
 
+	// Stream events
+	EventStreamHealth EventType = "stream_health"
+	EventStreamCleanup EventType = "stream_cleanup"
+
 	// Worker events
 	EventWorkerStatusChanged EventType = "worker_status_changed"
 )
@@ -163,6 +167,18 @@ type QueueEventPayload struct {
 	Delta         int    `json:"delta"`
 	Threshold     int    `json:"threshold,omitempty"`
 	AlertLevel    string `json:"alert_level,omitempty"` // "normal", "warning", "critical"
+}
+
+// StreamEventPayload contains data for stream health and cleanup events
+type StreamEventPayload struct {
+	StreamKey        string `json:"stream_key"`
+	StreamEntries    int64  `json:"stream_entries,omitempty"`
+	PendingMessages  int64  `json:"pending_messages,omitempty"`
+	ActiveConsumers  int64  `json:"active_consumers,omitempty"`
+	LastID           string `json:"last_id,omitempty"`
+	TrimmedEntries   int64  `json:"trimmed_entries,omitempty"`
+	RemainingEntries int64  `json:"remaining_entries,omitempty"`
+	ConsumerGroup    string `json:"consumer_group,omitempty"`
 }
 
 // WorkerEventPayload contains data for worker status changes
