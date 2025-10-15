@@ -302,8 +302,8 @@ services:
     volumes:
       - ${IPFS_DATA_DIR:-/data/ipfs}:/data/ipfs
     ports:
-      - "${IPFS_API_PORT:-5001}:5001"    # IPFS API port (required for DSV)
-      - "${IPFS_SWARM_PORT:-4001}:4001"  # IPFS Swarm port for P2P communication
+      - "127.0.0.1:${IPFS_API_PORT:-5001}:5001"    # IPFS API port (required for DSV)
+      - "127.0.0.1:${IPFS_SWARM_PORT:-4001}:4001"  # IPFS Swarm port for P2P communication
     environment:
       - IPFS_PROFILE=server
       - IPFS_PATH=/data/ipfs
