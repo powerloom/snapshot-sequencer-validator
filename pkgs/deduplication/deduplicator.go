@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	lru "github.com/hashicorp/golang-lru/v2"
 	log "github.com/sirupsen/logrus"
 )

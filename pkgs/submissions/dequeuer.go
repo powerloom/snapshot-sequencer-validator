@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	customcrypto "github.com/powerloom/snapshot-sequencer-validator/pkgs/crypto"
 	log "github.com/sirupsen/logrus"
 )
@@ -128,7 +128,7 @@ func (d *Dequeuer) ProcessSubmission(submission *SnapshotSubmission, submissionI
 	pipe := d.redisClient.Pipeline()
 
 	// 1. Add to validations timeline (sorted set, no TTL - pruned daily)
-	pipe.ZAdd(context.Background(), "metrics:validations:timeline", &redis.Z{
+	pipe.ZAdd(context.Background(), "metrics:validations:timeline", redis.Z{
 		Score:  float64(timestamp),
 		Member: submissionID,
 	})
@@ -144,7 +144,7 @@ func (d *Dequeuer) ProcessSubmission(submission *SnapshotSubmission, submissionI
 		"data_market":     submission.DataMarket,
 	}
 	jsonData, _ := json.Marshal(validationData)
-	pipe.SetEX(context.Background(), fmt.Sprintf("metrics:validation:%s", submissionID), string(jsonData), time.Hour)
+	pipe.SetEx(context.Background(), fmt.Sprintf("metrics:validation:%s", submissionID), string(jsonData), time.Hour)
 
 	// 3. Add to epoch validated set with TTL
 	epochValidatedKey := fmt.Sprintf("metrics:epoch:%d:validated", submission.Request.EpochId)

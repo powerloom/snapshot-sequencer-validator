@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	redislib "github.com/powerloom/snapshot-sequencer-validator/pkgs/redis"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/viper"

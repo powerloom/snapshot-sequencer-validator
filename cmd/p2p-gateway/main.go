@@ -17,7 +17,7 @@ import (
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/metrics"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/p2p"
 	rediskeys "github.com/powerloom/snapshot-sequencer-validator/pkgs/redis"
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/sirupsen/logrus"
 )
 
@@ -741,7 +741,7 @@ func (g *P2PGateway) handleIncomingBatches() {
 			// Track validator batch activity for monitoring
 			validatorBatchesKey := fmt.Sprintf("metrics:validator:%s:batches", validatorID)
 			timestamp := time.Now().Unix()
-			g.redisClient.ZAdd(g.ctx, validatorBatchesKey, &redis.Z{
+			g.redisClient.ZAdd(g.ctx, validatorBatchesKey, redis.Z{
 				Score:  float64(timestamp),
 				Member: epochID,
 			})

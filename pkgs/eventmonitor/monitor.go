@@ -12,7 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	rpchelper "github.com/powerloom/go-rpc-helper"
 	rediskeys "github.com/powerloom/snapshot-sequencer-validator/pkgs/redis"
 	log "github.com/sirupsen/logrus"
@@ -467,7 +467,7 @@ func (wm *WindowManager) StartSubmissionWindow(ctx context.Context, dataMarket s
 	pipe := wm.redisClient.Pipeline()
 
 	// 1. Add to epochs timeline
-	pipe.ZAdd(context.Background(), kb.MetricsEpochsTimeline(), &redis.Z{
+	pipe.ZAdd(context.Background(), kb.MetricsEpochsTimeline(), redis.Z{
 		Score:  float64(timestamp),
 		Member: fmt.Sprintf("open:%s", epochID.String()),
 	})
@@ -534,7 +534,7 @@ func (wm *WindowManager) closeWindow(dataMarket string, epochID *big.Int) {
 	pipe := wm.redisClient.Pipeline()
 
 	// 1. Add to epochs timeline
-	pipe.ZAdd(context.Background(), kb.MetricsEpochsTimeline(), &redis.Z{
+	pipe.ZAdd(context.Background(), kb.MetricsEpochsTimeline(), redis.Z{
 		Score:  float64(timestamp),
 		Member: fmt.Sprintf("close:%s", epochID.String()),
 	})

@@ -13,7 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
@@ -837,7 +837,7 @@ func (s *UnifiedSequencer) queueSubmissionFromP2P(data []byte, topic string, pee
 				pipe := s.redisClient.Pipeline()
 
 			// 1. Add to timeline (sorted set, no TTL - pruned daily)
-			pipe.ZAdd(s.ctx, "metrics:submissions:timeline", &redis.Z{
+			pipe.ZAdd(s.ctx, "metrics:submissions:timeline", redis.Z{
 				Score:  float64(timestamp),
 				Member: submissionID,
 			})
@@ -851,7 +851,7 @@ func (s *UnifiedSequencer) queueSubmissionFromP2P(data []byte, topic string, pee
 				"data_market": s.config.DataMarketAddresses[0],
 			}
 			jsonData, _ := json.Marshal(submissionData)
-			pipe.SetEX(s.ctx, fmt.Sprintf("metrics:submission:%s", submissionID), string(jsonData), time.Hour)
+			pipe.SetEx(s.ctx, fmt.Sprintf("metrics:submission:%s", submissionID), string(jsonData), time.Hour)
 
 			// 3. Update hourly counter
 			pipe.HIncrBy(s.ctx, fmt.Sprintf("metrics:hourly:%s:submissions", hour), "total", 1)
@@ -1219,10 +1219,10 @@ func (s *UnifiedSequencer) processBatchPart(epochID uint64, batchID int, totalBa
 		"timestamp":      timestamp,
 	}
 	jsonData, _ := json.Marshal(partMetricsData)
-	pipe.SetEX(ctx, partMetricsKey, string(jsonData), time.Hour)
+	pipe.SetEx(ctx, partMetricsKey, string(jsonData), time.Hour)
 
 	// 3. Add to parts timeline
-	pipe.ZAdd(ctx, "metrics:parts:timeline", &redis.Z{
+	pipe.ZAdd(ctx, "metrics:parts:timeline", redis.Z{
 		Score:  float64(timestamp),
 		Member: partID,
 	})

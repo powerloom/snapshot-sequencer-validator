@@ -18,7 +18,7 @@ import (
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/ipfs"
 	rediskeys "github.com/powerloom/snapshot-sequencer-validator/pkgs/redis"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/submissions"
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/sirupsen/logrus"
 )
 
@@ -526,7 +526,7 @@ func (a *Aggregator) aggregateWorkerParts(epochIDStr string, totalParts int) {
 	pipe := a.redisClient.Pipeline()
 
 	// 1. Add to batches timeline
-	pipe.ZAdd(a.ctx, a.keyBuilder.MetricsBatchesTimeline(), &redis.Z{
+	pipe.ZAdd(a.ctx, a.keyBuilder.MetricsBatchesTimeline(), redis.Z{
 		Score:  float64(timestamp),
 		Member: fmt.Sprintf("local:%d", epochID),
 	})
@@ -544,11 +544,11 @@ func (a *Aggregator) aggregateWorkerParts(epochIDStr string, totalParts int) {
 		"timestamp":     timestamp,
 	}
 	jsonData, _ := json.Marshal(batchMetricsData)
-	pipe.SetEX(a.ctx, batchMetricsKey, string(jsonData), 24*time.Hour)
+	pipe.SetEx(a.ctx, batchMetricsKey, string(jsonData), 24*time.Hour)
 
 	// 3. Add to validator batches timeline
 	validatorBatchesKey := a.keyBuilder.MetricsValidatorBatches(a.config.SequencerID)
-	pipe.ZAdd(a.ctx, validatorBatchesKey, &redis.Z{
+	pipe.ZAdd(a.ctx, validatorBatchesKey, redis.Z{
 		Score:  float64(timestamp),
 		Member: epochID,
 	})
@@ -764,7 +764,7 @@ func (a *Aggregator) aggregateEpoch(epochIDStr string) {
 	pipe := a.redisClient.Pipeline()
 
 	// 1. Add to batches timeline
-	pipe.ZAdd(a.ctx, a.keyBuilder.MetricsBatchesTimeline(), &redis.Z{
+	pipe.ZAdd(a.ctx, a.keyBuilder.MetricsBatchesTimeline(), redis.Z{
 		Score:  float64(timestamp),
 		Member: fmt.Sprintf("aggregated:%s", epochIDStr),
 	})
@@ -782,7 +782,7 @@ func (a *Aggregator) aggregateEpoch(epochIDStr string) {
 		"merkle_root":      aggregatedBatch.MerkleRoot,
 	}
 	jsonData, _ := json.Marshal(batchMetricsData)
-	pipe.SetEX(a.ctx, batchMetricsKey, string(jsonData), 24*time.Hour)
+	pipe.SetEx(a.ctx, batchMetricsKey, string(jsonData), 24*time.Hour)
 
 	// 3. Store validator list with TTL (include local + remote validators)
 	validatorsKey := a.keyBuilder.MetricsBatchValidators(epochIDStr)
@@ -790,7 +790,7 @@ func (a *Aggregator) aggregateEpoch(epochIDStr string) {
 	// Add local validator ID
 	allValidators = append(allValidators, a.config.SequencerID)
 	validatorList, _ := json.Marshal(allValidators)
-	pipe.SetEX(a.ctx, validatorsKey, string(validatorList), 24*time.Hour)
+	pipe.SetEx(a.ctx, validatorsKey, string(validatorList), 24*time.Hour)
 
 	// 4. Publish state change
 	pipe.Publish(a.ctx, "state:change", fmt.Sprintf("batch:aggregated:%s", epochIDStr))

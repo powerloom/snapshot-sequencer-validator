@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/sirupsen/logrus"
 )
 
@@ -176,7 +176,7 @@ func (w *Writer) WriteAggregated(metric AggregatedMetric) error {
 	score := float64(metric.Window.End.Unix())
 	member := fmt.Sprintf("%s:%s", metric.Name, labelsToString(metric.Labels))
 
-	if err := w.redisClient.ZAdd(w.ctx, indexKey, &redis.Z{
+	if err := w.redisClient.ZAdd(w.ctx, indexKey, redis.Z{
 		Score:  score,
 		Member: member,
 	}).Err(); err != nil {
@@ -271,14 +271,14 @@ func (w *Writer) updateIndex(pipe redis.Pipeliner, metric MetricExport) {
 	score := float64(metric.Timestamp.Unix())
 	member := labelsToString(metric.Labels)
 
-	pipe.ZAdd(w.ctx, nameIndexKey, &redis.Z{
+	pipe.ZAdd(w.ctx, nameIndexKey, redis.Z{
 		Score:  score,
 		Member: member,
 	})
 
 	// By type index
 	typeIndexKey := fmt.Sprintf("%s:index:type:%s", w.config.RedisKeyPrefix, metric.Type)
-	pipe.ZAdd(w.ctx, typeIndexKey, &redis.Z{
+	pipe.ZAdd(w.ctx, typeIndexKey, redis.Z{
 		Score:  score,
 		Member: metric.Name,
 	})
@@ -286,7 +286,7 @@ func (w *Writer) updateIndex(pipe redis.Pipeliner, metric MetricExport) {
 	// Label index
 	for k, v := range metric.Labels {
 		labelIndexKey := fmt.Sprintf("%s:index:label:%s:%s", w.config.RedisKeyPrefix, k, v)
-		pipe.ZAdd(w.ctx, labelIndexKey, &redis.Z{
+		pipe.ZAdd(w.ctx, labelIndexKey, redis.Z{
 			Score:  score,
 			Member: metric.Name,
 		})

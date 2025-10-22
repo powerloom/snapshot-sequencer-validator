@@ -7,7 +7,7 @@ import (
 	"time"
 
 	rediskeys "github.com/powerloom/snapshot-sequencer-validator/pkgs/redis"
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	log "github.com/sirupsen/logrus"
 )
 

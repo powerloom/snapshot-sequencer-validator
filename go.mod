@@ -5,7 +5,6 @@ go 1.25
 require (
 	github.com/ethereum/go-ethereum v1.16.3
 	github.com/gin-gonic/gin v1.11.0
-	github.com/go-redis/redis/v8 v8.11.5
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/ipfs/boxo v0.34.0
@@ -17,6 +16,7 @@ require (
 	github.com/multiformats/go-multiaddr v0.16.1
 	github.com/powerloom/go-rpc-helper v1.0.5
 	github.com/prometheus/client_golang v1.23.0
+	github.com/redis/go-redis/v9 v9.7.0
 	github.com/sirupsen/logrus v1.9.3
 	github.com/spf13/viper v1.21.0
 	github.com/swaggo/files v1.0.1
