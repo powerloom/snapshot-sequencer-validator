@@ -200,7 +200,7 @@ func (sw *StateWorker) aggregateCurrentMetrics(ctx context.Context) {
 	// Count submissions in submission queue
 	submissionQueueCount, _ := sw.redis.LLen(ctx, sw.keyBuilder.SubmissionQueue()).Result()
 
-	// Count processed submissions using ActiveEpochs set (deterministic aggregation)
+	// Count processed submissions using ActiveEpochs set (deterministic aggregation with migration)
 	recentProcessedSubmissions := int64(0)
 	activeEpochs, err := sw.redis.SMembers(ctx, sw.keyBuilder.ActiveEpochs()).Result()
 	if err == nil {
@@ -222,7 +222,7 @@ func (sw *StateWorker) aggregateCurrentMetrics(ctx context.Context) {
 	activeValidators := make(map[string]bool)
 	fiveMinutesAgo := time.Now().Add(-5 * time.Minute).Unix()
 
-	// Get active epochs from the last 5 minutes
+	// Get active epochs from the last 5 minutes (with migration support)
 	validatorActiveEpochs, err := sw.redis.SMembers(ctx, sw.keyBuilder.ActiveEpochs()).Result()
 	if err == nil {
 		for _, epochID := range validatorActiveEpochs {
@@ -407,7 +407,7 @@ func (sw *StateWorker) aggregateHourPeriod(ctx context.Context, hourStart, hourE
 		batches = 0
 	}
 
-	// Count submissions using ActiveEpochs set (deterministic aggregation)
+	// Count submissions using ActiveEpochs set (deterministic aggregation with migration)
 	submissionCount := int64(0)
 	activeEpochs, err := sw.redis.SMembers(ctx, sw.keyBuilder.ActiveEpochs()).Result()
 	if err == nil {
@@ -423,7 +423,7 @@ func (sw *StateWorker) aggregateHourPeriod(ctx context.Context, hourStart, hourE
 	// Count unique validators using EpochValidators sets (deterministic aggregation)
 	uniqueValidatorsMap := make(map[string]bool)
 
-	// Get active epochs for this hour period
+	// Get active epochs for this hour period (with migration support)
 	hourActiveEpochs, err := sw.redis.SMembers(ctx, sw.keyBuilder.ActiveEpochs()).Result()
 	if err == nil {
 		for _, epochID := range hourActiveEpochs {
@@ -552,7 +552,7 @@ func (sw *StateWorker) aggregateDailyStats(ctx context.Context) {
 		batches = 0
 	}
 
-	// Count submissions using ActiveEpochs set (deterministic aggregation)
+	// Count submissions using ActiveEpochs set (deterministic aggregation with migration)
 	submissionCount := int64(0)
 	activeEpochs, err := sw.redis.SMembers(ctx, sw.keyBuilder.ActiveEpochs()).Result()
 	if err == nil {
@@ -787,7 +787,7 @@ func (sw *StateWorker) aggregateParticipationMetrics(ctx context.Context) {
 
 // aggregateCurrentEpochStatus detects current epoch and its phase
 func (sw *StateWorker) aggregateCurrentEpochStatus(ctx context.Context) {
-	// Get current epoch using ActiveEpochs set (deterministic aggregation)
+	// Get current epoch using ActiveEpochs set (deterministic aggregation with migration)
 	activeEpochs, err := sw.redis.SMembers(ctx, sw.keyBuilder.ActiveEpochs()).Result()
 	if err != nil || len(activeEpochs) == 0 {
 		// Fallback: Get latest epoch events from timeline

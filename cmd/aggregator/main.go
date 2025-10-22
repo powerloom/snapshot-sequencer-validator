@@ -90,12 +90,10 @@ func NewAggregator(cfg *config.Settings) (*Aggregator, error) {
 		epochTimers:  make(map[uint64]*time.Timer),
 	}
 
-	// Initialize stream consumer if enabled
-	if cfg.EnableStreamNotifications {
-		if err := aggregator.initializeStreamConsumer(); err != nil {
-			cancel()
-			return nil, fmt.Errorf("failed to initialize stream consumer: %w", err)
-		}
+	// Initialize stream consumer (mandatory for deterministic aggregation)
+	if err := aggregator.initializeStreamConsumer(); err != nil {
+		cancel()
+		return nil, fmt.Errorf("failed to initialize stream consumer: %w", err)
 	}
 
 	return aggregator, nil
@@ -392,7 +390,6 @@ func (a *Aggregator) claimStalledMessages(streamKey, groupName, consumerName str
 func (a *Aggregator) processAggregationQueue() {
 	// Get namespaced queue keys
 	level1Queue := a.keyBuilder.AggregationQueueLevel1()
-	level2Queue := a.keyBuilder.AggregationQueue()
 
 	for {
 		select {
@@ -422,30 +419,9 @@ func (a *Aggregator) processAggregationQueue() {
 				continue
 			}
 
-			// SECOND: Check for Level 2 aggregation (network-wide) - ONLY if stream notifications disabled
-			if !a.config.EnableStreamNotifications {
-				result, err = a.redisClient.BRPop(a.ctx, time.Second, level2Queue).Result()
-				if err != nil {
-					if err != redis.Nil {
-						log.WithError(err).Debug("No epochs in aggregation queues")
-					}
-					continue
-				}
-
-				if len(result) < 2 {
-					continue
-				}
-
-				epochID := result[1]
-				log.WithField("epoch", epochID).Info("🌐 LEVEL 2: Starting aggregation window for network-wide validator batches (queue-based)")
-
-				// Start or extend aggregation window for this epoch
-				a.startAggregationWindow(epochID)
-			} else {
-				// Stream notifications enabled - aggregation is triggered by stream messages
-				// Just sleep briefly to prevent busy-waiting
-				time.Sleep(100 * time.Millisecond)
-			}
+			// Stream notifications are mandatory - aggregation is triggered by stream messages
+			// Just sleep briefly to prevent busy-waiting
+			time.Sleep(100 * time.Millisecond)
 		}
 	}
 }
@@ -1054,8 +1030,7 @@ func (a *Aggregator) monitorFinalizedBatches() {
 
 			// Check for new finalized batches using active epochs tracking
 			// Get active epochs from the ActiveEpochs set
-			activeEpochsKey := a.keyBuilder.ActiveEpochs()
-			activeEpochs, err := a.redisClient.SMembers(a.ctx, activeEpochsKey).Result()
+			activeEpochs, err := a.redisClient.SMembers(a.ctx, a.keyBuilder.ActiveEpochs()).Result()
 			if err != nil {
 				log.WithError(err).Debug("Failed to get active epochs")
 				continue
@@ -1133,8 +1108,7 @@ func (a *Aggregator) reportMetrics() {
 			return
 		case <-ticker.C:
 			// Count aggregated batches using ActiveEpochs set
-			activeEpochsKey := a.keyBuilder.ActiveEpochs()
-			activeEpochs, _ := a.redisClient.SMembers(a.ctx, activeEpochsKey).Result()
+			activeEpochs, _ := a.redisClient.SMembers(a.ctx, a.keyBuilder.ActiveEpochs()).Result()
 
 			aggregatedCount := 0
 			for _, epochID := range activeEpochs {
@@ -1145,22 +1119,33 @@ func (a *Aggregator) reportMetrics() {
 				}
 			}
 
-			// Count active validators (non-namespaced keys for now)
-			// This could be enhanced to use a namespaced active validators set in the future
+			// Count active validators using deterministic aggregation
+			// Use ActiveEpochs and EpochValidators sets instead of SCAN
 			var validators []string
-			// Use a simple pattern to get validator status keys
-			// Note: This is a minor SCAN operation for monitoring only, not critical path
-			cursor := uint64(0)
-			for {
-				scanKeys, nextCursor, err := a.redisClient.Scan(a.ctx, cursor, "validator:active:*", 100).Result()
-				if err != nil {
-					break
+			validatorSet := make(map[string]bool) // Use map to avoid duplicates
+
+			// Get all active epochs
+			activeEpochs, err := a.redisClient.SMembers(a.ctx, a.keyBuilder.ActiveEpochs()).Result()
+			if err != nil {
+				log.WithError(err).Debug("Failed to get active epochs for validator counting")
+			} else {
+				// Get validators from each active epoch
+				for _, epochID := range activeEpochs {
+					epochValidators, err := a.redisClient.SMembers(a.ctx, a.keyBuilder.EpochValidators(epochID)).Result()
+					if err != nil {
+						log.WithError(err).WithField("epoch", epochID).Debug("Failed to get epoch validators")
+						continue
+					}
+					// Add validators to set to avoid duplicates
+					for _, validatorID := range epochValidators {
+						validatorSet[validatorID] = true
+					}
 				}
-				validators = append(validators, scanKeys...)
-				cursor = nextCursor
-				if cursor == 0 {
-					break
-				}
+			}
+
+			// Convert map to slice
+			for validatorID := range validatorSet {
+				validators = append(validators, validatorID)
 			}
 
 			log.WithFields(logrus.Fields{

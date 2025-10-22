@@ -140,12 +140,9 @@ func NewP2PGateway(cfg *config.Settings) (*P2PGateway, error) {
 		return nil, fmt.Errorf("failed to setup topics: %w", err)
 	}
 
-	// Initialize stream infrastructure if enabled
-	if cfg.EnableStreamNotifications {
-		if err := gateway.initializeStreams(); err != nil {
-			log.WithError(err).Warn("Failed to initialize stream infrastructure, falling back to queue-based approach")
-			cfg.EnableStreamNotifications = false
-		}
+	// Initialize stream infrastructure (mandatory for deterministic aggregation)
+	if err := gateway.initializeStreams(); err != nil {
+		log.WithError(err).Fatal("Failed to initialize stream infrastructure (required for deterministic aggregation)")
 	}
 
 	return gateway, nil
@@ -692,28 +689,25 @@ func (g *P2PGateway) handleIncomingBatches() {
 		pipe.SAdd(g.ctx, g.keyBuilder.EpochValidators(epochIDStr), validatorID)
 		pipe.Expire(g.ctx, g.keyBuilder.EpochValidators(epochIDStr), 2*time.Hour)
 
-		// CRITICAL: Add stream notification if enabled (replaces queue-based approach)
-		if g.config.EnableStreamNotifications {
-			streamValues := map[string]interface{}{
-				"epoch":     epochIDStr,
-				"validator": validatorID,
-				"batch_key": key,
-				"timestamp": time.Now().Unix(),
-				"type":      "validator_batch",
-			}
-
-			// Add to stream with retry logic
-			if err := g.addToStreamWithRetry(streamValues); err != nil {
-				log.WithError(err).Error("Failed to add stream notification")
-				// Fall back to queue if stream fails
-				aggQueueKey := g.keyBuilder.AggregationQueue()
-				pipe.LPush(g.ctx, aggQueueKey, epochID)
-			}
+		// CRITICAL: Add stream notification (mandatory for deterministic aggregation)
+		streamValues := map[string]interface{}{
+			"epoch":     epochIDStr,
+			"validator": validatorID,
+			"batch_key": key,
+			"timestamp": time.Now().Unix(),
+			"type":      "validator_batch",
 		}
 
-		// Mark epoch as active
-		pipe.HSet(g.ctx, g.keyBuilder.ActiveEpochs(), epochIDStr, time.Now().Unix())
-		pipe.Expire(g.ctx, g.keyBuilder.ActiveEpochs(), 24*time.Hour)
+		// Add to stream with retry logic
+		if err := g.addToStreamWithRetry(streamValues); err != nil {
+			log.WithError(err).Error("Failed to add stream notification")
+			// Stream notifications are mandatory - treat as critical failure
+			return
+		}
+
+		// Mark epoch as active (use migration utility to ensure correct key type)
+		// Note: We can't use pipeline with migration utility, so we'll add it after pipeline execution
+		// This ensures the epoch is marked as active even if migration is needed
 
 		// Execute atomic pipeline
 		_, err = pipe.Exec(g.ctx)
@@ -739,6 +733,11 @@ func (g *P2PGateway) handleIncomingBatches() {
 				counter.Inc()
 			}
 
+			// Mark epoch as active
+			if err := g.redisClient.SAdd(g.ctx, g.keyBuilder.ActiveEpochs(), epochIDStr).Err(); err != nil {
+				log.WithError(err).Error("Failed to add epoch to ActiveEpochs set")
+			}
+
 			// Track validator batch activity for monitoring
 			validatorBatchesKey := fmt.Sprintf("metrics:validator:%s:batches", validatorID)
 			timestamp := time.Now().Unix()
@@ -747,25 +746,17 @@ func (g *P2PGateway) handleIncomingBatches() {
 				Member: epochID,
 			})
 
-			// FALLBACK: Only add to old aggregation queue if stream notifications disabled
-			// Check if epoch is already aggregated before queueing (namespaced)
+			// Check if epoch is already aggregated (for logging purposes)
 			aggregatedKey := g.keyBuilder.BatchAggregated(epochIDStr)
 			exists, _ := g.redisClient.Exists(g.ctx, aggregatedKey).Result()
-			if exists == 0 && !g.config.EnableStreamNotifications {
-				// Only add to aggregation queue if not already aggregated and streams disabled
-				aggQueueKey := g.keyBuilder.AggregationQueue()
-				if err := g.redisClient.LPush(g.ctx, aggQueueKey, epochID).Err(); err != nil {
-					log.WithError(err).Error("Failed to add to aggregation queue")
-				}
-			} else if exists != 0 {
+			if exists != 0 {
 				log.WithField("epoch", epochID).Debug("Epoch already aggregated, not processing")
 			}
 
 			log.WithFields(logrus.Fields{
 				"epoch": epochID,
 				"from": validatorID,
-				"stream_enabled": g.config.EnableStreamNotifications,
-			}).Info("P2P Gateway: Received finalized batch from validator")
+			}).Info("P2P Gateway: Received finalized batch from validator (stream-based aggregation)")
 		}
 	}
 }

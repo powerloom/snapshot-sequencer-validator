@@ -389,10 +389,10 @@ func (m *EventMonitor) handleEpochReleased(event *EpochReleasedEvent) {
 	pipe.HMSet(m.ctx, epochKey, epochData)
 	pipe.Expire(m.ctx, epochKey, 24*time.Hour)
 	
-	// Also add to active epochs set
-	activeKey := fmt.Sprintf("active_epochs:%s", event.DataMarketAddress.Hex())
-	pipe.SAdd(m.ctx, activeKey, event.EpochID.String())
-	pipe.Expire(m.ctx, activeKey, 24*time.Hour)
+	// Also add to active epochs set (use namespaced keys)
+	kb := m.windowManager.getKeyBuilder(event.DataMarketAddress.Hex())
+	pipe.SAdd(m.ctx, kb.ActiveEpochs(), event.EpochID.String())
+	pipe.Expire(m.ctx, kb.ActiveEpochs(), 24*time.Hour)
 	
 	if _, err := pipe.Exec(m.ctx); err != nil {
 		log.Errorf("Failed to store epoch info: %v", err)
