@@ -426,13 +426,35 @@ func (a *Aggregator) processAggregationQueue() {
 	}
 }
 
+// parseEpochID parses epoch ID from various formats (string, scientific notation)
+func parseEpochID(epochIDStr string) (uint64, error) {
+	// Try standard integer parsing first
+	epochID, err := strconv.ParseUint(epochIDStr, 10, 64)
+	if err == nil {
+		return epochID, nil
+	}
+
+	// If that fails, try parsing as float64 (for scientific notation)
+	floatVal, err := strconv.ParseFloat(epochIDStr, 64)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse epoch ID '%s' as integer or float: %w", epochIDStr, err)
+	}
+
+	// Convert float to uint64, checking for overflow
+	if floatVal < 0 || floatVal > float64(^uint64(0)) {
+		return 0, fmt.Errorf("epoch ID '%s' is out of valid uint64 range", epochIDStr)
+	}
+
+	return uint64(floatVal), nil
+}
+
 // startAggregationWindow initiates or extends the aggregation window for Level 2
 func (a *Aggregator) startAggregationWindow(epochIDStr string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
 	// Convert to uint64 for map key
-	epochID, err := strconv.ParseUint(epochIDStr, 10, 64)
+	epochID, err := parseEpochID(epochIDStr)
 	if err != nil {
 		log.WithError(err).Error("Failed to parse epoch ID for aggregation window")
 		return
@@ -470,7 +492,7 @@ func (a *Aggregator) startAggregationWindow(epochIDStr string) {
 
 func (a *Aggregator) aggregateWorkerParts(epochIDStr string, totalParts int) {
 	// Convert string to uint64
-	epochID, err := strconv.ParseUint(epochIDStr, 10, 64)
+	epochID, err := parseEpochID(epochIDStr)
 	if err != nil {
 		log.WithError(err).Error("Failed to parse epoch ID")
 		return
@@ -758,7 +780,7 @@ func (a *Aggregator) aggregateEpoch(epochIDStr string) {
 
 	// Add monitoring metrics for Level 2 aggregation
 	timestamp := time.Now().Unix()
-	epochID, _ := strconv.ParseUint(epochIDStr, 10, 64)
+	epochID, _ := parseEpochID(epochIDStr)
 
 	// Pipeline for monitoring metrics
 	pipe := a.redisClient.Pipeline()

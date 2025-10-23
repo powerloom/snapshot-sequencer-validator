@@ -123,6 +123,28 @@ type UnifiedSequencer struct {
 	wg              sync.WaitGroup
 }
 
+// parseEpochID parses epoch ID from various formats (string, scientific notation)
+func parseEpochID(epochIDStr string) (uint64, error) {
+	// Try standard integer parsing first
+	epochID, err := strconv.ParseUint(epochIDStr, 10, 64)
+	if err == nil {
+		return epochID, nil
+	}
+
+	// If that fails, try parsing as float64 (for scientific notation)
+	floatVal, err := strconv.ParseFloat(epochIDStr, 64)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse epoch ID '%s' as integer or float: %w", epochIDStr, err)
+	}
+
+	// Convert float to uint64, checking for overflow
+	if floatVal < 0 || floatVal > float64(^uint64(0)) {
+		return 0, fmt.Errorf("epoch ID '%s' is out of valid uint64 range", epochIDStr)
+	}
+
+	return uint64(floatVal), nil
+}
+
 func main() {
 	// Load configuration
 	if err := config.LoadConfig(); err != nil {
@@ -1068,7 +1090,7 @@ func (s *UnifiedSequencer) runFinalizationWorker(workerID int) {
 					continue
 				}
 			}
-			epochID, _ := strconv.ParseUint(epochIDStr, 10, 64)
+			epochID, _ := parseEpochID(epochIDStr)
 
 			batchID := int(batchPart["batch_id"].(float64))
 			totalBatches := int(batchPart["total_batches"].(float64))
@@ -1313,7 +1335,7 @@ func (s *UnifiedSequencer) runAggregationWorker() {
 			}
 
 			epochIDStr := aggData["epoch_id"].(string)
-			epochID, _ := strconv.ParseUint(epochIDStr, 10, 64)
+			epochID, _ := parseEpochID(epochIDStr)
 			partsCompleted := int(aggData["parts_completed"].(float64))
 
 			// Update monitoring
