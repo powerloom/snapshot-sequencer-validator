@@ -6,15 +6,15 @@ The enhanced monitoring system provides comprehensive visibility into the parall
 
 The system now supports both P2PSnapshotSubmission batch format (multiple submissions per message) and single SnapshotSubmission format, with updated Redis key patterns for better organization.
 
-## RESTful Monitor API (NEW - FULLY OPERATIONAL)
+## RESTful Monitor API
 
 The monitoring system now includes a complete RESTful API with 10 professional endpoints and interactive Swagger UI for comprehensive monitoring and debugging.
 
 ### Accessing the Monitor API
 
 ```bash
-# Monitor API runs on default port 8080 (configurable via MONITOR_API_PORT)
-http://localhost:8080/swagger/index.html
+# Monitor API runs on port 9091 (configurable via MONITOR_API_PORT)
+http://localhost:9091/swagger/index.html
 
 # Interactive Swagger UI provides:
 # - Complete API documentation
@@ -44,45 +44,33 @@ All endpoints support protocol/market filtering for multi-market environments:
 
 ```bash
 # Filter by specific protocol and market
-curl "http://localhost:8080/api/v1/dashboard/summary?protocol=powerloom&market=0x21cb57C1f2352ad215a463DD867b838749CD3b8f"
+curl "http://localhost:9091/api/v1/dashboard/summary?protocol=powerloom&market=0x21cb57C1f2352ad215a463DD867b838749CD3b8f"
 
 # Multiple markets (comma-separated)
-curl "http://localhost:8080/api/v1/batches/finalized?market=0x21cb57C1f2352ad215a463DD867b838749CD3b8f,0x0C2E22fe7526fAeF28E7A58c84f8723dEFcE200c"
+curl "http://localhost:9091/api/v1/batches/finalized?market=0x21cb57C1f2352ad215a463DD867b838749CD3b8f,0x0C2E22fe7526fAeF28E7A58c84f8723dEFcE200c"
 
 # JSON array format
-curl "http://localhost:8080/api/v1/aggregation/results?market=[\"0x21cb57C1f2352ad215a463DD867b838749CD3b8f\",\"0x0C2E22fe7526fAeF28E7A58c84f8723dEFcE200c\"]"
+curl "http://localhost:9091/api/v1/aggregation/results?market=[\"0x21cb57C1f2352ad215a463DD867b838749CD3b8f\",\"0x0C2E22fe7526fAeF28E7A58c84f8723dEFcE200c\"]"
 ```
 
 ### Working Endpoints Status
 
-✅ **All 10 endpoints operational with real data:**
+All 10 endpoints are operational with real data:
 - **Health Check**: Shows `data_fresh: true` with actual pipeline data
 - **Dashboard**: Real metrics with participation rates, current epoch status
 - **Epoch Timeline**: Actual epoch progression with correct status reading
 - **Finalized Batches**: Batch data with validator attribution and IPFS CIDs
 - **Aggregation Results**: Network-wide consensus with validator counting
 - **Timeline Activity**: Recent submissions and batch completions
-- **Queue Status**: Real-time queue depths and processing rates (UPDATED - October 24, 2025)
+- **Queue Status**: Real-time queue depths and processing rates with accurate monitoring
 - **Pipeline Overview**: Complete pipeline status with health indicators
 - **Daily/Stats**: Actual aggregated data from pipeline metrics
 
-### Enhanced Queue Monitoring (NEW - October 24, 2025)
+### Queue Monitoring System
 
-#### Critical Fix Applied:
-- **Issue**: Queue status was showing 471,335 "critical" items due to monitoring unused list-based queue
-- **Solution**: Now monitors active stream-based queue with accurate consumer lag
-- **Impact**: Operators now see accurate system health metrics
+The queue monitoring system has been enhanced to accurately reflect system health by monitoring active components rather than legacy systems.
 
-#### Queue Monitoring Improvements:
-```bash
-# Check accurate queue status (now shows stream-based lag, not list depth)
-curl "http://localhost:8091/api/v1/queues/status" | jq '.aggregation_queue_depth'
-
-# Monitor queue health history
-curl "http://localhost:8091/api/v1/pipeline/overview" | jq '.queue_health_history'
-```
-
-#### Queue Architecture Clarification:
+#### Queue Monitoring Architecture
 **Stream-Based System (ACTIVE)**:
 - `stream:aggregation:notifications` - Primary operational queue
 - Monitored via `getStreamLag()` for accurate consumer lag
@@ -90,8 +78,17 @@ curl "http://localhost:8091/api/v1/pipeline/overview" | jq '.queue_health_histor
 
 **List-Based System (DEPRECATED)**:
 - `aggregation:queue` - Unused legacy accumulation
-- No longer monitored for system health
+- Not monitored for system health assessment
 - Marked for future removal
+
+#### Queue Monitoring Commands:
+```bash
+# Check accurate queue status (shows stream-based lag, not list depth)
+curl "http://localhost:8091/api/v1/queues/status" | jq '.aggregation_queue_depth'
+
+# Monitor queue health history
+curl "http://localhost:8091/api/v1/pipeline/overview" | jq '.queue_health_history'
+```
 
 ### Key Features
 
@@ -121,30 +118,38 @@ curl "http://localhost:8080/api/v1/batches/finalized"
 curl "http://localhost:8080/api/v1/aggregation/results"
 ```
 
-### Shell-Based Monitoring Client
+### Queue Monitoring Improvements
 
-The system includes a pure bash monitoring client for quick terminal-based checks:
+The queue monitoring system provides accurate consumer lag metrics by monitoring Redis streams instead of legacy list-based systems.
 
 ```bash
-# Basic monitoring (uses monitor-api by default)
-./scripts/monitor_api_client.sh
+# Check accurate queue status (stream-based, not list-based)
+curl "http://localhost:9091/api/v1/queues/status"
 
-# With custom port
-./scripts/monitor_api_client.sh 9090
-
-# With protocol and market filtering
-./scripts/monitor_api_client.sh 8080 powerloom 0x21cb57C1f2352ad215a463DD867b838749CD3b8f
-
-# Multiple markets
-./scripts/monitor_api_client.sh 8080 powerloom "0x21cb57C1f2352ad215a463DD867b838749CD3b8f,0x0C2E22fe7526fAeF28E7A58c84f8723dEFcE200c"
+# Expected output: Reasonable stream lag (0-10), not misleading list depth (470,000+)
 ```
 
-**Features:**
-- No external dependencies (pure bash/curl/grep/sed/awk)
-- Accepts port, protocol, and market as arguments
-- Integrated with `dsv.sh monitor` command
-- Handles both comma-separated and JSON array market formats
-- Provides real-time status updates
+#### Key Features:
+- Stream-based monitoring provides accurate consumer lag metrics
+- No misleading "critical" status from unused list-based queues
+- Real-time visibility into actual processing performance
+
+### Epoch ID Formatting
+
+All epoch IDs display as integers instead of scientific notation for consistency across the system.
+
+```bash
+# API responses show consistent integer format
+curl "http://localhost:9091/api/v1/aggregation/results?protocol=0x3B5A0FB70ef68B5dd677C7d614dFB89961f97401&market=0xae32c4FA72E2e5F53ed4D214E4aD049286Ded16f"
+
+# Expected output: "epoch_id": "23646205" (integer)
+# Not: "epoch_id": "2.3646205e+07" (scientific notation)
+```
+
+#### Epoch ID Handling:
+- All components handle both integer and scientific notation formats
+- Comprehensive epoch formatting utility in `pkgs/utils/epoch_formatter.go`
+- Consistent integer display in all API responses
 
 ## Quick Start
 
@@ -156,8 +161,28 @@ The system includes a pure bash monitoring client for quick terminal-based check
 # Monitor pipeline
 ./dsv.sh monitor
 
-# View all logs
-./dsv.sh logs
+# View specific component logs
+./dsv.sh aggregator-logs
+./dsv.sh p2p-logs
+./dsv.sh event-logs
+
+# Access interactive Swagger UI
+./dsv.sh dashboard
+```
+
+### Advanced Monitoring
+```bash
+# Check accurate queue health (stream-based)
+curl "http://localhost:9091/api/v1/queues/status"
+
+# Monitor real-time aggregation results
+curl "http://localhost:9091/api/v1/aggregation/results"
+
+# Check dashboard summary
+curl "http://localhost:9091/api/v1/dashboard/summary"
+
+# Verify system pipeline status
+curl "http://localhost:9091/api/v1/pipeline/overview"
 ```
 
 ## Pipeline Stages
@@ -256,21 +281,22 @@ Shows the current state of consensus across recent epochs:
 
 **Sample Output**:
 ```
-🤝 Consensus/Aggregation Status
-================================
-📊 Batch Aggregation Status
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Consensus/Aggregation Status
+============================
 
-🔄 Recent Aggregation Status:
-  📦 Epoch 172883: 4 validators, 25 projects aggregated
-  📦 Epoch 172884: 3 validators, 18 projects aggregated
+Batch Aggregation Status
+-----------------------
 
-🎯 Consensus Results:
-  ✅ Epoch 172883: CID=QmABC123, Merkle=a1b2c3d4..., Projects=25
-  ✅ Epoch 172884: CID=QmDEF456, Merkle=e5f6g7h8..., Projects=18
+Recent Aggregation Status:
+  Epoch 172883: 4 validators, 25 projects aggregated
+  Epoch 172884: 3 validators, 18 projects aggregated
 
-📨 Validator Batches Received:
-  📊 4 validators across 2 epochs
+Consensus Results:
+  Epoch 172883: CID=QmABC123, Merkle=a1b2c3d4..., Projects=25
+  Epoch 172884: CID=QmDEF456, Merkle=e5f6g7h8..., Projects=18
+
+Validator Batches Received:
+  4 validators across 2 epochs
 ```
 
 #### 2. `./dsv.sh aggregated-batch [epoch]` - Complete Aggregation View
@@ -278,12 +304,12 @@ Shows the complete local aggregation for a specific epoch:
 
 **Sample Output**:
 ```
-📦 Epoch 172883 - Complete Aggregation View
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Epoch 172883 - Complete Aggregation View
+----------------------------------------
 
-🔍 INDIVIDUAL VALIDATOR BATCHES:
+INDIVIDUAL VALIDATOR BATCHES:
 
-📨 Validator: validator_001
+Validator: validator_001
    IPFS CID: QmValidator001BatchCID...
    Merkle: a1b2c3d4e5f6...
    Projects: 25
@@ -294,15 +320,15 @@ Shows the complete local aggregation for a specific epoch:
      - aave_v2: QmAaveCID...
      - compound_v2: QmCompoundCID...
 
-📨 Validator: validator_002
+Validator: validator_002
    [Similar structure]
 
-📊 LOCAL AGGREGATION RESULTS:
+LOCAL AGGREGATION RESULTS:
   Total Validators Participated: 4
   Projects with Consensus: 25
   Last Updated: 2023-09-19T10:30:45Z
 
-🗳️ DETAILED VOTE DISTRIBUTION:
+DETAILED VOTE DISTRIBUTION:
   Project: uniswap_v3
     CID QmUniswapCID...: 4 validator(s)
 
@@ -310,12 +336,12 @@ Shows the complete local aggregation for a specific epoch:
     CID QmAaveCID123...: 3 validator(s)
     CID QmAaveCID456...: 1 validator(s)
 
-✅ CONSENSUS WINNERS:
+CONSENSUS WINNERS:
   uniswap_v3: QmUniswapCID...
   aave_v2: QmAaveCID123...
   compound_v2: QmCompoundCID...
 
-👥 VALIDATOR CONTRIBUTIONS:
+VALIDATOR CONTRIBUTIONS:
   validator_001: 25 projects contributed
   validator_002: 23 projects contributed
   validator_003: 20 projects contributed
@@ -326,11 +352,12 @@ Shows what a specific validator proposed and how it compared to consensus:
 
 **Sample Output**:
 ```
-👤 Validator Details: validator_001
-====================================
-📦 All Batches from Validator validator_001:
+Validator Details: validator_001
+===============================
 
-🔹 Epoch 172883:
+All Batches from Validator validator_001:
+
+Epoch 172883:
   IPFS CID: QmValidator001Epoch172883...
   Merkle Root: a1b2c3d4e5f6g7h8i9j0...
   Projects: 25
@@ -340,11 +367,11 @@ Shows what a specific validator proposed and how it compared to consensus:
     - aave_v2: QmAaveCID123...
     - compound_v2: QmCompoundCID...
 
-✅ CONSENSUS COMPARISON:
+CONSENSUS COMPARISON:
   Projects that reached consensus:
-    ✅ uniswap_v3 - ACCEPTED
-    ✅ aave_v2 - ACCEPTED
-    ❌ compound_v2 - Different CID won
+    uniswap_v3 - ACCEPTED
+    aave_v2 - ACCEPTED
+    compound_v2 - Different CID won
 ```
 
 #### 4. `./dsv.sh consensus-logs [N]` - Activity Logs
@@ -352,14 +379,14 @@ Filters system logs to show only consensus-related activity:
 
 **Sample Output**:
 ```
-INFO[2023-09-19T10:30:15Z] 📡 Broadcasted finalized batch for epoch 172883
-INFO[2023-09-19T10:30:16Z] 📨 Received batch from validator validator_002 for epoch 172883
-INFO[2023-09-19T10:30:17Z] 📊 AGGREGATION for epoch 172883: 4 validators contributed, 25 projects aggregated
+INFO[2023-09-19T10:30:15Z] Broadcasted finalized batch for epoch 172883
+INFO[2023-09-19T10:30:16Z] Received batch from validator validator_002 for epoch 172883
+INFO[2023-09-19T10:30:17Z] AGGREGATION for epoch 172883: 4 validators contributed, 25 projects aggregated
 ```
 
 ## Redis Keys Structure
 
-### Consensus/Aggregation Tracking (NEW)
+### Consensus/Aggregation Tracking
 ```
 # Validator batch storage
 validator:{validatorID}:batch:{epochID}              # Individual validator's batch for epoch
@@ -414,23 +441,23 @@ batch:{epochId}:part:{partId}:status                # Part processing status
 epoch:{epochId}:parts:completed                     # Completed parts count
 epoch:{epochId}:parts:total                         # Total parts count
 
-# NEW: Stream-Based Queue System (ACTIVE)
+# Stream-Based Queue System (ACTIVE)
 stream:aggregation:notifications                  # Primary operational queue
 epoch:{epochId}:parts:ready                        # Ready flag for aggregation
 aggregation:queue                                  # DEPRECATED: List-based unused system
 ```
 
-### Epoch ID Handling (UPDATED - October 24, 2025)
+### Epoch ID Handling
 ```
-# Epoch IDs now properly formatted in all components:
+# Epoch IDs are properly formatted in all components:
 # Format: Integer (23646205) NOT Scientific Notation (2.3646205e+07)
 
-# Monitored via enhanced FormatEpochID() utility:
+# Managed via FormatEpochID() utility:
 pkgs/utils/epoch_formatter.go                      # Comprehensive epoch formatting
-All components now handle both integer and scientific notation formats
+All components handle both integer and scientific notation formats
 ```
 
-### Queue Monitoring Architecture (NEW - October 24, 2025)
+### Queue Monitoring Architecture
 ```
 # Stream-Based System (ACTIVE & MONITORED):
 - stream:aggregation:notifications
@@ -439,7 +466,7 @@ All components now handle both integer and scientific notation formats
 
 # List-Based System (DEPRECATED & UNUSED):
 - aggregation:queue (legacy system, no longer monitored)
-- 471,335 items were misleading operators
+- Contains unused accumulated items
 - Marked for future removal
 ```
 
@@ -477,7 +504,7 @@ worker:aggregator:current_epoch           # Epoch being aggregated
 | `processing` | Actively processing batch |
 | `failed` | Error state requiring attention |
 
-## Consensus Status Values (NEW)
+## Consensus Status Values
 
 | Status | Description |
 |--------|-------------|
@@ -491,42 +518,42 @@ worker:aggregator:current_epoch           # Epoch being aggregated
 ## Health Indicators
 
 ### Healthy Pipeline
-- ✅ Queue depth < 100 (stream-based monitoring)
-- ✅ Finalization queue < 10 batches
-- ✅ Worker heartbeats < 60s old
-- ✅ Aggregation queue < 5 epochs (stream-based, not list-based)
-- ✅ **NEW**: Regular validator batch exchange (>= 2 validators per epoch)
-- ✅ **NEW**: Consensus determination completing (projects have majority votes)
-- ✅ **NEW**: IPFS batch retrieval succeeding
-- ✅ **UPDATED**: Queue monitoring shows actual stream lag, not unused list accumulation
+- Queue depth < 100 (stream-based monitoring)
+- Finalization queue < 10 batches
+- Worker heartbeats < 60s old
+- Aggregation queue < 5 epochs (stream-based, not list-based)
+- Regular validator batch exchange (>= 2 validators per epoch)
+- Consensus determination completing (projects have majority votes)
+- IPFS batch retrieval succeeding
+- Queue monitoring shows actual stream lag, not unused list accumulation
 
-### Updated Queue Health Metrics (October 24, 2025)
+### Queue Health Metrics
 **Stream-Based Queue (ACTIVE)**:
-- ✅ Stream lag < 100 (actual consumer lag)
-- ✅ Processing rate consistent with throughput
-- ✅ No unbounded accumulation
+- Stream lag < 100 (actual consumer lag)
+- Processing rate consistent with throughput
+- No unbounded accumulation
 
 **List-Based Queue (DEPRECATED)**:
-- ⚠️ May show high accumulation (471,335+ items) - this is normal and ignored
-- ✅ Not used for system health assessment
+- May show high accumulation (471,335+ items) - this is normal and ignored
+- Not used for system health assessment
 
 ### Warning Signs
-- ⚠️ Queue depth > 100 (stream-based backlog forming)
-- ⚠️ Worker heartbeat > 60s (stale worker)
-- ⚠️ Finalization queue > 10 (workers overwhelmed)
-- ⚠️ **UPDATED**: Ignore high list-based queue accumulation (471,335+ items is normal for unused system)
-- ⚠️ **NEW**: Only 1 validator participating (no aggregation possible)
-- ⚠️ **NEW**: High vote divergence (no clear majority for projects)
-- ⚠️ **NEW**: IPFS retrieval failures for validator batches
-- ⚠️ **NEW**: Stale validator batches (no recent broadcasts)
+- Queue depth > 100 (stream-based backlog forming)
+- Worker heartbeat > 60s (stale worker)
+- Finalization queue > 10 (workers overwhelmed)
+- High list-based queue accumulation (471,335+ items is normal for unused system)
+- Only 1 validator participating (no aggregation possible)
+- High vote divergence (no clear majority for projects)
+- IPFS retrieval failures for validator batches
+- Stale validator batches (no recent broadcasts)
 
 ### Critical Issues
-- 🔴 Queue depth > 1000 (severe backlog)
-- 🔴 No worker heartbeats (workers down)
-- 🔴 Aggregation blocked (parts incomplete)
-- 🔴 **NEW**: No validator batch exchange (network partition)
-- 🔴 **NEW**: Validator batch signature validation failures
-- 🔴 **NEW**: Consistent IPFS failures (storage layer down)
+- Queue depth > 1000 (severe backlog)
+- No worker heartbeats (workers down)
+- Aggregation blocked (parts incomplete)
+- No validator batch exchange (network partition)
+- Validator batch signature validation failures
+- Consistent IPFS failures (storage layer down)
 
 ## Integration with Workers
 
@@ -592,9 +619,9 @@ grep EVENT_START_BLOCK .env
 
 ### Workers Not Visible
 Workers only appear when implemented. Current status:
-- ✅ Dequeuer workers (5 instances)
-- ⏳ Finalizer workers (TODO)
-- ⏳ Aggregation worker (TODO)
+- Dequeuer workers (5 instances)
+- Finalizer workers (TODO)
+- Aggregation worker (TODO)
 
 ### Queue Backlog
 ```bash
@@ -623,7 +650,7 @@ docker exec powerloom-sequencer-validator-dequeuer-1 \
 SUBMISSION_FORMAT_STRATEGY=single ./dsv.sh distributed
 ```
 
-### Epoch ID Format Issues (NEW - October 24, 2025)
+### Epoch ID Format Issues
 ```bash
 # Check epoch ID format in logs (should show integers, not scientific notation)
 ./dsv.sh aggregator-logs | grep -E "epoch.*=" | tail -3
@@ -638,11 +665,11 @@ docker exec <aggregator-container> grep -A5 "FormatEpochID" /app/main.go
 ```
 
 #### Common Epoch ID Format Issues:
-- **Scientific Notation**: "2.3646205e+07" → Fixed to "23646205"
+- **Scientific Notation**: "2.3646205e+07" → Corrected to "23646205"
 - **Integer Format**: "23646205" → Already correct
-- **Mixed Formats**: All components now handle both formats consistently
+- **Mixed Formats**: All components handle both formats consistently
 
-### Queue Monitoring Accuracy Issues (NEW - October 24, 2025)
+### Queue Monitoring Accuracy Issues
 ```bash
 # Verify accurate queue monitoring (should show stream lag, not list depth)
 curl "http://localhost:9091/api/v1/queues/status" | jq '.aggregation_queue_depth'
@@ -659,7 +686,7 @@ echo "New (stream-based): $(curl -s "http://localhost:9091/api/v1/queues/status"
 #### Queue Monitoring Troubleshooting:
 - **High List Count**: 471,335 items in `aggregation:queue` is normal (unused system)
 - **Stream Lag**: Should be reasonable (< 100 for healthy system)
-- **Monitor API**: Now shows accurate stream-based metrics
+- **Monitor API**: Shows accurate stream-based metrics
 - **Architecture**: Clear distinction between active stream-based and deprecated list-based systems
 
 #### Conversion Troubleshooting
@@ -688,15 +715,15 @@ echo "New (stream-based): $(curl -s "http://localhost:9091/api/v1/queues/status"
 4. Monitor metrics and queue processing
 
 **Type Conversion Improvements**:
-- Added helper functions to handle uint64 → float64 JSON unmarshaling
-- Fixed FinalizedBatches endpoint to extract:
+- Helper functions to handle uint64 → float64 JSON unmarshaling
+- FinalizedBatches endpoint extracts:
   - Full IPFS CID
   - ValidatorCount
   - Complete submission details
 - Consistent type conversion across API endpoints
 - Improved getCurrentEpochInfo to find actual current epoch
 
-**Tip**: Always use the most recent version of launch scripts and monitor containers for the latest conversion utilities.
+**Note**: Use the most recent version of launch scripts and monitor containers for the latest conversion utilities.
 
 ### Stale Heartbeats
 Indicates worker process issues:
