@@ -743,10 +743,17 @@ func (m *MonitorAPI) AggregationResults(c *gin.Context) {
 
 		epochID := utils.FormatEpochID(strings.TrimPrefix(entry, "aggregated:"))
 
+		// Try to get batch data - first with formatted epoch ID, then with original
 		level2Key := kb.MetricsBatchAggregated(epochID)
 		level2Data, err := m.redis.Get(m.ctx, level2Key).Result()
 		if err != nil {
-			continue
+			// Try with the original epoch ID from timeline (might have scientific notation)
+			originalEpochID := strings.TrimPrefix(entry, "aggregated:")
+			fallbackKey := kb.MetricsBatchAggregated(originalEpochID)
+			level2Data, err = m.redis.Get(m.ctx, fallbackKey).Result()
+			if err != nil {
+				continue
+			}
 		}
 
 		var batchData map[string]interface{}
@@ -754,9 +761,15 @@ func (m *MonitorAPI) AggregationResults(c *gin.Context) {
 			continue
 		}
 
-		// Get validator list
+		// Get validator list - try both formatted and original epoch ID
 		validatorsKey := kb.MetricsBatchValidators(epochID)
 		validatorsJSON, _ := m.redis.Get(m.ctx, validatorsKey).Result()
+		if validatorsJSON == "" {
+			// Try with original epoch ID
+			originalEpochID := strings.TrimPrefix(entry, "aggregated:")
+			fallbackValidatorsKey := kb.MetricsBatchValidators(originalEpochID)
+			validatorsJSON, _ = m.redis.Get(m.ctx, fallbackValidatorsKey).Result()
+		}
 		var validators []string
 		if validatorsJSON != "" {
 			json.Unmarshal([]byte(validatorsJSON), &validators)
