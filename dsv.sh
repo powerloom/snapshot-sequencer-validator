@@ -50,6 +50,7 @@ show_usage() {
     echo "  status                - Show service status"
     echo "  clean                 - Stop and remove all containers/volumes"
     echo "  clean-queue          - Clean up stale aggregation queue items"
+    echo "  clean-timeline       - Clean up timeline scientific notation entries"
     echo ""
     echo "Monitoring:"
     echo "  dashboard     - Open dashboard in browser (http://localhost:9091/swagger)"
@@ -650,6 +651,15 @@ case "${1:-}" in
             ./scripts/cleanup_stale_queue.sh
         else
             print_color "$RED" "Error: cleanup_stale_queue.sh script not found"
+            exit 1
+        fi
+        ;;
+    clean-timeline)
+        print_color "$YELLOW" "Cleaning up timeline scientific notation entries..."
+        if [ -f "scripts/cleanup_timeline_scientific_notation.sh" ]; then
+            ./scripts/cleanup_timeline_scientific_notation.sh
+        else
+            print_color "$RED" "Error: cleanup_timeline_scientific_notation.sh script not found"
             exit 1
         fi
         ;;

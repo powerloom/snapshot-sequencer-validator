@@ -1,4 +1,4 @@
-#!/bin/bash
+    #!/bin/bash
 
 # Cleanup script for stale aggregation queue items
 # This script removes the unused aggregation queue items that accumulate over time
@@ -17,17 +17,24 @@ NC='\033[0m' # No Color
 echo -e "${YELLOW}=== Aggregation Queue Cleanup Script ===${NC}"
 echo
 
-# Check if Redis is accessible
+# Check if Redis is accessible (try both direct and container)
 echo "Checking Redis connection..."
-if ! redis-cli -p 6380 ping > /dev/null 2>&1; then
-    echo -e "${RED}Error: Cannot connect to Redis on port 6380${NC}"
-    echo "Please ensure Redis is running and accessible"
-    exit 1
+if ! redis-cli -p 6380 ping >/dev/null 2>&1; then
+    if ! docker exec snapshot-sequencer-validator-redis-1 redis-cli ping >/dev/null 2>&1; then
+        echo -e "${RED}Error: Cannot connect to Redis${NC}"
+        echo "Please ensure Redis is running and accessible"
+        exit 1
+    else
+        REDIS_CMD="docker exec snapshot-sequencer-validator-redis-1 redis-cli"
+        echo "Using Redis via Docker container"
+    fi
+else
+    REDIS_CMD="redis-cli -p 6380"
 fi
 
 # Get current queue depth
 QUEUE_KEY="0x3B5A0FB70ef68B5dd677C7d614dFB89961f97401:0xae32c4FA72E2e5F53ed4D214E4aD049286Ded16f:aggregation:queue"
-CURRENT_DEPTH=$(redis-cli -p 6380 LLEN "$QUEUE_KEY" | tr -d '\r\n')
+CURRENT_DEPTH=$($REDIS_CMD LLEN "$QUEUE_KEY" | tr -d '\r\n')
 
 echo "Current aggregation queue depth: $CURRENT_DEPTH"
 
@@ -58,14 +65,14 @@ echo "Starting cleanup..."
 start_time=$(date +%s)
 
 # Delete the queue
-if redis-cli -p 6380 DEL "$QUEUE_KEY" > /dev/null; then
+if $REDIS_CMD DEL "$QUEUE_KEY" > /dev/null; then
     end_time=$(date +%s)
     duration=$((end_time - start_time))
 
     echo -e "${GREEN}✓ Cleanup completed successfully in ${duration}s${NC}"
 
     # Verify cleanup
-    new_depth=$(redis-cli -p 6380 LLEN "$QUEUE_KEY" | tr -d '\r\n')
+    new_depth=$($REDIS_CMD LLEN "$QUEUE_KEY" | tr -d '\r\n')
     echo "New queue depth: $new_depth"
 
     if [ "$new_depth" -eq 0 ]; then
