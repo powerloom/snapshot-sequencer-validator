@@ -17,6 +17,7 @@ import (
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/metrics"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/p2p"
 	rediskeys "github.com/powerloom/snapshot-sequencer-validator/pkgs/redis"
+	"github.com/powerloom/snapshot-sequencer-validator/pkgs/utils"
 	"github.com/redis/go-redis/v9"
 	"github.com/sirupsen/logrus"
 )
@@ -640,7 +641,7 @@ func (g *P2PGateway) handleIncomingBatches() {
 		// Emit validator batch received event
 		batchPayload, _ := json.Marshal(map[string]interface{}{
 			"validator_id": validatorID,
-			"epoch_id":     fmt.Sprintf("%v", epochID),
+			"epoch_id":     utils.FormatEpochID(epochID),
 			"peer_id":      msg.ReceivedFrom.String(),
 			"size":         len(msg.Data),
 		})
@@ -649,7 +650,7 @@ func (g *P2PGateway) handleIncomingBatches() {
 			Severity:  events.SeverityInfo,
 			Component: "p2p-gateway",
 			Timestamp: time.Now(),
-			EpochID:   fmt.Sprintf("%v", epochID),
+			EpochID:   utils.FormatEpochID(epochID),
 			Payload:   json.RawMessage(batchPayload),
 		})
 
@@ -676,7 +677,7 @@ func (g *P2PGateway) handleIncomingBatches() {
 
 		// Route to Redis for aggregator processing with ATOMIC PIPELINE OPERATIONS
 		// Include validator ID in the key so we can track who sent what
-		epochIDStr := fmt.Sprintf("%v", epochID)
+		epochIDStr := utils.FormatEpochID(epochID)
 		key := g.keyBuilder.IncomingBatch(epochIDStr, validatorID)
 
 		// ATOMIC PIPELINE OPERATIONS for deterministic batch processing
@@ -746,15 +747,18 @@ func (g *P2PGateway) handleIncomingBatches() {
 				Member: epochID,
 			})
 
+			// Format epoch ID as integer to avoid scientific notation
+			epochFormatted := utils.FormatEpochID(epochID)
+
 			// Check if epoch is already aggregated (for logging purposes)
 			aggregatedKey := g.keyBuilder.BatchAggregated(epochIDStr)
 			exists, _ := g.redisClient.Exists(g.ctx, aggregatedKey).Result()
 			if exists != 0 {
-				log.WithField("epoch", epochID).Debug("Epoch already aggregated, not processing")
+				log.WithField("epoch", epochFormatted).Debug("Epoch already aggregated, not processing")
 			}
 
 			log.WithFields(logrus.Fields{
-				"epoch": epochID,
+				"epoch": epochFormatted,
 				"from": validatorID,
 			}).Info("P2P Gateway: Received finalized batch from validator (stream-based aggregation)")
 		}
@@ -832,7 +836,7 @@ func (g *P2PGateway) handleOutgoingMessages() {
 				log.WithError(err).Error("Failed to broadcast message")
 			} else {
 				epochID := msg["epochId"]
-				log.WithField("epoch", epochID).Info("P2P Gateway: Broadcast batch to network")
+				log.WithField("epoch", utils.FormatEpochID(epochID)).Info("P2P Gateway: Broadcast batch to network")
 			}
 		}
 	}

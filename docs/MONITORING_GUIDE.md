@@ -62,9 +62,36 @@ curl "http://localhost:8080/api/v1/aggregation/results?market=[\"0x21cb57C1f2352
 - **Finalized Batches**: Batch data with validator attribution and IPFS CIDs
 - **Aggregation Results**: Network-wide consensus with validator counting
 - **Timeline Activity**: Recent submissions and batch completions
-- **Queue Status**: Real-time queue depths and processing rates
+- **Queue Status**: Real-time queue depths and processing rates (UPDATED - October 24, 2025)
 - **Pipeline Overview**: Complete pipeline status with health indicators
 - **Daily/Stats**: Actual aggregated data from pipeline metrics
+
+### Enhanced Queue Monitoring (NEW - October 24, 2025)
+
+#### Critical Fix Applied:
+- **Issue**: Queue status was showing 471,335 "critical" items due to monitoring unused list-based queue
+- **Solution**: Now monitors active stream-based queue with accurate consumer lag
+- **Impact**: Operators now see accurate system health metrics
+
+#### Queue Monitoring Improvements:
+```bash
+# Check accurate queue status (now shows stream-based lag, not list depth)
+curl "http://localhost:8091/api/v1/queues/status" | jq '.aggregation_queue_depth'
+
+# Monitor queue health history
+curl "http://localhost:8091/api/v1/pipeline/overview" | jq '.queue_health_history'
+```
+
+#### Queue Architecture Clarification:
+**Stream-Based System (ACTIVE)**:
+- `stream:aggregation:notifications` - Primary operational queue
+- Monitored via `getStreamLag()` for accurate consumer lag
+- Handles real-time notifications efficiently
+
+**List-Based System (DEPRECATED)**:
+- `aggregation:queue` - Unused legacy accumulation
+- No longer monitored for system health
+- Marked for future removal
 
 ### Key Features
 
@@ -386,6 +413,34 @@ batch:finalized:{epochId}                          # Finalized batches with meta
 batch:{epochId}:part:{partId}:status                # Part processing status
 epoch:{epochId}:parts:completed                     # Completed parts count
 epoch:{epochId}:parts:total                         # Total parts count
+
+# NEW: Stream-Based Queue System (ACTIVE)
+stream:aggregation:notifications                  # Primary operational queue
+epoch:{epochId}:parts:ready                        # Ready flag for aggregation
+aggregation:queue                                  # DEPRECATED: List-based unused system
+```
+
+### Epoch ID Handling (UPDATED - October 24, 2025)
+```
+# Epoch IDs now properly formatted in all components:
+# Format: Integer (23646205) NOT Scientific Notation (2.3646205e+07)
+
+# Monitored via enhanced FormatEpochID() utility:
+pkgs/utils/epoch_formatter.go                      # Comprehensive epoch formatting
+All components now handle both integer and scientific notation formats
+```
+
+### Queue Monitoring Architecture (NEW - October 24, 2025)
+```
+# Stream-Based System (ACTIVE & MONITORED):
+- stream:aggregation:notifications
+- getStreamLag() function for accurate consumer lag tracking
+- Real-time queue depth monitoring
+
+# List-Based System (DEPRECATED & UNUSED):
+- aggregation:queue (legacy system, no longer monitored)
+- 471,335 items were misleading operators
+- Marked for future removal
 ```
 
 ### Worker Monitoring
@@ -436,18 +491,30 @@ worker:aggregator:current_epoch           # Epoch being aggregated
 ## Health Indicators
 
 ### Healthy Pipeline
-- ✅ Queue depth < 100
+- ✅ Queue depth < 100 (stream-based monitoring)
 - ✅ Finalization queue < 10 batches
 - ✅ Worker heartbeats < 60s old
-- ✅ Aggregation queue < 5 epochs
+- ✅ Aggregation queue < 5 epochs (stream-based, not list-based)
 - ✅ **NEW**: Regular validator batch exchange (>= 2 validators per epoch)
 - ✅ **NEW**: Consensus determination completing (projects have majority votes)
 - ✅ **NEW**: IPFS batch retrieval succeeding
+- ✅ **UPDATED**: Queue monitoring shows actual stream lag, not unused list accumulation
+
+### Updated Queue Health Metrics (October 24, 2025)
+**Stream-Based Queue (ACTIVE)**:
+- ✅ Stream lag < 100 (actual consumer lag)
+- ✅ Processing rate consistent with throughput
+- ✅ No unbounded accumulation
+
+**List-Based Queue (DEPRECATED)**:
+- ⚠️ May show high accumulation (471,335+ items) - this is normal and ignored
+- ✅ Not used for system health assessment
 
 ### Warning Signs
-- ⚠️ Queue depth > 100 (backlog forming)
+- ⚠️ Queue depth > 100 (stream-based backlog forming)
 - ⚠️ Worker heartbeat > 60s (stale worker)
 - ⚠️ Finalization queue > 10 (workers overwhelmed)
+- ⚠️ **UPDATED**: Ignore high list-based queue accumulation (471,335+ items is normal for unused system)
 - ⚠️ **NEW**: Only 1 validator participating (no aggregation possible)
 - ⚠️ **NEW**: High vote divergence (no clear majority for projects)
 - ⚠️ **NEW**: IPFS retrieval failures for validator batches
@@ -555,6 +622,45 @@ docker exec powerloom-sequencer-validator-dequeuer-1 \
 # Possible values: 'auto', 'single', 'batch'
 SUBMISSION_FORMAT_STRATEGY=single ./dsv.sh distributed
 ```
+
+### Epoch ID Format Issues (NEW - October 24, 2025)
+```bash
+# Check epoch ID format in logs (should show integers, not scientific notation)
+./dsv.sh aggregator-logs | grep -E "epoch.*=" | tail -3
+# Expected: "epoch=23646205" not "epoch=2.3646205e+07"
+
+# Verify epoch ID formatting in monitor API
+curl "http://localhost:9091/api/v1/epochs/timeline" | jq '.epochs[0:2] | .[] | {epoch_id, status}'
+# Expected: epoch_id should be integers (23646205)
+
+# Check if FormatEpochID is being used
+docker exec <aggregator-container> grep -A5 "FormatEpochID" /app/main.go
+```
+
+#### Common Epoch ID Format Issues:
+- **Scientific Notation**: "2.3646205e+07" → Fixed to "23646205"
+- **Integer Format**: "23646205" → Already correct
+- **Mixed Formats**: All components now handle both formats consistently
+
+### Queue Monitoring Accuracy Issues (NEW - October 24, 2025)
+```bash
+# Verify accurate queue monitoring (should show stream lag, not list depth)
+curl "http://localhost:9091/api/v1/queues/status" | jq '.aggregation_queue_depth'
+# Expected: Reasonable stream-based lag, not 471,335
+
+# Check if getStreamLag function is being used
+docker exec <monitor-container> grep -A10 "getStreamLag" /app/main.go
+
+# Compare old vs new queue monitoring
+echo "Old (list-based): $(docker exec redis redis-cli LLEN aggregation:queue)"
+echo "New (stream-based): $(curl -s "http://localhost:9091/api/v1/queues/status" | jq '.aggregation_queue_depth')"
+```
+
+#### Queue Monitoring Troubleshooting:
+- **High List Count**: 471,335 items in `aggregation:queue` is normal (unused system)
+- **Stream Lag**: Should be reasonable (< 100 for healthy system)
+- **Monitor API**: Now shows accurate stream-based metrics
+- **Architecture**: Clear distinction between active stream-based and deprecated list-based systems
 
 #### Conversion Troubleshooting
 - **Auto Strategy**: Automatically detects and converts submission formats

@@ -18,6 +18,7 @@ import (
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/ipfs"
 	rediskeys "github.com/powerloom/snapshot-sequencer-validator/pkgs/redis"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/submissions"
+	"github.com/powerloom/snapshot-sequencer-validator/pkgs/utils"
 	"github.com/redis/go-redis/v9"
 	"github.com/sirupsen/logrus"
 )
@@ -788,7 +789,7 @@ func (a *Aggregator) aggregateEpoch(epochIDStr string) {
 	// 1. Add to batches timeline
 	pipe.ZAdd(a.ctx, a.keyBuilder.MetricsBatchesTimeline(), redis.Z{
 		Score:  float64(timestamp),
-		Member: fmt.Sprintf("aggregated:%s", epochIDStr),
+		Member: fmt.Sprintf("aggregated:%s", utils.FormatEpochID(epochIDStr)),
 	})
 
 	// 2. Store aggregated batch metrics with TTL

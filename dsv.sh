@@ -49,6 +49,7 @@ show_usage() {
     echo "  restart               - Restart all services"
     echo "  status                - Show service status"
     echo "  clean                 - Stop and remove all containers/volumes"
+    echo "  clean-queue          - Clean up stale aggregation queue items"
     echo ""
     echo "Monitoring:"
     echo "  dashboard     - Open dashboard in browser (http://localhost:9091/swagger)"
@@ -642,6 +643,15 @@ case "${1:-}" in
         ;;
     clean)
         clean_all
+        ;;
+    clean-queue)
+        print_color "$YELLOW" "Cleaning up stale aggregation queue..."
+        if [ -f "scripts/cleanup_stale_queue.sh" ]; then
+            ./scripts/cleanup_stale_queue.sh
+        else
+            print_color "$RED" "Error: cleanup_stale_queue.sh script not found"
+            exit 1
+        fi
         ;;
     stream-info)
         show_stream_info
