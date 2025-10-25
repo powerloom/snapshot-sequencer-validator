@@ -297,9 +297,11 @@ func (sw *StateWorker) aggregateCurrentMetrics(ctx context.Context) {
 	// Get recent activity counts from timelines
 	nowTS := time.Now().Unix()
 	oneMinuteAgo := nowTS - 60
+	fiveMinutesAgo = nowTS - 300
 
 	// Count recent epochs from timeline (both open and close events)
-	recentEpochs, err := sw.redis.ZCount(ctx, sw.keyBuilder.MetricsEpochsTimeline(),
+	var recentEpochs, recentEpochs5m int64
+	recentEpochs, err = sw.redis.ZCount(ctx, sw.keyBuilder.MetricsEpochsTimeline(),
 		strconv.FormatInt(oneMinuteAgo, 10),
 		strconv.FormatInt(nowTS, 10)).Result()
 	if err != nil {
@@ -307,8 +309,17 @@ func (sw *StateWorker) aggregateCurrentMetrics(ctx context.Context) {
 	}
 	summary["epochs_1m"] = recentEpochs
 
+	// Count recent epochs in last 5 minutes
+	recentEpochs5m, err = sw.redis.ZCount(ctx, sw.keyBuilder.MetricsEpochsTimeline(),
+		strconv.FormatInt(fiveMinutesAgo, 10),
+		strconv.FormatInt(nowTS, 10)).Result()
+	if err != nil {
+		recentEpochs5m = 0
+	}
+	summary["epochs_5m"] = recentEpochs5m
+
 	// Count recent batches from timeline (both local and aggregated)
-	var recentBatchesCount int64
+	var recentBatchesCount, recentBatches5m, recentSubmissions1m, recentSubmissions5m int64
 	recentBatchesCount, err = sw.redis.ZCount(ctx, sw.keyBuilder.MetricsBatchesTimeline(),
 		strconv.FormatInt(oneMinuteAgo, 10),
 		strconv.FormatInt(nowTS, 10)).Result()
@@ -316,6 +327,33 @@ func (sw *StateWorker) aggregateCurrentMetrics(ctx context.Context) {
 		recentBatchesCount = 0
 	}
 	summary["batches_1m"] = recentBatchesCount
+
+	// Count recent batches in last 5 minutes
+	recentBatches5m, err = sw.redis.ZCount(ctx, sw.keyBuilder.MetricsBatchesTimeline(),
+		strconv.FormatInt(fiveMinutesAgo, 10),
+		strconv.FormatInt(nowTS, 10)).Result()
+	if err != nil {
+		recentBatches5m = 0
+	}
+	summary["batches_5m"] = recentBatches5m
+
+	// Count recent submissions from timeline
+	recentSubmissions1m, err = sw.redis.ZCount(ctx, sw.keyBuilder.MetricsSubmissionsTimeline(),
+		strconv.FormatInt(oneMinuteAgo, 10),
+		strconv.FormatInt(nowTS, 10)).Result()
+	if err != nil {
+		recentSubmissions1m = 0
+	}
+	summary["submissions_1m"] = recentSubmissions1m
+
+	// Count recent submissions in last 5 minutes
+	recentSubmissions5m, err = sw.redis.ZCount(ctx, sw.keyBuilder.MetricsSubmissionsTimeline(),
+		strconv.FormatInt(fiveMinutesAgo, 10),
+		strconv.FormatInt(nowTS, 10)).Result()
+	if err != nil {
+		recentSubmissions5m = 0
+	}
+	summary["submissions_5m"] = recentSubmissions5m
 
 	// Store summary with TTL
 	summaryJSON, _ := json.Marshal(summary)
@@ -881,6 +919,12 @@ func (sw *StateWorker) aggregateCurrentEpochStatus(ctx context.Context) {
 		}
 	}
 
+	// Add default window duration if not set
+	if _, exists := currentEpochStatus["window_duration"]; !exists {
+		// Default to 20 seconds for 12-second epochs with overhead
+		currentEpochStatus["window_duration"] = 20.0
+	}
+
 	statusJSON, _ := json.Marshal(currentEpochStatus)
 	sw.redis.Set(ctx, sw.keyBuilder.MetricsCurrentEpoch(), statusJSON, 30*time.Second)
 
@@ -1028,6 +1072,12 @@ func (sw *StateWorker) aggregateCurrentEpochStatusFromTimeline(ctx context.Conte
 		if dataMarket, ok := epochInfo["data_market"]; ok {
 			currentEpochStatus["data_market"] = dataMarket
 		}
+	}
+
+	// Add default window duration if not set
+	if _, exists := currentEpochStatus["window_duration"]; !exists {
+		// Default to 20 seconds for 12-second epochs with overhead
+		currentEpochStatus["window_duration"] = 20.0
 	}
 
 	statusJSON, _ := json.Marshal(currentEpochStatus)
