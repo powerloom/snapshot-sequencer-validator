@@ -13,6 +13,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	redislib "github.com/powerloom/snapshot-sequencer-validator/pkgs/redis"
+	"github.com/powerloom/snapshot-sequencer-validator/pkgs/utils"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
 )
@@ -834,7 +835,7 @@ func (sw *StateWorker) aggregateCurrentEpochStatus(ctx context.Context) {
 	}
 
 	// Use the first active epoch as current epoch
-	currentEpochID := activeEpochs[0]
+	currentEpochID := utils.FormatEpochID(activeEpochs[0])
 	now := time.Now().Unix()
 
 	// Get epoch info
@@ -980,7 +981,7 @@ func (sw *StateWorker) aggregateCurrentEpochStatusFromTimeline(ctx context.Conte
 			}
 
 			if !hasCloseEvent {
-				currentEpochID = epochID
+				currentEpochID = utils.FormatEpochID(epochID)
 				currentEpochTimestamp = timestamp
 				epochInfo = info
 				break
@@ -995,7 +996,7 @@ func (sw *StateWorker) aggregateCurrentEpochStatusFromTimeline(ctx context.Conte
 		entry := latestEvent.Member.(string)
 		parts := strings.Split(entry, ":")
 		if len(parts) >= 2 {
-			currentEpochID = parts[1]
+			currentEpochID = utils.FormatEpochID(parts[1])
 			currentEpochTimestamp = int64(latestEvent.Score)
 			infoKey := sw.keyBuilder.MetricsEpochInfo(currentEpochID)
 			epochInfo, _ = sw.redis.HGetAll(ctx, infoKey).Result()
