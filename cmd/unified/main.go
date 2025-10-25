@@ -431,7 +431,7 @@ func main() {
 
 	// Initialize components based on flags
 	if enableDequeuer && redisClient != nil {
-		dequeuer, err := submissions.NewDequeuer(redisClient, sequencerID, cfg.ChainID, cfg.ProtocolStateContract, cfg.EnableSlotValidation)
+		dequeuer, err := submissions.NewDequeuer(redisClient, keyBuilder, sequencerID, cfg.ChainID, cfg.ProtocolStateContract, cfg.EnableSlotValidation)
 		if err != nil {
 			log.Fatalf("Failed to create dequeuer: %v", err)
 		}
@@ -859,7 +859,7 @@ func (s *UnifiedSequencer) queueSubmissionFromP2P(data []byte, topic string, pee
 				pipe := s.redisClient.Pipeline()
 
 			// 1. Add to timeline (sorted set, no TTL - pruned daily)
-			pipe.ZAdd(s.ctx, "metrics:submissions:timeline", redis.Z{
+			pipe.ZAdd(s.ctx, s.keyBuilder.MetricsSubmissionsTimeline(), redis.Z{
 				Score:  float64(timestamp),
 				Member: submissionID,
 			})

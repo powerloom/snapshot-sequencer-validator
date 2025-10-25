@@ -37,9 +37,10 @@ type MonitorAPI struct {
 // DashboardSummary provides overall system health and metrics
 type DashboardSummary struct {
 	ValidatorID        string                 `json:"validator_id"`
-	Metrics            map[string]interface{} `json:"metrics"`           // From dashboard:summary
-	CurrentStats       map[string]interface{} `json:"current_stats"`     // From stats:current
-	RecentActivity     map[string]interface{} `json:"recent_activity"`   // 1m and 5m activity
+	SystemMetrics      map[string]interface{} `json:"system_metrics"`      // Rates, totals, current counts
+	ParticipationStats map[string]interface{} `json:"participation_stats"` // 24h participation/inclusion metrics
+	CurrentStatus      map[string]interface{} `json:"current_status"`      // Real-time status (epoch, queues)
+	RecentActivity     map[string]interface{} `json:"recent_activity"`     // 1m and 5m activity
 	Timestamp          time.Time              `json:"timestamp"`
 }
 
@@ -177,50 +178,67 @@ func (m *MonitorAPI) DashboardSummary(c *gin.Context) {
 		json.Unmarshal([]byte(currentEpochJSON), &currentEpoch)
 	}
 
-	response := DashboardSummary{
-		ValidatorID:    getEnv("SEQUENCER_ID", "validator1"),
-		Metrics:        summary,
-		CurrentStats:   statsMap,
-		RecentActivity: make(map[string]interface{}),
-		Timestamp:      time.Now(),
-	}
-
-	// Add recent activity from pre-aggregated summary
+	// System Metrics: rates, totals, and current counts
+	systemMetrics := make(map[string]interface{})
 	if summary != nil {
-		response.RecentActivity["submissions_1m"] = summary["submissions_1m"]
-		response.RecentActivity["submissions_5m"] = summary["submissions_5m"]
-		response.RecentActivity["epochs_1m"] = summary["epochs_1m"]
-		response.RecentActivity["epochs_5m"] = summary["epochs_5m"]
-		response.RecentActivity["batches_1m"] = summary["batches_1m"]
-		response.RecentActivity["batches_5m"] = summary["batches_5m"]
+		// Core system metrics from state-tracker
+		systemMetrics["active_validators"] = summary["active_validators"]
+		systemMetrics["batch_rate"] = summary["batch_rate"]
+		systemMetrics["batches_total"] = summary["batches_total"]
+		systemMetrics["epoch_rate"] = summary["epoch_rate"]
+		systemMetrics["epochs_total"] = summary["epochs_total"]
+		systemMetrics["processed_submissions"] = summary["processed_submissions"]
+		systemMetrics["submission_rate"] = summary["submission_rate"]
+		systemMetrics["submissions_total"] = summary["submissions_total"]
+		systemMetrics["submissions_queue"] = summary["submissions_queue"]
+		systemMetrics["measurement_duration"] = summary["measurement_duration"]
+		systemMetrics["updated_at"] = summary["updated_at"]
 	}
 
-	// Add participation metrics (state-tracker should provide these)
-	if participation != nil {
-		response.Metrics["participation_rate"] = participation["participation_rate"]
-		response.Metrics["inclusion_rate"] = participation["inclusion_rate"]
-		response.Metrics["level1_batches_24h"] = participation["level1_batches_24h"]
-		response.Metrics["level2_inclusions_24h"] = participation["level2_inclusions_24h"]
-		response.Metrics["epochs_participated_24h"] = participation["epochs_participated_24h"]
-		response.Metrics["epochs_total_24h"] = participation["epochs_total_24h"]
-	} else {
-		// Fallback: set to 0 if state-tracker hasn't calculated yet
-		response.Metrics["level1_batches_24h"] = 0
-		response.Metrics["level2_inclusions_24h"] = 0
-		response.Metrics["participation_rate"] = 0
-		response.Metrics["inclusion_rate"] = 0
-	}
-
-	// Remove validation_rate - it's not a real metric
-	delete(response.Metrics, "validation_rate")
-	delete(response.Metrics, "validations_total")
-
-	// Add current epoch status
+	// Current Status: real-time status (epoch, phase, queues)
+	currentStatus := make(map[string]interface{})
 	if currentEpoch != nil {
-		response.CurrentStats["current_epoch_id"] = currentEpoch["epoch_id"]
-		response.CurrentStats["current_epoch_phase"] = currentEpoch["phase"]
-		response.CurrentStats["epoch_time_remaining"] = currentEpoch["time_remaining_seconds"]
-		response.CurrentStats["epoch_window_duration"] = currentEpoch["window_duration"]
+		currentStatus["current_epoch_id"] = currentEpoch["epoch_id"]
+		currentStatus["current_epoch_phase"] = currentEpoch["phase"]
+		currentStatus["epoch_time_remaining"] = currentEpoch["time_remaining_seconds"]
+		currentStatus["epoch_window_duration"] = currentEpoch["window_duration"]
+	}
+
+	// Add queue depths to current status
+	currentStatus["submission_queue_depth"] = submissionQueueDepth
+	currentStatus["finalization_queue_depth"] = finalizationQueueDepth
+	currentStatus["aggregation_queue_depth"] = aggregationQueueDepth
+
+	// Recent Activity: 1m and 5m activity
+	recentActivity := make(map[string]interface{})
+	if summary != nil {
+		recentActivity["submissions_1m"] = summary["submissions_1m"]
+		recentActivity["submissions_5m"] = summary["submissions_5m"]
+		recentActivity["epochs_1m"] = summary["epochs_1m"]
+		recentActivity["epochs_5m"] = summary["epochs_5m"]
+		recentActivity["batches_1m"] = summary["batches_1m"]
+		recentActivity["batches_5m"] = summary["batches_5m"]
+	}
+
+	response := DashboardSummary{
+		ValidatorID:        getEnv("SEQUENCER_ID", "validator1"),
+		SystemMetrics:      systemMetrics,
+		ParticipationStats: participation,
+		CurrentStatus:      currentStatus,
+		RecentActivity:     recentActivity,
+		Timestamp:          time.Now(),
+	}
+
+	// Fallback: ensure participation stats exist if not provided by state-tracker
+	if response.ParticipationStats == nil {
+		response.ParticipationStats = map[string]interface{}{
+			"participation_rate":     0,
+			"inclusion_rate":         0,
+			"level1_batches_24h":     0,
+			"level2_inclusions_24h":  0,
+			"epochs_participated_24h": 0,
+			"epochs_total_24h":       0,
+		}
 	}
 
 	c.JSON(http.StatusOK, response)

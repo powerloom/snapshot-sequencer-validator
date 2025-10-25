@@ -9,6 +9,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/redis/go-redis/v9"
+	redislib "github.com/powerloom/snapshot-sequencer-validator/pkgs/redis"
 	customcrypto "github.com/powerloom/snapshot-sequencer-validator/pkgs/crypto"
 	log "github.com/sirupsen/logrus"
 )
@@ -16,6 +17,7 @@ import (
 // Dequeuer handles processing of queued submissions
 type Dequeuer struct {
 	redisClient          *redis.Client
+	keyBuilder           *redislib.KeyBuilder
 	sequencerID          string
 	eip712Verifier       *customcrypto.EIP712Verifier
 	slotValidator        *SlotValidator
@@ -36,7 +38,7 @@ type DequeuerStats struct {
 }
 
 // NewDequeuer creates a new submission dequeuer
-func NewDequeuer(redisClient *redis.Client, sequencerID string, chainID int64, protocolStateContract string, enableSlotValidation bool) (*Dequeuer, error) {
+func NewDequeuer(redisClient *redis.Client, keyBuilder *redislib.KeyBuilder, sequencerID string, chainID int64, protocolStateContract string, enableSlotValidation bool) (*Dequeuer, error) {
 	verifier, err := customcrypto.NewEIP712Verifier(chainID, protocolStateContract)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create EIP-712 verifier: %w", err)
@@ -46,6 +48,7 @@ func NewDequeuer(redisClient *redis.Client, sequencerID string, chainID int64, p
 
 	return &Dequeuer{
 		redisClient:          redisClient,
+		keyBuilder:           keyBuilder,
 		sequencerID:          sequencerID,
 		eip712Verifier:       verifier,
 		slotValidator:        slotValidator,
@@ -128,7 +131,7 @@ func (d *Dequeuer) ProcessSubmission(submission *SnapshotSubmission, submissionI
 	pipe := d.redisClient.Pipeline()
 
 	// 1. Add to validations timeline (sorted set, no TTL - pruned daily)
-	pipe.ZAdd(context.Background(), "metrics:validations:timeline", redis.Z{
+	pipe.ZAdd(context.Background(), d.keyBuilder.MetricsValidationsTimeline(), redis.Z{
 		Score:  float64(timestamp),
 		Member: submissionID,
 	})

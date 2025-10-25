@@ -15,6 +15,7 @@ import (
 	"github.com/powerloom/snapshot-sequencer-validator/config"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/consensus"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/submissions"
+	redislib "github.com/powerloom/snapshot-sequencer-validator/pkgs/redis"
 	"github.com/redis/go-redis/v9"
 	"github.com/google/uuid"
 	"github.com/libp2p/go-libp2p"
@@ -213,7 +214,11 @@ func main() {
 	chainID := int64(11155111) // Sepolia testnet
 	protocolStateContract := "0xE88E5f64AEB483d7057645326AdDFA24A3B312DF"
 	enableSlotValidation := false // Disabled for testing
-	dequeuer, err := submissions.NewDequeuer(redisClient, sequencerID, chainID, protocolStateContract, enableSlotValidation)
+
+	// Create keyBuilder for dequeuer
+	keyBuilder := redislib.NewKeyBuilder(protocolStateContract, "0xae32c4FA72E2e5F53ed4D214E4aD049286Ded16f")
+
+	dequeuer, err := submissions.NewDequeuer(redisClient, keyBuilder, sequencerID, chainID, protocolStateContract, enableSlotValidation)
 	if err != nil {
 		log.Fatalf("Failed to create dequeuer: %v", err)
 	}

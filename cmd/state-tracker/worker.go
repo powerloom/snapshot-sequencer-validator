@@ -714,7 +714,7 @@ func (sw *StateWorker) aggregateParticipationMetrics(ctx context.Context) {
 		// Try to get from environment as fallback
 		sequencerID = os.Getenv("SEQUENCER_ID")
 		if sequencerID == "" {
-			sequencerID = "unified-sequencer-1" // final fallback
+			sequencerID = "validator1" // final fallback - match monitor-api default
 		}
 	}
 
