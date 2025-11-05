@@ -883,7 +883,7 @@ func (g *P2PGateway) Start() error {
 		}
 	}
 
-	// Monitor connected peers
+	// Monitor connected peers with enhanced diagnostics
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
@@ -894,11 +894,34 @@ func (g *P2PGateway) Start() error {
 				return
 			case <-ticker.C:
 				peers := g.p2pHost.Host.Network().Peers()
+				submissionPeers := g.submissionTopic.ListPeers()
+				batchPeers := g.batchTopic.ListPeers()
+				presencePeers := g.presenceTopic.ListPeers()
+
+				// Enhanced peer diagnostics
+				peerIDs := make([]string, len(peers))
+				for i, p := range peers {
+					peerIDs[i] = p.ShortString()
+				}
+
 				log.WithFields(logrus.Fields{
-					"connected_peers": len(peers),
-					"submission_peers": len(g.submissionTopic.ListPeers()),
-					"batch_peers": len(g.batchTopic.ListPeers()),
-				}).Info("P2P Gateway status")
+					"connected_peers":     len(peers),
+					"peer_ids":           peerIDs,
+					"submission_peers":   len(submissionPeers),
+					"batch_peers":        len(batchPeers),
+					"presence_peers":     len(presencePeers),
+					"bootstrap_config":   len(g.config.BootstrapPeers),
+					"dht_ready":          g.p2pHost.DHT != nil,
+					"pubsub_ready":       g.p2pHost.Pubsub != nil,
+				}).Info("P2P Gateway status - DIAGNOSTIC")
+
+				// Alert if no peers connected but bootstrap configured
+				if len(peers) == 0 && len(g.config.BootstrapPeers) > 0 {
+					log.WithFields(logrus.Fields{
+						"bootstrap_count": len(g.config.BootstrapPeers),
+						"bootstrap_peers": g.config.BootstrapPeers,
+					}).Error("NO PEERS CONNECTED - Check bootstrap connectivity")
+				}
 			}
 		}
 	}()

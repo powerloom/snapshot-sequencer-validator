@@ -99,10 +99,21 @@ func NewP2PHost(ctx context.Context, cfg *config.Settings) (*P2PHost, error) {
 		return nil, fmt.Errorf("failed to bootstrap DHT: %w", err)
 	}
 
-	// Connect to bootstrap if configured
+	// Connect to all bootstrap peers for resilience
 	if len(cfg.BootstrapPeers) > 0 {
-		if err := connectToBootstrap(hostCtx, h, cfg.BootstrapPeers[0]); err != nil {
-			log.WithError(err).Warn("Failed to connect to bootstrap peer - will continue with discovery")
+		log.Infof("Attempting to connect to %d bootstrap peers", len(cfg.BootstrapPeers))
+		connectedCount := 0
+		for i, bootstrapAddr := range cfg.BootstrapPeers {
+			if err := connectToBootstrap(hostCtx, h, bootstrapAddr); err != nil {
+				log.WithError(err).Warnf("Failed to connect to bootstrap peer %d: %s", i+1, bootstrapAddr)
+			} else {
+				connectedCount++
+				log.Infof("Successfully connected to bootstrap peer %d: %s", i+1, bootstrapAddr)
+			}
+		}
+		log.Infof("Connected to %d/%d bootstrap peers", connectedCount, len(cfg.BootstrapPeers))
+		if connectedCount == 0 {
+			log.Warn("Failed to connect to any bootstrap peers - will continue with discovery only")
 		}
 	}
 

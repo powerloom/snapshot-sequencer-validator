@@ -385,6 +385,8 @@ func loadBootstrapPeers() {
 	// Clean the peer addresses
 	for i := range SettingsObj.BootstrapPeers {
 		SettingsObj.BootstrapPeers[i] = strings.TrimSpace(strings.Trim(SettingsObj.BootstrapPeers[i], "\""))
+		// DEBUG: Log the raw bootstrap addresses to identify corruption point
+		log.Printf("DEBUG: Bootstrap peer[%d]: '%s'", i, SettingsObj.BootstrapPeers[i])
 	}
 }
 
