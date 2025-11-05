@@ -528,7 +528,15 @@ func (a *Aggregator) aggregateWorkerParts(epochIDStr string, totalParts int) {
 	// Create finalized batch from aggregated worker results
 	finalizedBatch := a.createFinalizedBatchFromParts(epochID, aggregatedResults)
 
-	// Store as our local finalized batch
+	if a.ipfsClient != nil {
+		if cid, err := a.ipfsClient.StoreFinalizedBatch(a.ctx, finalizedBatch); err == nil {
+			finalizedBatch.BatchIPFSCID = cid
+		} else {
+			log.WithError(err).Warn("Failed to store finalized batch in IPFS, continuing without CID")
+		}
+	}
+
+	// Store as our local finalized batch (now with BatchIPFSCID populated)
 	finalizedKey := a.keyBuilder.FinalizedBatch(strconv.FormatUint(epochID, 10))
 	finalizedData, _ := json.Marshal(finalizedBatch)
 	if err := a.redisClient.Set(a.ctx, finalizedKey, finalizedData, 24*time.Hour).Err(); err != nil {
@@ -687,15 +695,8 @@ func (a *Aggregator) createFinalizedBatchFromParts(epochID uint64, projectSubmis
 		SubmissionDetails: submissionDetails,
 	}
 
-	// Store in IPFS if available
-	if a.ipfsClient != nil {
-		if cid, err := a.ipfsClient.StoreFinalizedBatch(a.ctx, finalizedBatch); err == nil {
-			log.WithFields(logrus.Fields{
-				"epoch": epochID,
-				"cid":   cid,
-			}).Info("📦 Stored finalized batch in IPFS")
-		}
-	}
+	// Note: IPFS storage is now handled in the calling function (aggregateWorkerParts)
+	// to ensure BatchIPFSCID is set before Redis persistence
 
 	return finalizedBatch
 }
@@ -767,6 +768,18 @@ func (a *Aggregator) aggregateEpoch(epochIDStr string) {
 
 	// Aggregate all batches
 	aggregatedBatch := a.createAggregatedBatch(ourBatch, incomingKeys)
+
+	// Store in IPFS before Redis to ensure BatchIPFSCID is populated
+	if a.ipfsClient != nil {
+		if cid, err := a.ipfsClient.StoreFinalizedBatch(a.ctx, &aggregatedBatch); err == nil {
+			aggregatedBatch.BatchIPFSCID = cid
+			log.WithField("cid", cid).Info("Stored aggregated batch in IPFS")
+		} else {
+			log.WithError(err).Warn("Failed to store aggregated batch in IPFS, continuing without CID")
+		}
+	}
+
+	// Store aggregated batch (now with BatchIPFSCID populated if IPFS was available)
 	aggregatedData, _ := json.Marshal(aggregatedBatch)
 	if err := a.redisClient.Set(a.ctx, aggregatedKey, aggregatedData, 24*time.Hour).Err(); err != nil {
 		log.WithError(err).Error("Failed to store aggregated batch")
@@ -1010,16 +1023,8 @@ func (a *Aggregator) createAggregatedBatch(ourBatch *consensus.FinalizedBatch, i
 		log.Debugf("  Validator %s contributed to aggregation", validatorID)
 	}
 
-	// Store aggregated batch to IPFS if available
-	if a.ipfsClient != nil {
-		if cid, err := a.ipfsClient.StoreFinalizedBatch(a.ctx, &aggregated); err == nil {
-			aggregated.BatchIPFSCID = cid // Store CID in batch for monitoring
-			log.WithFields(logrus.Fields{
-				"epoch": aggregated.EpochId,
-				"cid":   cid,
-			}).Info("Aggregator: Stored aggregated batch to IPFS")
-		}
-	}
+	// Note: IPFS storage is now handled in the calling function (aggregateEpoch)
+	// to ensure BatchIPFSCID is set before Redis persistence
 
 	// Set validator count
 	aggregated.ValidatorCount = len(validatorViews)
