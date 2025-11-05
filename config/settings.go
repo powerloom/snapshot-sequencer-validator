@@ -375,10 +375,11 @@ func loadBootstrapPeers() {
 			SettingsObj.BootstrapPeers = strings.Split(peersStr, ",")
 		}
 	} else {
-		// Fallback to single BOOTSTRAP_MULTIADDR (backward compatibility)
-		singlePeer := getEnv("BOOTSTRAP_MULTIADDR", "")
-		if singlePeer != "" {
-			SettingsObj.BootstrapPeers = []string{singlePeer}
+		// Fallback to BOOTSTRAP_MULTIADDR (backward compatibility)
+		multiPeer := getEnv("BOOTSTRAP_MULTIADDR", "")
+		if multiPeer != "" {
+			// Support comma-separated bootstrap addresses in BOOTSTRAP_MULTIADDR
+			SettingsObj.BootstrapPeers = strings.Split(multiPeer, ",")
 		}
 	}
 
