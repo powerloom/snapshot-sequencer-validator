@@ -366,8 +366,14 @@ func loadDataMarkets() error {
 
 // loadBootstrapPeers loads bootstrap peer addresses
 func loadBootstrapPeers() {
+	// DEBUG: Show what environment variables are actually set
+	bootstrapPeersEnv := getEnv("BOOTSTRAP_PEERS", "")
+	bootstrapMultiEnv := getEnv("BOOTSTRAP_MULTIADDR", "")
+	log.Printf("DEBUG: BOOTSTRAP_PEERS env: '%s'", bootstrapPeersEnv)
+	log.Printf("DEBUG: BOOTSTRAP_MULTIADDR env: '%s'", bootstrapMultiEnv)
+
 	// Try BOOTSTRAP_PEERS first (can be JSON array or comma-separated)
-	peersStr := getEnv("BOOTSTRAP_PEERS", "")
+	peersStr := bootstrapPeersEnv
 	if peersStr != "" {
 		if strings.HasPrefix(peersStr, "[") {
 			json.Unmarshal([]byte(peersStr), &SettingsObj.BootstrapPeers)
@@ -376,7 +382,7 @@ func loadBootstrapPeers() {
 		}
 	} else {
 		// Fallback to BOOTSTRAP_MULTIADDR (backward compatibility)
-		multiPeer := getEnv("BOOTSTRAP_MULTIADDR", "")
+		multiPeer := bootstrapMultiEnv
 		if multiPeer != "" {
 			// Support comma-separated bootstrap addresses in BOOTSTRAP_MULTIADDR
 			SettingsObj.BootstrapPeers = strings.Split(multiPeer, ",")
@@ -386,9 +392,9 @@ func loadBootstrapPeers() {
 	// Clean the peer addresses
 	for i := range SettingsObj.BootstrapPeers {
 		SettingsObj.BootstrapPeers[i] = strings.TrimSpace(strings.Trim(SettingsObj.BootstrapPeers[i], "\""))
-		// DEBUG: Log the raw bootstrap addresses to identify corruption point
 		log.Printf("DEBUG: Bootstrap peer[%d]: '%s'", i, SettingsObj.BootstrapPeers[i])
 	}
+	log.Printf("DEBUG: Total bootstrap peers: %d", len(SettingsObj.BootstrapPeers))
 }
 
 // loadFullNodeAddresses loads full node addresses
