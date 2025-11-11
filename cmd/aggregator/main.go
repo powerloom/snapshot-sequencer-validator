@@ -1135,15 +1135,17 @@ func (a *Aggregator) reportMetrics() {
 		case <-a.ctx.Done():
 			return
 		case <-ticker.C:
-			// Count aggregated batches using ActiveEpochs set
-			activeEpochs, _ := a.redisClient.SMembers(a.ctx, a.keyBuilder.ActiveEpochs()).Result()
-
+			// Count aggregated batches using timeline entries (matches monitoring API)
+			// This counts all finalized batches, not just active ones
 			aggregatedCount := 0
-			for _, epochID := range activeEpochs {
-				aggregatedKey := a.keyBuilder.BatchAggregated(epochID)
-				exists, err := a.redisClient.Exists(a.ctx, aggregatedKey).Result()
-				if err == nil && exists > 0 {
-					aggregatedCount++
+			timelineKey := a.keyBuilder.MetricsBatchesTimeline()
+			// Count entries with "aggregated:" prefix in timeline
+			timelineEntries, err := a.redisClient.ZRange(a.ctx, timelineKey, 0, -1).Result()
+			if err == nil {
+				for _, entry := range timelineEntries {
+					if strings.HasPrefix(entry, "aggregated:") {
+						aggregatedCount++
+					}
 				}
 			}
 
