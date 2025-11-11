@@ -880,7 +880,7 @@ func (s *UnifiedSequencer) queueSubmissionFromP2P(data []byte, topic string, pee
 			pipe.Expire(s.ctx, fmt.Sprintf("metrics:hourly:%s:submissions", hour), 2*time.Hour)
 
 			// 4. Add to submissions timeline
-			timestamp := time.Now().Unix()
+			timestamp = time.Now().Unix()
 			pipe.ZAdd(s.ctx, s.keyBuilder.MetricsSubmissionsTimeline(), redis.Z{
 				Score:  float64(timestamp),
 				Member: fmt.Sprintf("received:%s:%d", submissionID, timestamp),
