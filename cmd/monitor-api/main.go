@@ -460,7 +460,7 @@ func (m *MonitorAPI) RecentTimeline(c *gin.Context) {
 		minutes = 5
 	}
 
-	// Validate event type
+	// Validate event type and map to correct timeline names
 	validTypes := map[string]bool{
 		"submission": true,
 		"validation": true,
@@ -471,8 +471,21 @@ func (m *MonitorAPI) RecentTimeline(c *gin.Context) {
 		eventType = "submission"
 	}
 
+	// Map event types to actual timeline key names
+	timelineType := eventType
+	switch eventType {
+	case "submission":
+		timelineType = "submissions"
+	case "validation":
+		timelineType = "validations"
+	case "epoch":
+		timelineType = "epochs"
+	case "batch":
+		timelineType = "batches"
+	}
+
 	// Use namespaced timeline key
-	timelineKey := fmt.Sprintf("%s:%s:timeline:%s", kb.ProtocolState, kb.DataMarket, eventType)
+	timelineKey := fmt.Sprintf("%s:%s:metrics:%s:timeline", kb.ProtocolState, kb.DataMarket, timelineType)
 	now := time.Now().Unix()
 	start := now - int64(minutes*60)
 
