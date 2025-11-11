@@ -553,6 +553,18 @@ func (g *P2PGateway) handleSubmissionMessages(sub *pubsub.Subscription, topicNam
 			counter.Add(float64(len(msg.Data)))
 		}
 
+		// Write to submissions timeline
+		timestamp := time.Now().Unix()
+		timelineKey := g.keyBuilder.MetricsSubmissionsTimeline()
+		submissionID := fmt.Sprintf("peer-%s-%d", msg.ReceivedFrom.ShortString(), timestamp)
+
+		if err := g.redisClient.ZAdd(g.ctx, timelineKey, redis.Z{
+			Score:  float64(timestamp),
+			Member: fmt.Sprintf("received:%s:%d", submissionID, timestamp),
+		}).Err(); err != nil {
+			log.WithError(err).Error("Failed to write submission to timeline")
+		}
+
 		// Route to Redis for dequeuer processing (namespaced by protocol:market)
 		queueKey := g.keyBuilder.SubmissionQueue()
 		queueDepthBefore, _ := g.redisClient.LLen(g.ctx, queueKey).Result()
