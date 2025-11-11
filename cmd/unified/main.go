@@ -879,7 +879,14 @@ func (s *UnifiedSequencer) queueSubmissionFromP2P(data []byte, topic string, pee
 			pipe.HIncrBy(s.ctx, fmt.Sprintf("metrics:hourly:%s:submissions", hour), "total", 1)
 			pipe.Expire(s.ctx, fmt.Sprintf("metrics:hourly:%s:submissions", hour), 2*time.Hour)
 
-			// 4. Publish state change event
+			// 4. Add to submissions timeline
+			timestamp := time.Now().Unix()
+			pipe.ZAdd(s.ctx, s.keyBuilder.MetricsSubmissionsTimeline(), redis.Z{
+				Score:  float64(timestamp),
+				Member: fmt.Sprintf("received:%s:%d", submissionID, timestamp),
+			})
+
+			// 5. Publish state change event
 			pipe.Publish(s.ctx, "state:change", fmt.Sprintf("submission:received:%s", submissionID))
 
 				// Execute pipeline (ignore errors - monitoring is non-critical)

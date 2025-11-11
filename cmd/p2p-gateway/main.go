@@ -739,13 +739,32 @@ func (g *P2PGateway) handleIncomingBatches() {
 				log.WithError(err).Error("Failed to add epoch to ActiveEpochs set")
 			}
 
-			// Track validator batch activity for monitoring
-			validatorBatchesKey := fmt.Sprintf("metrics:validator:%s:batches", validatorID)
+			// Track validator batch activity for monitoring with timeline entries
 			timestamp := time.Now().Unix()
-			g.redisClient.ZAdd(g.ctx, validatorBatchesKey, redis.Z{
+
+			// Pipeline for monitoring metrics
+			monitoringPipe := g.redisClient.Pipeline()
+
+			// 1. Add to batches timeline for validator batch
+			monitoringPipe.ZAdd(g.ctx, g.keyBuilder.MetricsBatchesTimeline(), redis.Z{
 				Score:  float64(timestamp),
-				Member: epochID,
+				Member: fmt.Sprintf("validator:%s:%s", validatorID, epochIDStr),
 			})
+
+			// 2. Track validator batch activity for monitoring
+			validatorBatchesKey := g.keyBuilder.MetricsValidatorBatches(validatorID)
+			monitoringPipe.ZAdd(g.ctx, validatorBatchesKey, redis.Z{
+				Score:  float64(timestamp),
+				Member: epochIDStr,
+			})
+
+			// 3. Publish state change
+			monitoringPipe.Publish(g.ctx, "state:change", fmt.Sprintf("batch:validator:%s:%s", validatorID, epochIDStr))
+
+			// Execute pipeline (ignore errors - monitoring is non-critical)
+			if _, err := monitoringPipe.Exec(g.ctx); err != nil {
+				log.Debugf("Failed to write validator batch monitoring metrics: %v", err)
+			}
 
 			// Format epoch ID as integer to avoid scientific notation
 			epochFormatted := utils.FormatEpochID(epochID)
@@ -914,6 +933,24 @@ func (g *P2PGateway) Start() error {
 					"dht_ready":          g.p2pHost.DHT != nil,
 					"pubsub_ready":       g.p2pHost.Pubsub != nil,
 				}).Info("P2P Gateway status - DIAGNOSTIC")
+
+				// Add timeline entries for peer discovery events
+				timestamp := time.Now().Unix()
+				monitoringPipe := g.redisClient.Pipeline()
+
+				// Add peer discovery event to timeline
+				monitoringPipe.ZAdd(g.ctx, g.keyBuilder.MetricsBatchesTimeline(), redis.Z{
+					Score:  float64(timestamp),
+					Member: fmt.Sprintf("peer_discovery:%d:%d", len(peers), timestamp),
+				})
+
+				// Publish state change for peer discovery
+				monitoringPipe.Publish(g.ctx, "state:change", fmt.Sprintf("peers:connected:%d", len(peers)))
+
+				// Execute pipeline (ignore errors - monitoring is non-critical)
+				if _, err := monitoringPipe.Exec(g.ctx); err != nil {
+					log.Debugf("Failed to write peer discovery monitoring metrics: %v", err)
+				}
 
 				// Alert if no peers connected but bootstrap configured
 				if len(peers) == 0 && len(g.config.BootstrapPeers) > 0 {

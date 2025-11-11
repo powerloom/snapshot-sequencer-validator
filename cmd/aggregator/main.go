@@ -1056,28 +1056,44 @@ func (a *Aggregator) monitorFinalizedBatches() {
 				log.Debug("Reset queued epochs tracking")
 			}
 
-			// Check for new finalized batches using active epochs tracking
-			// Get active epochs from the ActiveEpochs set
-			activeEpochs, err := a.redisClient.SMembers(a.ctx, a.keyBuilder.ActiveEpochs()).Result()
+			// Check for finalized batches using timeline entries (matches monitoring API)
+			// Get recent aggregated entries from timeline
+			timelineKey := a.keyBuilder.MetricsBatchesTimeline()
+			timelineEntries, err := a.redisClient.ZRevRangeByScoreWithScores(a.ctx, timelineKey, &redis.ZRangeBy{
+				Min:   strconv.FormatInt(time.Now().Unix()-3600, 10), // Last hour
+				Max:   "+inf",
+				Count: 1000,
+			}).Result()
 			if err != nil {
-				log.WithError(err).Debug("Failed to get active epochs")
+				log.WithError(err).Debug("Failed to get timeline entries")
 				continue
 			}
 
-			// Construct finalized batch keys for active epochs
-			keys := make([]string, 0, len(activeEpochs))
-			for _, epochID := range activeEpochs {
-				finalizedKey := a.keyBuilder.FinalizedBatch(epochID)
-				// Check if the finalized batch exists
-				exists, err := a.redisClient.Exists(a.ctx, finalizedKey).Result()
-				if err == nil && exists > 0 {
-					keys = append(keys, finalizedKey)
+			// Count aggregated entries and get active epochs from timeline
+			finalizedCount := 0
+			keys := make([]string, 0)
+			for _, entry := range timelineEntries {
+				if strings.HasPrefix(entry.Member.(string), "aggregated:") {
+					finalizedCount++
+					epochID := strings.TrimPrefix(entry.Member.(string), "aggregated:")
+					// Check if the aggregated batch exists
+					aggregatedKey := a.keyBuilder.BatchAggregated(epochID)
+					exists, err := a.redisClient.Exists(a.ctx, aggregatedKey).Result()
+					if err == nil && exists > 0 {
+						keys = append(keys, aggregatedKey)
+					}
 				}
 			}
 
 			newBatchesFound := 0
-			// Process each active epoch directly
-			for _, epochID := range activeEpochs {
+			// Process each recent aggregated epoch from timeline
+			for _, entry := range timelineEntries {
+				if !strings.HasPrefix(entry.Member.(string), "aggregated:") {
+					continue
+				}
+
+				epochID := strings.TrimPrefix(entry.Member.(string), "aggregated:")
+
 				// Skip if already queued this session
 				if queuedEpochs[epochID] {
 					continue
@@ -1114,10 +1130,10 @@ func (a *Aggregator) monitorFinalizedBatches() {
 				}
 			}
 
-			if len(activeEpochs) > 0 {
+			if len(timelineEntries) > 0 {
 				log.WithFields(logrus.Fields{
-					"active_epochs": len(activeEpochs),
-					"finalized_batches": len(keys),
+					"active_epochs": len(timelineEntries),
+					"finalized_batches": finalizedCount,
 					"new_queued": newBatchesFound,
 					"already_tracked": len(queuedEpochs) - newBatchesFound,
 				}).Debug("Monitor check completed")
