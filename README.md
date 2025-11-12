@@ -1,6 +1,57 @@
 # Powerloom Decentralized Snapshot Sequencer and Validator
 
-Refer to the [wiki](https://github.com/powerloom/snapshot-sequencer-validator/wiki) for more information.
+## 🚀 Quick Start
+
+For a complete guide on deploying and running a DSV node, see the **[DSV Node Setup Guide](docs/DSV_NODE_SETUP.md)**.
+
+## Quick Commands
+
+```bash
+# Clone and setup
+git clone https://github.com/powerloom/snapshot-sequencer-validator.git
+cd snapshot-sequencer-validator
+cp .env.example .env
+
+# Start services (with monitoring)
+./dsv.sh start
+
+# View status
+./dsv.sh status
+
+# Access monitoring dashboard
+./dsv.sh dashboard
+```
+
+## Features
+
+### EIP-712 Signature Verification and Slot Validation
+
+The snapshot sequencer implements EIP-712 signature verification for submissions to ensure authenticity and integrity.
+
+#### Key Features
+- Cryptographic signature verification using EIP-712 standard
+- Signature-based snapshotter address recovery
+- Optional slot validation against protocol state cache
+
+#### Environment Variable: ENABLE_SLOT_VALIDATION
+- **Purpose**: Enable optional validation of submission slots against protocol state
+- **Default**: false
+- **Requirement**: Requires protocol-state-cacher to be deployed
+
+```bash
+ENABLE_SLOT_VALIDATION=true
+```
+
+### Enhanced P2P Gateway Submission Monitoring
+
+The p2p-gateway includes enhanced submission entity ID generation with detailed monitoring capabilities.
+
+#### Enhanced Entity IDs
+- **New Format**: `received:{epochID}:{slotID}:{projectID}:{timestamp}:{peerID}`
+- **Legacy Format**: `received:peer-{peer-truncated}-{timestamp}:{timestamp}` (backward compatible)
+- **Automatic Detection**: System automatically determines format based on message content
+
+For comprehensive documentation, see the **[DSV Node Setup Guide](docs/DSV_NODE_SETUP.md)**.
 
 ## EIP-712 Signature Verification and Slot Validation
 

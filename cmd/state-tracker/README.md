@@ -1,17 +1,15 @@
-# State Tracker Service
+# State Tracker Worker
 
-The State Tracker service maintains the current and historical state of all entities in the DSV system. It tracks state transitions for epochs, submissions, and validators, providing efficient query APIs with deterministic aggregation capabilities.
+The State Tracker Worker is a **background service** that prepares pre-aggregated datasets for the Monitor API. It does **NOT** provide REST endpoints - it only runs background aggregation workers and exports Prometheus metrics.
 
-## Features
+## Primary Functionality
 
-- **State Management**: Tracks state transitions for epochs, submissions, and validators
-- **Deterministic Aggregation**: Uses Redis set operations instead of expensive SCAN operations for improved performance
-- **Efficient Indexing**: Uses Redis sorted sets, hashes, and sets for fast queries
-- **Event-Driven**: Subscribes to events from the Event Emitter
-- **REST API**: Provides comprehensive query endpoints
-- **Prometheus Metrics**: Exports metrics for monitoring
-- **Historical Data**: Maintains timeline of state changes
-- **Backward Compatibility**: Graceful fallback mechanisms for older data formats
+- **Dataset Preparation**: Pre-aggregates dashboard data, statistics, and metrics for Monitor API consumption
+- **Event Processing**: Subscribes to Redis pub/sub channels to count state changes
+- **Periodic Aggregation**: Runs automated workers to prepare hourly, daily, and metrics summaries
+- **Data Pruning**: Automatically cleans up old timeline data to maintain Redis performance
+- **Participation Metrics**: Calculates validator participation and inclusion rates
+- **Current Epoch Status**: Tracks current epoch phase and timing information
 
 ## State Transitions
 
@@ -30,31 +28,36 @@ received → validating → validated/rejected → finalized
 offline → online → active → inactive
 ```
 
-## API Endpoints
+## Data Outputs (For Monitor API)
 
-### Epoch Endpoints
-- `GET /api/v1/state/epoch/{id}` - Get epoch state and metadata
-- `GET /api/v1/state/epochs/active` - List active epochs
-- `GET /api/v1/state/epochs/timeline` - Get epoch state transitions
+The worker prepares these datasets that are consumed by the Monitor API:
 
-### Submission Endpoints
-- `GET /api/v1/state/submission/{id}` - Get submission state
-- `GET /api/v1/state/submissions/active` - List active submissions
-- `GET /api/v1/state/submissions/project/{projectId}` - Get submissions by project
-- `GET /api/v1/state/submissions/snapshotter/{snapshotter}` - Get submissions by snapshotter
+### Dashboard Summary
+- **`{protocol}:{market}:dashboard:summary`** - Current metrics with 1m/5m rates
+  - submissions_total, submissions_queue, processed_submissions
+  - epochs_total, batches_total, active_validators
+  - submission_rate, epoch_rate, batch_rate
+  - epochs_1m, batches_1m, submissions_1m (recent activity)
 
-### Validator Endpoints
-- `GET /api/v1/state/validator/{id}` - Get validator state
-- `GET /api/v1/state/validators/active` - List active validators
-- `GET /api/v1/state/validators/by-stake` - Get validators sorted by stake
-- `GET /api/v1/state/validator/{id}/epochs` - Get validator's epoch participation
-- `GET /api/v1/state/validator/{id}/batches` - Get validator's submitted batches
+### Current Epoch Status
+- **`{protocol}:{market}:metrics:current_epoch`** - Current epoch state
+  - epoch_id, phase, time_remaining_seconds
+  - submissions_received, window_duration
 
-### Timeline Endpoint
-- `GET /api/v1/state/timeline?type={epoch|submission|validator}&start={unix}&end={unix}` - Get state transition timeline
+### Participation Metrics
+- **`{protocol}:{market}:metrics:participation`** - Validator participation rates
+  - epochs_participated_24h, participation_rate
+  - level1_batches_24h, level2_inclusions_24h, inclusion_rate
 
-### Health Check
-- `GET /api/v1/health` - Service health status
+### Statistics (Auto-expiring)
+- **`{protocol}:{market}:stats:current`** - Hourly stats (60s TTL)
+- **`{protocol}:{market}:stats:hourly:{timestamp}`** - Per-hour breakdown
+- **`{protocol}:{market}:stats:daily`** - 24-hour summary
+
+### Redis Keys Prepared
+- Uses **deterministic aggregation** with `ActiveEpochs()`, `EpochValidators({epochId})`, `EpochProcessed({epochId})` sets
+- Maintains timeline data for epochs, batches, and submissions
+- Prunes data older than 24 hours automatically
 
 ## Redis Index Structure
 
@@ -114,19 +117,12 @@ REDIS_PORT=6379
 REDIS_PASSWORD=
 REDIS_DB=0
 
-# Service configuration
-STATE_TRACKER_API_PORT=8085
+# Service configuration (API port NOT used - only metrics)
 STATE_TRACKER_METRICS_PORT=9094
-STATE_TRACKER_RETENTION_DAYS=7
 
 # Protocol configuration
-PROTOCOL=aave
-MARKET=mainnet
-
-# Metrics integration
-METRICS_ENABLED=true
-METRICS_HOST=localhost
-METRICS_PORT=8086
+PROTOCOL_STATE_CONTRACT=your_contract_address
+DATA_MARKET_ADDRESSES="market1_address"
 
 # Logging
 LOG_LEVEL=info
@@ -148,11 +144,11 @@ make state-tracker
 # Build image
 docker build -f cmd/state-tracker/Dockerfile -t dsv-state-tracker .
 
-# Run container
-docker run -p 8085:8085 -p 9094:9094 \
+# Run container (only metrics port needed)
+docker run -p 9094:9094 \
   -e REDIS_HOST=redis \
-  -e PROTOCOL=aave \
-  -e MARKET=mainnet \
+  -e PROTOCOL_STATE_CONTRACT=your_contract \
+  -e DATA_MARKET_ADDRESSES=your_market \
   dsv-state-tracker
 ```
 
@@ -166,9 +162,9 @@ docker-compose -f docker-compose.monitoring.yml up -d state-tracker
 
 The service exports Prometheus metrics on port 9094:
 
-- `state_tracker_transitions_total` - Total number of state transitions by entity type
-- `state_tracker_active_entities` - Number of active entities by type
-- `state_tracker_query_duration_seconds` - Duration of state queries
+- `state_tracker_changes_processed_total` - Total number of state changes by entity type
+- `state_tracker_datasets_generated_total` - Total number of datasets generated
+- `state_tracker_aggregation_duration_seconds` - Duration of aggregation operations
 
 ## Development
 
@@ -183,24 +179,19 @@ go test -race ./cmd/state-tracker/...
 
 ### Example Queries
 
-Get active epochs:
+Check metrics (Prometheus format):
 ```bash
-curl http://localhost:8085/api/v1/state/epochs/active
+curl http://localhost:9094/metrics
 ```
 
-Get submission state:
+Check dashboard summary (via Monitor API):
 ```bash
-curl http://localhost:8085/api/v1/state/submission/{submission_id}
+curl http://localhost:8086/api/v1/dashboard/summary
 ```
 
-Get validator statistics:
+Check current epoch status (via Monitor API):
 ```bash
-curl http://localhost:8085/api/v1/state/validator/{validator_id}
-```
-
-Get timeline for last hour:
-```bash
-curl "http://localhost:8085/api/v1/state/timeline?type=epoch&start=$(date -v-1H +%s)&end=$(date +%s)"
+curl http://localhost:8086/api/v1/current-epoch
 ```
 
 ## Performance Improvements (October 2025)
@@ -226,8 +217,9 @@ curl "http://localhost:8085/api/v1/state/timeline?type=epoch&start=$(date -v-1H 
 
 ## Architecture Notes
 
-1. **No SCAN Operations**: All queries use direct key access or set/sorted set operations
-2. **Event-Driven Updates**: Subscribes to Redis Pub/Sub channels for real-time updates
-3. **Atomic State Updates**: Uses Redis pipelines for atomic multi-key updates
-4. **Automatic Cleanup**: Old state data is automatically removed after retention period
-5. **Graceful Shutdown**: Properly closes connections and completes pending operations
+1. **Background Worker Only**: No HTTP API server - only metrics and Redis data preparation
+2. **Event Processing**: Subscribes to Redis Pub/Sub "state:change" channel for real-time counting
+3. **Multiple Aggregation Workers**: Runs concurrent workers for different time periods (metrics, hourly, daily, pruning)
+4. **Monitor API Integration**: Data is consumed by Monitor API, not directly by users
+5. **Deterministic Aggregation**: Uses ActiveEpochs(), EpochValidators(), and EpochProcessed() sets
+6. **Graceful Shutdown**: Properly closes connections and stops all workers

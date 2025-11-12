@@ -795,7 +795,6 @@ Monitor P2P connectivity and message passing:
 ## Related Documentation
 
 - [Entity ID Reference Guide](../../specs/ENTITY_ID_REFERENCE_GUIDE.md) - Comprehensive entity ID format reference and usage guide
-- [VPS_DEPLOYMENT.md](../VPS_DEPLOYMENT.md) - Deployment and operations guide
 - [PHASE_2_CURRENT_WORK.md](../../PHASE_2_CURRENT_WORK.md) - Architecture overview
 - [PROJECT_STATUS.md](../../PROJECT_STATUS.md) - Implementation status
 
