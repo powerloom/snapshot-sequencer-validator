@@ -298,10 +298,12 @@ For enhanced network resilience, configure multiple bootstrap nodes:
 
 ```bash
 # In .env file
-# Format: /ip4/<IP>/tcp/<PORT>/p2p/<PEER_ID>
-BOOTSTRAP_MULTIADDR=/ip4/192.168.1.100/tcp/9100/p2p/12D3KooWEXAMPLE1
-BOOTSTRAP_MULTIADDR=/ip4/192.168.1.101/tcp/9100/p2p/12D3KooWEXAMPLE2
+# Format: comma-separated list of multiaddrs
+BOOTSTRAP_PEERS=/ip4/192.168.1.100/tcp/9100/p2p/12D3KooWEXAMPLE1,/ip4/192.168.1.101/tcp/9100/p2p/12D3KooWEXAMPLE2
 ```
+
+> [!TIP]
+> For a single bootstrap node, just use the single multiaddr in the BOOTSTRAP_PEERS variable, without the comma.
 
 ---
 
