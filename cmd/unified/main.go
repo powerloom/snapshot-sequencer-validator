@@ -951,10 +951,10 @@ func (s *UnifiedSequencer) runDequeuerWorker(workerID int) {
 				if p, ok := wrappedSubmission["peer_id"].(string); ok {
 					peerID = p
 				}
-				if data, ok := wrappedSubmission["data"].([]byte); ok {
-					submissionData = data
-				} else if dataStr, ok := wrappedSubmission["data"].(string); ok {
+				if dataStr, ok := wrappedSubmission["data"].(string); ok {
 					submissionData = []byte(dataStr)
+				} else if data, ok := wrappedSubmission["data"].([]byte); ok {
+					submissionData = data
 				} else {
 					submissionData = rawSubmissionData // fallback to raw data
 				}
@@ -1167,7 +1167,9 @@ func (s *UnifiedSequencer) processBatchPart(epochID uint64, batchID int, totalBa
 
 	// Track batch part as processing
 	epochStr := fmt.Sprintf("%d", epochID)
-	workers.TrackBatchPart(s.redisClient, epochStr, batchID, "processing")
+	if err := workers.TrackBatchPart(s.redisClient, epochStr, batchID, "processing"); err != nil {
+		log.WithError(err).Error("Failed to track batch part as processing")
+	}
 
 	// Process each project in this batch part
 	// Projects now contain ALL CIDs with vote counts, we need to select winners
@@ -1255,7 +1257,9 @@ func (s *UnifiedSequencer) processBatchPart(epochID uint64, batchID int, totalBa
 	}
 
 	// Mark batch part as completed
-	workers.TrackBatchPart(s.redisClient, epochStr, batchID, "completed")
+	if err := workers.TrackBatchPart(s.redisClient, epochStr, batchID, "completed"); err != nil {
+		log.WithError(err).Error("Failed to track batch part as completed")
+	}
 
 	// Add monitoring metrics for part creation
 	timestamp := time.Now().Unix()
@@ -1301,7 +1305,9 @@ func (s *UnifiedSequencer) processBatchPart(epochID uint64, batchID int, totalBa
 	completed, _ := s.redisClient.Incr(ctx, completedKey).Result()
 
 	// Check if all parts are complete
-	workers.UpdateBatchPartsProgress(s.redisClient, s.config.ProtocolStateContract, s.config.DataMarketAddresses[0], epochStr, int(completed), totalBatches)
+	if err := workers.UpdateBatchPartsProgress(s.redisClient, s.config.ProtocolStateContract, s.config.DataMarketAddresses[0], epochStr, int(completed), totalBatches); err != nil {
+		log.WithError(err).Error("Failed to update batch parts progress")
+	}
 
 	// Log batch contents for operator visibility
 	log.Infof("✅ Processed batch part %d/%d for epoch %d: %d projects finalized",

@@ -255,7 +255,10 @@ func NewP2PGateway(cfg *config.Settings) (*P2PGateway, error) {
 	emitterConfig.Protocol = cfg.ProtocolStateContract
 	emitterConfig.DataMarket = dataMarket
 	eventEmitter := events.NewEmitter(emitterConfig)
-	eventEmitter.Start()
+	if err := eventEmitter.Start(); err != nil {
+		cancel()
+		return nil, fmt.Errorf("failed to start event emitter: %w", err)
+	}
 
 	// Initialize event publisher for Redis
 	publisherConfig := &events.PublisherConfig{
@@ -267,15 +270,23 @@ func NewP2PGateway(cfg *config.Settings) (*P2PGateway, error) {
 		cancel()
 		return nil, fmt.Errorf("failed to create event publisher: %w", err)
 	}
-	eventPublisher.Start()
+	if err := eventPublisher.Start(); err != nil {
+		cancel()
+		return nil, fmt.Errorf("failed to start event publisher: %w", err)
+	}
 
 	// Subscribe emitter events to publisher
-	eventEmitter.Subscribe(&events.Subscriber{
+	if err := eventEmitter.Subscribe(&events.Subscriber{
 		ID: "redis-publisher",
 		Handler: func(event *events.Event) {
-			eventPublisher.Publish(event)
+			if err := eventPublisher.Publish(event); err != nil {
+				log.WithError(err).Error("Failed to publish event")
+			}
 		},
-	})
+	}); err != nil {
+		cancel()
+		return nil, fmt.Errorf("failed to subscribe emitter events: %w", err)
+	}
 
 	// Initialize metrics registry
 	metricsConfig := &metrics.CollectorConfig{
@@ -491,13 +502,15 @@ func (g *P2PGateway) monitorStreamHealth() {
 				"active_consumers": ourGroup.Consumers,
 				"last_id":         info.LastGeneratedID,
 			})
-			g.eventEmitter.Emit(&events.Event{
+			if err := g.eventEmitter.Emit(&events.Event{
 				Type:      events.EventStreamHealth,
 				Severity:  events.SeverityDebug,
 				Component: "p2p-gateway",
 				Timestamp: time.Now(),
 				Payload:   json.RawMessage(payload),
-			})
+			}); err != nil {
+				log.WithError(err).Error("Failed to emit stream health event")
+			}
 		}
 	}
 }
@@ -547,13 +560,15 @@ func (g *P2PGateway) cleanupOldStreamEntries() {
 					"remaining_entries": info.Length - result,
 					"stream_key":        streamKey,
 				})
-				g.eventEmitter.Emit(&events.Event{
+				if err := g.eventEmitter.Emit(&events.Event{
 					Type:      events.EventStreamCleanup,
 					Severity:  events.SeverityInfo,
 					Component: "p2p-gateway",
 					Timestamp: time.Now(),
 					Payload:   json.RawMessage(payload),
-				})
+				}); err != nil {
+					log.WithError(err).Error("Failed to emit stream cleanup event")
+				}
 			}
 		}
 	}
@@ -690,13 +705,15 @@ func (g *P2PGateway) handleSubmissionMessages(sub *pubsub.Subscription, topicNam
 			"topic_name": topicName,
 			"size":       len(msg.Data),
 		})
-		g.eventEmitter.Emit(&events.Event{
+		if err := g.eventEmitter.Emit(&events.Event{
 			Type:      events.EventSubmissionReceived,
 			Severity:  events.SeverityInfo,
 			Component: "p2p-gateway",
 			Timestamp: time.Now(),
 			Payload:   json.RawMessage(payload),
-		})
+		}); err != nil {
+			log.WithError(err).Error("Failed to emit submission received event")
+		}
 
 		// Update metrics
 		submissionsCounter := g.metricsRegistry.GetOrCreate(metrics.MetricConfig{
@@ -755,7 +772,7 @@ func (g *P2PGateway) handleSubmissionMessages(sub *pubsub.Subscription, topicNam
 		// Wrap submission data with peer ID metadata for dequeuer
 		submissionWithMetadata := map[string]interface{}{
 			"peer_id": msg.ReceivedFrom.String(),
-			"data":    msg.Data,
+			"data":    string(msg.Data),
 		}
 		wrappedData, _ := json.Marshal(submissionWithMetadata)
 
@@ -792,13 +809,15 @@ func (g *P2PGateway) handleSubmissionMessages(sub *pubsub.Subscription, topicNam
 				"current_depth":  int(queueDepthBefore) + 1,
 				"previous_depth": int(queueDepthBefore),
 			})
-			g.eventEmitter.Emit(&events.Event{
+			if err := g.eventEmitter.Emit(&events.Event{
 				Type:      events.EventQueueDepthChanged,
 				Severity:  events.SeverityDebug,
 				Component: "p2p-gateway",
 				Timestamp: time.Now(),
 				Payload:   json.RawMessage(queuePayload),
-			})
+			}); err != nil {
+				log.WithError(err).Error("Failed to emit queue depth changed event")
+			}
 		}
 	}
 }
@@ -851,14 +870,16 @@ func (g *P2PGateway) handleIncomingBatches() {
 			"peer_id":      msg.ReceivedFrom.String(),
 			"size":         len(msg.Data),
 		})
-		g.eventEmitter.Emit(&events.Event{
+		if err := g.eventEmitter.Emit(&events.Event{
 			Type:      events.EventValidatorBatchReceived,
 			Severity:  events.SeverityInfo,
 			Component: "p2p-gateway",
 			Timestamp: time.Now(),
 			EpochID:   utils.FormatEpochID(epochID),
 			Payload:   json.RawMessage(batchPayload),
-		})
+		}); err != nil {
+			log.WithError(err).Error("Failed to emit validator batch received event")
+		}
 
 		// Update metrics
 		batchesCounter := g.metricsRegistry.GetOrCreate(metrics.MetricConfig{
@@ -1177,10 +1198,14 @@ func (g *P2PGateway) Stop() {
 
 	// Stop event emitter and publisher
 	if g.eventEmitter != nil {
-		g.eventEmitter.Stop()
+		if err := g.eventEmitter.Stop(); err != nil {
+			log.WithError(err).Error("Failed to stop event emitter")
+		}
 	}
 	if g.eventPublisher != nil {
-		g.eventPublisher.Stop()
+		if err := g.eventPublisher.Stop(); err != nil {
+			log.WithError(err).Error("Failed to stop event publisher")
+		}
 	}
 
 	g.cancel()
