@@ -17,7 +17,6 @@ COPY . .
 
 # Build all binaries
 RUN go build -o bin/unified cmd/unified/main.go
-RUN go build -o bin/sequencer-consensus-test cmd/sequencer-consensus-test/main.go
 RUN go build -o bin/listener cmd/listener/main.go 2>/dev/null || true
 RUN go build -o bin/dequeuer cmd/dequeuer/main.go 2>/dev/null || true
 RUN go build -o bin/finalizer cmd/finalizer/main.go 2>/dev/null || true
@@ -36,13 +35,12 @@ WORKDIR /app
 
 # Copy binaries from builder
 COPY --from=builder /app/bin/unified /usr/local/bin/unified
-COPY --from=builder /app/bin/sequencer-consensus-test /usr/local/bin/sequencer-consensus-test
 
 # Copy ABI files
 COPY --from=builder /app/abi /app/abi
 
 # Make binaries executable and set proper ownership
-RUN chmod +x /usr/local/bin/unified /usr/local/bin/sequencer-consensus-test && \
+RUN chmod +x /usr/local/bin/unified && \
     chown -R sequencer:sequencer /app/abi
 
 # Switch to non-root user

@@ -9,9 +9,7 @@ bin/
 # Binary files (never commit these)
 # Main binaries
 unified
-sequencer-consensus-test
 cmd/unified/unified
-cmd/sequencer-consensus-test/sequencer-consensus-test
 
 # Any file without extension in cmd directories
 cmd/*/[!.]*

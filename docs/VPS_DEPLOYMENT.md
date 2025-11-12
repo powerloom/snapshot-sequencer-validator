@@ -531,7 +531,6 @@ The `dsv.sh` script is the primary tool for managing your sequencer deployment.
 #   - bin/unified
 #   - bin/p2p-gateway
 #   - bin/aggregator
-#   - bin/sequencer-consensus-test
 ```
 
 **dashboard**: Opens monitoring dashboard in browser
