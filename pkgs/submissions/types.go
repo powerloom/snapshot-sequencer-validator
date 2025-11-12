@@ -40,6 +40,7 @@ type ProcessedSubmission struct {
 	DataMarketAddr   string
 	ProcessedAt      time.Time
 	ValidatorID      string
+	MetaData         map[string]interface{}
 }
 
 // SubmissionMetadata tracks WHO submitted WHAT for challenges/proofs

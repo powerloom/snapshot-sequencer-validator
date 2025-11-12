@@ -712,8 +712,13 @@ func (v *Validator) processQueuedSubmission(workerID int, data string) {
 	}
 	
 	// Process the submission (validation, storage, etc.)
-	if err := v.dequeuer.ProcessSubmission(&submission, submissionID); err != nil {
-		log.Errorf("Worker %d: Failed to process submission %s: %v", 
+	metaData := map[string]interface{}{
+		"worker_id":    workerID,
+		"validator_id": v.sequencerID,
+		"timestamp":    time.Now().Unix(),
+	}
+	if err := v.dequeuer.ProcessSubmission(&submission, submissionID, metaData); err != nil {
+		log.Errorf("Worker %d: Failed to process submission %s: %v",
 			workerID, submissionID, err)
 		return
 	}

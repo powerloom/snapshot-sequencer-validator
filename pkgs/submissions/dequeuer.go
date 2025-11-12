@@ -58,7 +58,7 @@ func NewDequeuer(redisClient *redis.Client, keyBuilder *redislib.KeyBuilder, seq
 }
 
 // ProcessSubmission validates and stores a submission
-func (d *Dequeuer) ProcessSubmission(submission *SnapshotSubmission, submissionID string) error {
+func (d *Dequeuer) ProcessSubmission(submission *SnapshotSubmission, submissionID string, metaData map[string]interface{}) error {
 	startTime := time.Now()
 	
 	// Check for duplicate
@@ -103,6 +103,7 @@ func (d *Dequeuer) ProcessSubmission(submission *SnapshotSubmission, submissionI
 		DataMarketAddr:  submission.DataMarket,
 		ProcessedAt:     time.Now(),
 		ValidatorID:     d.sequencerID,
+		MetaData:        metaData,
 	}
 	
 	d.submissionsMutex.Lock()
@@ -123,12 +124,54 @@ func (d *Dequeuer) ProcessSubmission(submission *SnapshotSubmission, submissionI
 	log.Debugf("Successfully processed submission %s for epoch %d, slot %d",
 		submissionID, submission.Request.EpochId, submission.Request.SlotId)
 
-	// Add monitoring metrics for validated submission
+	// Get peer ID from submission metadata if available
+	var peerID string
+	if processed.MetaData != nil {
+		if p, ok := processed.MetaData["peer_id"].(string); ok {
+			peerID = p
+		}
+	}
+
+	// Add enhanced submission timeline entry with detailed context
 	timestamp := time.Now().Unix()
-	hour := time.Now().Format("2006010215") // YYYYMMDDHH format
+	enhancedSubmissionID := fmt.Sprintf("received:%d:%d:%s:%d:%s",
+		submission.Request.EpochId,
+		submission.Request.SlotId,
+		submission.Request.ProjectId,
+		timestamp,
+		peerID)
 
 	// Pipeline for monitoring metrics
 	pipe := d.redisClient.Pipeline()
+
+	// Store in submissions timeline with enhanced format
+	pipe.ZAdd(context.Background(), d.keyBuilder.MetricsSubmissionsTimeline(), redis.Z{
+		Score:  float64(timestamp),
+		Member: enhancedSubmissionID,
+	})
+
+	// Store submission metadata for enhanced monitoring
+	metadata := map[string]interface{}{
+		"epoch_id":    submission.Request.EpochId,
+		"slot_id":     submission.Request.SlotId,
+		"project_id":  submission.Request.ProjectId,
+		"timestamp":   timestamp,
+		"cid":         submission.Request.SnapshotCid,
+		"peer_id":     peerID,
+		"entity_id":   enhancedSubmissionID,
+	}
+
+	metadataJSON, _ := json.Marshal(metadata)
+	metadataKey := d.keyBuilder.MetricsSubmissionsMetadata(enhancedSubmissionID)
+	pipe.SetEx(context.Background(), metadataKey, metadataJSON, 24*time.Hour)
+
+	log.Infof("📝 Enhanced submission timeline entry: %s (epoch=%d, slot=%d, project=%s)",
+		enhancedSubmissionID, submission.Request.EpochId, submission.Request.SlotId, submission.Request.ProjectId)
+
+	// Add monitoring metrics for validated submission
+	hour := time.Now().Format("2006010215") // YYYYMMDDHH format
+
+	// Continue with existing pipeline operations...
 
 	// 1. Add to validations timeline (sorted set, no TTL - pruned daily)
 	pipe.ZAdd(context.Background(), d.keyBuilder.MetricsValidationsTimeline(), redis.Z{

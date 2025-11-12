@@ -752,11 +752,18 @@ func (g *P2PGateway) handleSubmissionMessages(sub *pubsub.Subscription, topicNam
 			log.Infof("📝 Legacy submission timeline entry: %s (peer=%s)", entityID, msg.ReceivedFrom.ShortString())
 		}
 
+		// Wrap submission data with peer ID metadata for dequeuer
+		submissionWithMetadata := map[string]interface{}{
+			"peer_id": msg.ReceivedFrom.String(),
+			"data":    msg.Data,
+		}
+		wrappedData, _ := json.Marshal(submissionWithMetadata)
+
 		// Route to Redis for dequeuer processing (namespaced by protocol:market)
 		queueKey := g.keyBuilder.SubmissionQueue()
 		queueDepthBefore, _ := g.redisClient.LLen(g.ctx, queueKey).Result()
 
-		if err := g.redisClient.LPush(g.ctx, queueKey, msg.Data).Err(); err != nil {
+		if err := g.redisClient.LPush(g.ctx, queueKey, wrappedData).Err(); err != nil {
 			log.WithError(err).Error("Failed to push submission to Redis")
 			failedCounter := g.metricsRegistry.GetOrCreate(metrics.MetricConfig{
 				Name:   "submissions.routing.failed",

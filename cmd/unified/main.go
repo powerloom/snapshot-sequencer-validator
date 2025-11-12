@@ -939,7 +939,29 @@ func (s *UnifiedSequencer) runDequeuerWorker(workerID int) {
 			}
 
 			// Process the submission
-			submissionData := []byte(result[1])
+			rawSubmissionData := []byte(result[1])
+
+			// Check if submission is wrapped with peer ID metadata
+			var wrappedSubmission map[string]interface{}
+			var submissionData []byte
+			var peerID string
+
+			if err := json.Unmarshal(rawSubmissionData, &wrappedSubmission); err == nil && wrappedSubmission["peer_id"] != nil && wrappedSubmission["data"] != nil {
+				// This is wrapped submission with peer ID
+				if p, ok := wrappedSubmission["peer_id"].(string); ok {
+					peerID = p
+				}
+				if data, ok := wrappedSubmission["data"].([]byte); ok {
+					submissionData = data
+				} else if dataStr, ok := wrappedSubmission["data"].(string); ok {
+					submissionData = []byte(dataStr)
+				} else {
+					submissionData = rawSubmissionData // fallback to raw data
+				}
+			} else {
+				// Legacy format - no wrapper
+				submissionData = rawSubmissionData
+			}
 
 			// First try to parse as P2P batch submission
 			var p2pSubmission submissions.P2PSnapshotSubmission
@@ -962,9 +984,14 @@ func (s *UnifiedSequencer) runDequeuerWorker(workerID int) {
 						workerID, submission.Request.EpochId, submission.Request.ProjectId,
 						submission.Request.SlotId, submission.DataMarket, submission.Request.SnapshotCid)
 
+					// Prepare metadata for dequeuer
+					metaData := map[string]interface{}{
+						"peer_id": peerID,
+					}
+
 					// Process and store the submission
 					if s.dequeuer != nil {
-						if err := s.dequeuer.ProcessSubmission(submission, submissionID); err != nil {
+						if err := s.dequeuer.ProcessSubmission(submission, submissionID, metaData); err != nil {
 							// Epoch 0 heartbeats are expected to fail validation - log as debug, not error
 							if strings.Contains(err.Error(), "epoch 0 heartbeat") {
 								log.Debugf("Worker %d: Skipped epoch 0 heartbeat (P2P mesh maintenance)", workerID)
@@ -997,9 +1024,14 @@ func (s *UnifiedSequencer) runDequeuerWorker(workerID int) {
 					workerID, submission.Request.EpochId, submission.Request.ProjectId,
 					submission.Request.SlotId, submission.DataMarket, submission.Request.SnapshotCid)
 
+				// Prepare metadata for dequeuer
+				metaData := map[string]interface{}{
+					"peer_id": peerID,
+				}
+
 				// Process and store the submission
 				if s.dequeuer != nil {
-					if err := s.dequeuer.ProcessSubmission(&submission, submissionID); err != nil {
+					if err := s.dequeuer.ProcessSubmission(&submission, submissionID, metaData); err != nil {
 						// Epoch 0 heartbeats are expected to fail validation - log as debug, not error
 						if strings.Contains(err.Error(), "epoch 0 heartbeat") {
 							log.Debugf("Worker %d: Skipped epoch 0 heartbeat (P2P mesh maintenance)", workerID)
