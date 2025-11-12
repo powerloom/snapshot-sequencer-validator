@@ -1,14 +1,14 @@
-# Batch Processing Pipeline Monitoring Guide
+  # Batch Processing Pipeline Monitoring Guide
 
 ## Overview
 
-The enhanced monitoring system provides comprehensive visibility into the parallel batch processing pipeline, tracking data flow from submission collection through final aggregation.
+The monitoring system provides comprehensive visibility into the batch processing pipeline, tracking data flow from submission collection through final aggregation.
 
-The system now supports both P2PSnapshotSubmission batch format (multiple submissions per message) and single SnapshotSubmission format, with updated Redis key patterns for better organization.
+The system supports both P2PSnapshotSubmission batch format (multiple submissions per message) and single SnapshotSubmission format, with proper Redis key patterns for data organization.
 
 ## RESTful Monitor API
 
-The monitoring system now includes a complete RESTful API with 10 professional endpoints and interactive Swagger UI for comprehensive monitoring and debugging.
+The monitoring system includes a complete RESTful API with 10 endpoints and interactive Swagger UI for comprehensive monitoring and debugging.
 
 ### Accessing the Monitor API
 
@@ -68,26 +68,21 @@ All 10 endpoints are operational with real data:
 
 ### Queue Monitoring System
 
-The queue monitoring system has been enhanced to accurately reflect system health by monitoring active components rather than legacy systems.
+The queue monitoring system accurately reflects system health by monitoring active components.
 
 #### Queue Monitoring Architecture
-**Stream-Based System (ACTIVE)**:
+**Stream-Based System**:
 - `stream:aggregation:notifications` - Primary operational queue
 - Monitored via `getStreamLag()` for accurate consumer lag
 - Handles real-time notifications efficiently
 
-**List-Based System (DEPRECATED)**:
-- `aggregation:queue` - Unused legacy accumulation
-- Not monitored for system health assessment
-- Marked for future removal
-
 #### Queue Monitoring Commands:
 ```bash
-# Check accurate queue status (shows stream-based lag, not list depth)
-curl "http://localhost:8091/api/v1/queues/status" | jq '.aggregation_queue_depth'
+# Check queue status
+curl "http://localhost:9091/api/v1/queues/status" | jq '.aggregation_queue_depth'
 
 # Monitor queue health history
-curl "http://localhost:8091/api/v1/pipeline/overview" | jq '.queue_health_history'
+curl "http://localhost:9091/api/v1/pipeline/overview" | jq '.queue_health_history'
 ```
 
 ### Key Features
@@ -103,52 +98,73 @@ curl "http://localhost:8091/api/v1/pipeline/overview" | jq '.queue_health_histor
 
 ```bash
 # 1. Check overall health
-curl "http://localhost:8080/api/v1/health"
+curl "http://localhost:9091/api/v1/health"
 
 # 2. Get dashboard summary
-curl "http://localhost:8080/api/v1/dashboard/summary"
+curl "http://localhost:9091/api/v1/dashboard/summary"
 
 # 3. View recent epochs
-curl "http://localhost:8080/api/v1/epochs/timeline"
+curl "http://localhost:9091/api/v1/epochs/timeline"
 
 # 4. Check finalized batches
-curl "http://localhost:8080/api/v1/batches/finalized"
+curl "http://localhost:9091/api/v1/batches/finalized"
 
 # 5. Monitor network aggregation
-curl "http://localhost:8080/api/v1/aggregation/results"
+curl "http://localhost:9091/api/v1/aggregation/results"
 ```
 
-### Queue Monitoring Improvements
+### Aggregator Metrics Counting
 
-The queue monitoring system provides accurate consumer lag metrics by monitoring Redis streams instead of legacy list-based systems.
+The aggregator metrics reporting system correctly counts finalized batches.
+
+#### Technical Implementation:
+```go
+// Counts timeline entries with "aggregated:" prefix
+timelineKey := a.keyBuilder.MetricsBatchesTimeline(protocol, market)
+timelineEntries, err := a.redisClient.ZRange(a.ctx, timelineKey, 0, -1).Result()
+for _, entry := range timelineEntries {
+    if strings.HasPrefix(entry, "aggregated:") {
+        aggregatedCount++
+    }
+}
+```
+
+#### Verification Commands:
+```bash
+# Check aggregator metrics
+curl "http://localhost:9091/api/v1/aggregation/results" | jq '.finalized_batches'
+
+# Monitor timeline entries directly
+docker exec redis redis-cli ZRANGE "powerloom:powerloom-localnet:metrics:batches:timeline" 0 -1
+```
+
+### Queue Monitoring
+
+The queue monitoring system provides accurate consumer lag metrics by monitoring Redis streams.
 
 ```bash
-# Check accurate queue status (stream-based, not list-based)
+# Check queue status
 curl "http://localhost:9091/api/v1/queues/status"
-
-# Expected output: Reasonable stream lag (0-10), not misleading list depth (470,000+)
 ```
 
 #### Key Features:
 - Stream-based monitoring provides accurate consumer lag metrics
-- No misleading "critical" status from unused list-based queues
 - Real-time visibility into actual processing performance
 
 ### Epoch ID Formatting
 
-All epoch IDs display as integers instead of scientific notation for consistency across the system.
+All epoch IDs display as integers for consistency across the system.
 
 ```bash
 # API responses show consistent integer format
 curl "http://localhost:9091/api/v1/aggregation/results?protocol=0x3B5A0FB70ef68B5dd677C7d614dFB89961f97401&market=0xae32c4FA72E2e5F53ed4D214E4aD049286Ded16f"
 
 # Expected output: "epoch_id": "23646205" (integer)
-# Not: "epoch_id": "2.3646205e+07" (scientific notation)
 ```
 
 #### Epoch ID Handling:
-- All components handle both integer and scientific notation formats
-- Comprehensive epoch formatting utility in `pkgs/utils/epoch_formatter.go`
+- All components handle epoch ID formats consistently
+- Epoch formatting utility in `pkgs/utils/epoch_formatter.go`
 - Consistent integer display in all API responses
 
 ## Quick Start
@@ -158,16 +174,28 @@ curl "http://localhost:9091/api/v1/aggregation/results?protocol=0x3B5A0FB70ef68B
 # Check service status
 ./dsv.sh status
 
-# Monitor pipeline
-./dsv.sh monitor
+# View all logs
+./dsv.sh logs
 
 # View specific component logs
 ./dsv.sh aggregator-logs
 ./dsv.sh p2p-logs
+./dsv.sh finalizer-logs
+./dsv.sh dequeuer-logs
 ./dsv.sh event-logs
+./dsv.sh redis-logs
 
-# Access interactive Swagger UI
+# Access interactive dashboard
 ./dsv.sh dashboard
+
+# Stream debugging commands
+./dsv.sh stream-info
+./dsv.sh stream-groups
+./dsv.sh stream-dlq
+
+# Queue management
+./dsv.sh clean-queue
+./dsv.sh clean-timeline
 ```
 
 ### Advanced Monitoring
@@ -183,6 +211,15 @@ curl "http://localhost:9091/api/v1/dashboard/summary"
 
 # Verify system pipeline status
 curl "http://localhost:9091/api/v1/pipeline/overview"
+
+# Get timeline data
+curl "http://localhost:9091/api/v1/epochs/timeline"
+
+# View recent activity
+curl "http://localhost:9091/api/v1/timeline/recent"
+
+# Get daily stats
+curl "http://localhost:9091/api/v1/stats/daily"
 ```
 
 ## Pipeline Stages
@@ -230,16 +267,31 @@ The monitoring system tracks 6 distinct stages:
 
 | Command | Description |
 |---------|-------------|
-| `monitor` | Basic pipeline status |
 | `status` | Service status overview |
 | `logs [N]` | All service logs |
+| `dashboard` | Open monitoring dashboard |
 | **Component Logs** | |
 | `p2p-logs [N]` | P2P Gateway activity |
-| `aggregator-logs [N]` | Consensus/aggregation logs |
-| `finalizer-logs [N]` | Batch creation logs |
-| `dequeuer-logs [N]` | Submission processing logs |
-| `event-logs [N]` | Epoch release events |
+| `aggregator-logs [N]` | Aggregator logs |
+| `finalizer-logs [N]` | Finalizer logs |
+| `dequeuer-logs [N]` | Dequeuer logs |
+| `event-logs [N]` | Event monitor logs |
 | `redis-logs [N]` | Redis operation logs |
+| `ipfs-logs [N]` | IPFS node logs |
+
+### Stream Debugging Commands
+| Command | Description |
+|---------|-------------|
+| `stream-info` | Show Redis streams status |
+| `stream-groups` | Show consumer groups |
+| `stream-dlq` | Show dead letter queue |
+| `stream-reset` | Reset streams (dangerous!) |
+
+### Queue Management Commands
+| Command | Description |
+|---------|-------------|
+| `clean-queue` | Clean up stale aggregation queue items |
+| `clean-timeline` | Clean up timeline scientific notation entries |
 
 All log commands support optional line count (default: 100):
 ```bash
@@ -257,132 +309,31 @@ All log commands support optional line count (default: 100):
 ./scripts/monitor_pipeline.sh container-name
 ```
 
-## Consensus Monitoring Deep Dive
+## Monitoring Workflow
 
-The new consensus monitoring system provides complete visibility into how validators aggregate batches and determine local consensus. This is critical for understanding the decentralized batch aggregation process.
+```bash
+# 1. Check overall health
+curl "http://localhost:9091/api/v1/health"
 
-### Understanding Local Aggregation
+# 2. Get dashboard summary
+curl "http://localhost:9091/api/v1/dashboard/summary"
 
-**Key Concept**: Each validator maintains their own local aggregation of all received validator batches. There is NO second round of consensus - each validator's local view is their final consensus.
+# 3. View recent epochs
+curl "http://localhost:9091/api/v1/epochs/timeline"
 
-```
-Validator A receives batches from: [Val1, Val2, Val3, Val4]
-Validator B receives batches from: [Val1, Val2, Val3, Val5]
-Validator C receives batches from: [Val1, Val2, Val4, Val5]
+# 4. Check finalized batches
+curl "http://localhost:9091/api/v1/batches/finalized"
 
-Each validator aggregates their received batches independently.
-Results may differ slightly based on network conditions.
-```
+# 5. Monitor network aggregation
+curl "http://localhost:9091/api/v1/aggregation/results"
 
-### Consensus Monitoring Commands Explained
+# 6. Check queue status
+curl "http://localhost:9091/api/v1/queues/status"
 
-#### 1. `./dsv.sh consensus` - Overview Status
-Shows the current state of consensus across recent epochs:
-
-**Sample Output**:
-```
-Consensus/Aggregation Status
-============================
-
-Batch Aggregation Status
------------------------
-
-Recent Aggregation Status:
-  Epoch 172883: 4 validators, 25 projects aggregated
-  Epoch 172884: 3 validators, 18 projects aggregated
-
-Consensus Results:
-  Epoch 172883: CID=QmABC123, Merkle=a1b2c3d4..., Projects=25
-  Epoch 172884: CID=QmDEF456, Merkle=e5f6g7h8..., Projects=18
-
-Validator Batches Received:
-  4 validators across 2 epochs
+# 7. View pipeline overview
+curl "http://localhost:9091/api/v1/pipeline/overview"
 ```
 
-#### 2. `./dsv.sh aggregated-batch [epoch]` - Complete Aggregation View
-Shows the complete local aggregation for a specific epoch:
-
-**Sample Output**:
-```
-Epoch 172883 - Complete Aggregation View
-----------------------------------------
-
-INDIVIDUAL VALIDATOR BATCHES:
-
-Validator: validator_001
-   IPFS CID: QmValidator001BatchCID...
-   Merkle: a1b2c3d4e5f6...
-   Projects: 25
-   PeerID: 12D3KooW...
-   Timestamp: 1695123456
-   Project Proposals:
-     - uniswap_v3: QmUniswapCID...
-     - aave_v2: QmAaveCID...
-     - compound_v2: QmCompoundCID...
-
-Validator: validator_002
-   [Similar structure]
-
-LOCAL AGGREGATION RESULTS:
-  Total Validators Participated: 4
-  Projects with Consensus: 25
-  Last Updated: 2023-09-19T10:30:45Z
-
-DETAILED VOTE DISTRIBUTION:
-  Project: uniswap_v3
-    CID QmUniswapCID...: 4 validator(s)
-
-  Project: aave_v2
-    CID QmAaveCID123...: 3 validator(s)
-    CID QmAaveCID456...: 1 validator(s)
-
-CONSENSUS WINNERS:
-  uniswap_v3: QmUniswapCID...
-  aave_v2: QmAaveCID123...
-  compound_v2: QmCompoundCID...
-
-VALIDATOR CONTRIBUTIONS:
-  validator_001: 25 projects contributed
-  validator_002: 23 projects contributed
-  validator_003: 20 projects contributed
-```
-
-#### 3. `./dsv.sh validator-details <id> [epoch]` - Individual Validator Analysis
-Shows what a specific validator proposed and how it compared to consensus:
-
-**Sample Output**:
-```
-Validator Details: validator_001
-===============================
-
-All Batches from Validator validator_001:
-
-Epoch 172883:
-  IPFS CID: QmValidator001Epoch172883...
-  Merkle Root: a1b2c3d4e5f6g7h8i9j0...
-  Projects: 25
-  Timestamp: 1695123456
-  Project Proposals:
-    - uniswap_v3: QmUniswapCID...
-    - aave_v2: QmAaveCID123...
-    - compound_v2: QmCompoundCID...
-
-CONSENSUS COMPARISON:
-  Projects that reached consensus:
-    uniswap_v3 - ACCEPTED
-    aave_v2 - ACCEPTED
-    compound_v2 - Different CID won
-```
-
-#### 4. `./dsv.sh consensus-logs [N]` - Activity Logs
-Filters system logs to show only consensus-related activity:
-
-**Sample Output**:
-```
-INFO[2023-09-19T10:30:15Z] Broadcasted finalized batch for epoch 172883
-INFO[2023-09-19T10:30:16Z] Received batch from validator validator_002 for epoch 172883
-INFO[2023-09-19T10:30:17Z] AGGREGATION for epoch 172883: 4 validators contributed, 25 projects aggregated
-```
 
 ## Redis Keys Structure
 
@@ -420,13 +371,13 @@ submissionQueue                                     # Raw P2P submissions
 {protocol}:{market}:metrics:processing_rate         # Submissions per minute per market
 ```
 
-**Key Changes**:
-- Added {protocol}:{market} namespacing for all consensus and metric keys
-- Ensured consistent namespacing across submission and consensus tracking
-- Improved type safety for performance metrics
-- Enabled multi-market performance tracking
+**Key Features**:
+- Uses {protocol}:{market} namespacing for all consensus and metric keys
+- Ensures consistent namespacing across submission and consensus tracking
+- Provides type-safe performance metrics
+- Supports multi-market performance tracking
 
-### Window Management (Updated Format)
+### Window Management
 ```
 epoch:{market}:{epochId}:window                     # Active submission windows
 {protocol}:{market}:batch:ready:{epochId}          # Ready batches for finalization
@@ -441,33 +392,27 @@ batch:{epochId}:part:{partId}:status                # Part processing status
 epoch:{epochId}:parts:completed                     # Completed parts count
 epoch:{epochId}:parts:total                         # Total parts count
 
-# Stream-Based Queue System (ACTIVE)
+# Stream-Based Queue System
 stream:aggregation:notifications                  # Primary operational queue
 epoch:{epochId}:parts:ready                        # Ready flag for aggregation
-aggregation:queue                                  # DEPRECATED: List-based unused system
 ```
 
 ### Epoch ID Handling
 ```
 # Epoch IDs are properly formatted in all components:
-# Format: Integer (23646205) NOT Scientific Notation (2.3646205e+07)
+# Format: Integer (23646205)
 
 # Managed via FormatEpochID() utility:
-pkgs/utils/epoch_formatter.go                      # Comprehensive epoch formatting
-All components handle both integer and scientific notation formats
+pkgs/utils/epoch_formatter.go                      # Epoch formatting
+All components handle epoch ID formats consistently
 ```
 
 ### Queue Monitoring Architecture
 ```
-# Stream-Based System (ACTIVE & MONITORED):
+# Stream-Based System:
 - stream:aggregation:notifications
 - getStreamLag() function for accurate consumer lag tracking
 - Real-time queue depth monitoring
-
-# List-Based System (DEPRECATED & UNUSED):
-- aggregation:queue (legacy system, no longer monitored)
-- Contains unused accumulated items
-- Marked for future removal
 ```
 
 ### Worker Monitoring
@@ -490,11 +435,11 @@ worker:aggregator:current_epoch           # Epoch being aggregated
 {protocol}:{market}:metrics:consensus_rate      # Percentage of epochs reaching consensus
 ```
 
-**Performance Tracking Improvements**:
-- Added protocol and market context to all metrics
-- Included validator and consensus performance metrics
+**Performance Tracking Features**:
+- Includes protocol and market context in all metrics
+- Provides validator and consensus performance metrics
 - Enables granular performance analysis across different markets and protocols
-- Facilitates multi-market performance comparison
+- Supports multi-market performance comparison
 
 ## Worker Status Values
 
@@ -521,27 +466,22 @@ worker:aggregator:current_epoch           # Epoch being aggregated
 - Queue depth < 100 (stream-based monitoring)
 - Finalization queue < 10 batches
 - Worker heartbeats < 60s old
-- Aggregation queue < 5 epochs (stream-based, not list-based)
+- Aggregation queue < 5 epochs (stream-based)
 - Regular validator batch exchange (>= 2 validators per epoch)
 - Consensus determination completing (projects have majority votes)
 - IPFS batch retrieval succeeding
-- Queue monitoring shows actual stream lag, not unused list accumulation
+- Queue monitoring shows accurate stream lag
 
 ### Queue Health Metrics
-**Stream-Based Queue (ACTIVE)**:
+**Stream-Based Queue**:
 - Stream lag < 100 (actual consumer lag)
 - Processing rate consistent with throughput
 - No unbounded accumulation
-
-**List-Based Queue (DEPRECATED)**:
-- May show high accumulation (471,335+ items) - this is normal and ignored
-- Not used for system health assessment
 
 ### Warning Signs
 - Queue depth > 100 (stream-based backlog forming)
 - Worker heartbeat > 60s (stale worker)
 - Finalization queue > 10 (workers overwhelmed)
-- High list-based queue accumulation (471,335+ items is normal for unused system)
 - Only 1 validator participating (no aggregation possible)
 - High vote divergence (no clear majority for projects)
 - IPFS retrieval failures for validator batches
@@ -611,7 +551,7 @@ Monitor queue depths to determine scaling needs:
 ### No Active Windows
 ```bash
 # Check event monitor is running
-./dsv.sh event-monitor-logs
+./dsv.sh event-logs
 
 # Verify EVENT_START_BLOCK setting
 grep EVENT_START_BLOCK .env
@@ -620,26 +560,25 @@ grep EVENT_START_BLOCK .env
 ### Workers Not Visible
 Workers only appear when implemented. Current status:
 - Dequeuer workers (5 instances)
-- Finalizer workers (TODO)
-- Aggregation worker (TODO)
+- Finalizer workers and aggregation worker are not yet implemented
 
 ### Queue Backlog
 ```bash
 # Check dequeuer performance
-./dsv.sh dqr-logs | grep "Processing submission"
+./dsv.sh dequeuer-logs | grep "Processing submission"
 
 # Monitor queue depth trends
-watch -n 5 "./dsv.sh monitor | grep 'Pending'"
+curl "http://localhost:9091/api/v1/queues/status" | jq '.aggregation_queue_depth'
 ```
 
 ### Data Format Issues
-The system now handles both batch and single submission formats with advanced conversion strategies:
+The system handles both batch and single submission formats:
 ```bash
 # Check for batch format submissions
-./dsv.sh dqr-logs | grep "P2PSnapshotSubmission"
+./dsv.sh dequeuer-logs | grep "P2PSnapshotSubmission"
 
-# Check field name changes (snake_case → camelCase)
-./dsv.sh dqr-logs | grep "epochId\|projectId"
+# Check field names (camelCase format)
+./dsv.sh dequeuer-logs | grep "epochId\|projectId"
 
 # Verify conversion strategy
 docker exec powerloom-sequencer-validator-dequeuer-1 \
@@ -652,9 +591,9 @@ SUBMISSION_FORMAT_STRATEGY=single ./dsv.sh distributed
 
 ### Epoch ID Format Issues
 ```bash
-# Check epoch ID format in logs (should show integers, not scientific notation)
+# Check epoch ID format in logs (should show integers)
 ./dsv.sh aggregator-logs | grep -E "epoch.*=" | tail -3
-# Expected: "epoch=23646205" not "epoch=2.3646205e+07"
+# Expected: "epoch=23646205"
 
 # Verify epoch ID formatting in monitor API
 curl "http://localhost:9091/api/v1/epochs/timeline" | jq '.epochs[0:2] | .[] | {epoch_id, status}'
@@ -664,30 +603,19 @@ curl "http://localhost:9091/api/v1/epochs/timeline" | jq '.epochs[0:2] | .[] | {
 docker exec <aggregator-container> grep -A5 "FormatEpochID" /app/main.go
 ```
 
-#### Common Epoch ID Format Issues:
-- **Scientific Notation**: "2.3646205e+07" → Corrected to "23646205"
-- **Integer Format**: "23646205" → Already correct
-- **Mixed Formats**: All components handle both formats consistently
-
 ### Queue Monitoring Accuracy Issues
 ```bash
-# Verify accurate queue monitoring (should show stream lag, not list depth)
+# Verify queue monitoring (shows stream lag)
 curl "http://localhost:9091/api/v1/queues/status" | jq '.aggregation_queue_depth'
-# Expected: Reasonable stream-based lag, not 471,335
+# Expected: Reasonable stream-based lag
 
 # Check if getStreamLag function is being used
 docker exec <monitor-container> grep -A10 "getStreamLag" /app/main.go
-
-# Compare old vs new queue monitoring
-echo "Old (list-based): $(docker exec redis redis-cli LLEN aggregation:queue)"
-echo "New (stream-based): $(curl -s "http://localhost:9091/api/v1/queues/status" | jq '.aggregation_queue_depth')"
 ```
 
 #### Queue Monitoring Troubleshooting:
-- **High List Count**: 471,335 items in `aggregation:queue` is normal (unused system)
 - **Stream Lag**: Should be reasonable (< 100 for healthy system)
 - **Monitor API**: Shows accurate stream-based metrics
-- **Architecture**: Clear distinction between active stream-based and deprecated list-based systems
 
 #### Conversion Troubleshooting
 - **Auto Strategy**: Automatically detects and converts submission formats
@@ -695,8 +623,8 @@ echo "New (stream-based): $(curl -s "http://localhost:9091/api/v1/queues/status"
 - **Batch Strategy**: Forces batch submission parsing
 
 ##### Common Conversion Mappings
-| Old (snake_case) | New (camelCase) |
-|-----------------|----------------|
+| Field | Format |
+|-------|--------|
 | `epoch_id`     | `epochId`       |
 | `project_id`   | `projectId`     |
 | `market_id`    | `marketId`      |
@@ -714,7 +642,7 @@ echo "New (stream-based): $(curl -s "http://localhost:9091/api/v1/queues/status"
 3. Test with explicit conversion strategy
 4. Monitor metrics and queue processing
 
-**Type Conversion Improvements**:
+**Type Conversion Features**:
 - Helper functions to handle uint64 → float64 JSON unmarshaling
 - FinalizedBatches endpoint extracts:
   - Full IPFS CID
@@ -722,8 +650,6 @@ echo "New (stream-based): $(curl -s "http://localhost:9091/api/v1/queues/status"
   - Complete submission details
 - Consistent type conversion across API endpoints
 - Improved getCurrentEpochInfo to find actual current epoch
-
-**Note**: Use the most recent version of launch scripts and monitor containers for the latest conversion utilities.
 
 ### Stale Heartbeats
 Indicates worker process issues:
@@ -776,14 +702,14 @@ The combined log commands are particularly useful for debugging cross-component 
 
 | Issue | Check With | Solution |
 |-------|------------|----------|
-| Submissions not collected | `collection-logs` | Verify protocolState matches between components |
-| Finalizers idle | `finalization-logs` | Check finalization queue has batches |
-| Missing projects | `pipeline-logs` | Ensure JSON parsing matches data structure |
-| Queue buildup | `monitor` | Increase worker count or check for errors |
+| Submissions not collected | `event-logs` | Verify protocolState matches between components |
+| Finalizers idle | `finalizer-logs` | Check finalization queue has batches |
+| Missing projects | `aggregator-logs` | Ensure JSON parsing matches data structure |
+| Queue buildup | `curl api/v1/queues/status` | Increase worker count or check for errors |
 
 ## Future Enhancements
 
-Planned monitoring improvements:
+Potential monitoring improvements:
 - HTTP metrics endpoint (`/metrics`)
 - Prometheus integration
 - Grafana dashboards
@@ -793,64 +719,73 @@ Planned monitoring improvements:
 ### Consensus Troubleshooting
 
 #### No Validator Batches Received
+Check the aggregation results endpoint to see if validator batches are being received and processed:
+
 ```bash
-# Check if validator is broadcasting
-./dsv.sh consensus-logs | grep "Broadcasted finalized batch"
+# Check aggregation results for recent validator participation
+curl "http://localhost:9091/api/v1/aggregation/results"
 
-# Check P2P connectivity
-./dsv.sh listener-logs | grep -E "Connected|peer"
+# Check Redis for validator presence in recent epochs
+docker exec <container> redis-cli SMEMBERS "epoch:12345:validators"
 
-# Verify gossipsub topic subscription
-./dsv.sh listener-logs | grep "/powerloom/finalized-batches"
+# Check P2P Gateway logs for connectivity
+./dsv.sh p2p-logs | grep -E "Connected|peer"
 ```
 
 #### High Vote Divergence
-```bash
-# Check project-level vote distribution
-./dsv.sh aggregated-batch 12345
+Monitor the aggregation results to see vote distribution:
 
-# Look for inconsistent project CIDs across validators
-# This may indicate:
-# - Different submission sets received
-# - Network timing issues
-# - IPFS content differences
+```bash
+# Check aggregation results for vote distribution
+curl "http://localhost:9091/api/v1/aggregation/results" | jq '.results[]'
+
+# Look for projects with inconsistent CID votes across epochs
+curl "http://localhost:9091/api/v1/batches/finalized" | jq '.batches[] | {epoch_id, projects}'
 ```
 
 #### Validator Batches Not Aggregating
-```bash
-# Check minimum validator threshold
-./dsv.sh consensus | grep "validators contributed"
+Check if the minimum validator threshold is being met:
 
-# If < MinValidatorsForConsensus (usually 2), aggregation won't trigger
+```bash
+# Check aggregation results for validator count
+curl "http://localhost:9091/api/v1/aggregation/results"
+
 # Check Redis for validator presence
 docker exec <container> redis-cli SMEMBERS "epoch:12345:validators"
+
+# Check aggregator logs for processing issues
+./dsv.sh aggregator-logs | grep "AGGREGATION"
 ```
 
 #### IPFS Batch Retrieval Failures
+Check IPFS connectivity and retrieval:
+
 ```bash
-# Check IPFS connectivity
-./dsv.sh listener-logs | grep -E "IPFS|fetch.*batch"
+# Check IPFS logs for connectivity issues
+./dsv.sh ipfs-logs
 
-# Look for IPFS errors in consensus logs
-./dsv.sh consensus-logs | grep -E "Failed to fetch|IPFS"
-
-# Verify IPFS client configuration
+# Check IPFS client configuration
 docker exec <container> printenv | grep IPFS
+
+# Test IPFS connectivity
+docker exec <container> curl http://localhost:5001/api/v0/version
 ```
 
-#### Consensus Status Not Updating
+#### Network Issues
+Monitor P2P connectivity and message passing:
+
 ```bash
-# Check Redis consensus keys exist
-docker exec <container> redis-cli KEYS "consensus:epoch:*"
+# Check P2P Gateway logs for connectivity
+./dsv.sh p2p-logs | grep -E "Connected|peer"
 
-# Look for aggregation processing logs
-./dsv.sh consensus-logs | grep "AGGREGATION"
+# Check gossipsub topic subscriptions
+./dsv.sh p2p-logs | grep "gossipsub"
 
-# Verify periodic consensus checker is running
-./dsv.sh consensus-logs | grep "BATCH AGGREGATION STATUS"
+# Monitor aggregation processing
+./dsv.sh aggregator-logs | grep "AGGREGATION"
 ```
 
-### Consensus Monitoring Roadmap
+### Consensus Monitoring Features
 - Detailed validator performance tracking
 - Stake-weighted voting visualization
 - Cross-epoch validator reputation system
@@ -859,6 +794,23 @@ docker exec <container> redis-cli KEYS "consensus:epoch:*"
 
 ## Related Documentation
 
+- [Entity ID Reference Guide](../../specs/ENTITY_ID_REFERENCE_GUIDE.md) - Comprehensive entity ID format reference and usage guide
 - [VPS_DEPLOYMENT.md](../VPS_DEPLOYMENT.md) - Deployment and operations guide
 - [PHASE_2_CURRENT_WORK.md](../../PHASE_2_CURRENT_WORK.md) - Architecture overview
 - [PROJECT_STATUS.md](../../PROJECT_STATUS.md) - Implementation status
+
+## Entity ID Understanding
+
+For detailed information about entity ID formats, metadata, and how to interpret monitoring data, see the [Entity ID Reference Guide](../../specs/ENTITY_ID_REFERENCE_GUIDE.md). This comprehensive guide explains:
+
+- All entity ID formats (enhanced and legacy)
+- Metadata extraction and usage
+- Entity type descriptions and purposes
+- Practical examples and parsing guides
+- Troubleshooting and best practices
+
+### Key Entity ID Types
+- **Submissions**: `received:{epoch}:{slot}:{project}:{timestamp}:{peer}` - Format with rich context
+- **Validations**: `{epoch}-baseSnapshot:{validator}:{market}:{slot}-{project}:{ipfs}` - Validator contributions
+- **Batch Events**: `peer_discovery:{count}:{timestamp}`, `local:{epoch}`, `validator:{validator}:{epoch}`, `aggregated:{epoch}`
+- **Epoch Events**: `open:{epoch}`, `close:{epoch}` - Window lifecycle events

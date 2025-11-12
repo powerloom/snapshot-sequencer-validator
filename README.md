@@ -34,3 +34,56 @@ When enabled, the system will:
 - Ensure proper configuration of ENABLE_SLOT_VALIDATION
 - Have protocol-state-cacher deployed when slot validation is required
 - Monitor logs for signature verification details
+
+## Enhanced P2P Gateway Submission Monitoring
+
+The p2p-gateway now includes enhanced submission entity ID generation with detailed monitoring capabilities.
+
+### Features
+
+#### Enhanced Entity IDs
+- **New Format**: `received:{epochID}:{slotID}:{projectID}:{timestamp}:{peerID}`
+- **Legacy Format**: `received:peer-{peer-truncated}-{timestamp}:{timestamp}` (maintained for backward compatibility)
+- **Automatic Detection**: System automatically determines format based on message content
+
+#### Detailed Metadata Storage
+- Full submission metadata stored in Redis for 24 hours
+- Includes epoch ID, slot ID, project ID, peer ID, timestamp, data market, node version
+- Accessible via centralized Redis key patterns using the key builder
+
+#### Monitoring Benefits
+- **Better Attribution**: Clear mapping between submissions and epochs/slots/projects
+- **Pattern Analysis**: Enables analysis of submission patterns by project or time period
+- **Debugging Support**: Detailed context for troubleshooting submission issues
+- **Performance Metrics**: Enhanced visibility into submission processing
+
+### Implementation Details
+
+#### Entity ID Generation
+- Enhanced IDs used when message contains valid epochID, slotID, and projectID
+- Legacy fallback for malformed or incomplete messages
+- Full peer ID preservation for accurate attribution
+
+#### Metadata Storage
+- Namespaced Redis keys: `{protocol}:{dataMarket}:metrics:submissions:metadata:{entityID}`
+- 24-hour TTL for automatic cleanup
+- Centralized key management via pkgs/redis package
+
+#### Monitoring Integration
+- Enhanced logging shows detailed submission context
+- Compatible with existing monitoring infrastructure
+- Maintains existing timeline entries for backward compatibility
+
+### Usage Examples
+
+**Enhanced Entity ID:**
+```
+received:12345:678:project-alpha:1699123456:12D3KooWExamplePeerIDString
+```
+
+**Legacy Entity ID:**
+```
+received:peer-12D3KooW-1699123456:1699123456
+```
+
+This enhancement provides significantly better visibility into submission patterns and attribution while maintaining full backward compatibility with existing monitoring systems.

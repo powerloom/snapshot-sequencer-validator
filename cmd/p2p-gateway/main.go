@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -23,6 +24,171 @@ import (
 )
 
 var log = logrus.New()
+
+// min returns the minimum of two integers
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// SubmissionMessage represents the structure of incoming submission messages
+type SubmissionMessage struct {
+	Request struct {
+		SlotID      uint64 `json:"slotId"`
+		Deadline    uint64 `json:"deadline"`
+		SnapshotCid string `json:"snapshotCid"`
+		EpochID     uint64 `json:"epochId"`
+		ProjectID   string `json:"projectId"`
+	} `json:"request"`
+	Signature   string `json:"signature"`
+	Header      string `json:"header"`
+	DataMarket  string `json:"dataMarket"`
+	NodeVersion *string `json:"nodeVersion,omitempty"`
+}
+
+// SubmissionMetadata holds detailed information about a received submission
+type SubmissionMetadata struct {
+	EntityID    string `json:"entityId"`
+	EpochID     uint64 `json:"epochId"`
+	SlotID      uint64 `json:"slotId"`
+	ProjectID   string `json:"projectId"`
+	PeerID      string `json:"peerId"`
+	Timestamp   int64  `json:"timestamp"`
+	DataMarket  string `json:"dataMarket"`
+	NodeVersion string `json:"nodeVersion"`
+	MessageSize int    `json:"messageSize"`
+	TopicName   string `json:"topicName"`
+}
+
+// extractSubmissionMetadata parses message data and extracts relevant information
+func (g *P2PGateway) extractSubmissionMetadata(msgData []byte, peerID peer.ID, timestamp int64, topicName string) (*SubmissionMetadata, error) {
+	// Try to parse the message as a SubmissionMessage
+	var submissionMsg SubmissionMessage
+	if err := json.Unmarshal(msgData, &submissionMsg); err != nil {
+		// If parsing fails, return basic metadata without epoch/slot/project info
+		log.WithError(err).Debug("Failed to parse submission message, using basic metadata")
+		return &SubmissionMetadata{
+			PeerID:      peerID.String(),
+			Timestamp:   timestamp,
+			MessageSize: len(msgData),
+			TopicName:   topicName,
+		}, nil
+	}
+
+	// Extract node version safely
+	nodeVersion := ""
+	if submissionMsg.NodeVersion != nil {
+		nodeVersion = *submissionMsg.NodeVersion
+	}
+
+	return &SubmissionMetadata{
+		EpochID:     submissionMsg.Request.EpochID,
+		SlotID:      submissionMsg.Request.SlotID,
+		ProjectID:   submissionMsg.Request.ProjectID,
+		PeerID:      peerID.String(),
+		Timestamp:   timestamp,
+		DataMarket:  submissionMsg.DataMarket,
+		NodeVersion: nodeVersion,
+		MessageSize: len(msgData),
+		TopicName:   topicName,
+	}, nil
+}
+
+// generateEntityID creates an enhanced entity ID with detailed context
+func (g *P2PGateway) generateEntityID(metadata *SubmissionMetadata) (string, string) {
+	timestamp := metadata.Timestamp
+	peerID := metadata.PeerID
+
+	// Generate enhanced entity ID if we have detailed information
+	if metadata.EpochID > 0 && metadata.SlotID > 0 && metadata.ProjectID != "" {
+		enhancedID := fmt.Sprintf("received:%d:%d:%s:%d:%s",
+			metadata.EpochID, metadata.SlotID, metadata.ProjectID, timestamp, peerID)
+		return enhancedID, "enhanced"
+	}
+
+	// Fallback to legacy format for backward compatibility
+	legacyID := fmt.Sprintf("received:peer-%s-%d:%d",
+		peerID[:min(8, len(peerID))], timestamp, timestamp)
+	return legacyID, "legacy"
+}
+
+// storeSubmissionMetadata saves detailed submission metadata in Redis for later retrieval
+func (g *P2PGateway) storeSubmissionMetadata(metadata *SubmissionMetadata) error {
+	// Use centralized key builder for namespaced metadata key
+	metadataKey := g.keyBuilder.MetricsSubmissionsMetadata(metadata.EntityID)
+
+	metadataMap := map[string]interface{}{
+		"entityId":     metadata.EntityID,
+		"epochId":      metadata.EpochID,
+		"slotId":       metadata.SlotID,
+		"projectId":    metadata.ProjectID,
+		"peerId":       metadata.PeerID,
+		"timestamp":    metadata.Timestamp,
+		"dataMarket":   metadata.DataMarket,
+		"nodeVersion":  metadata.NodeVersion,
+		"messageSize":  metadata.MessageSize,
+		"topicName":    metadata.TopicName,
+		"storedAt":     time.Now().Unix(),
+	}
+
+	// Store metadata with 24 hour TTL
+	if err := g.redisClient.HMSet(g.ctx, metadataKey, metadataMap).Err(); err != nil {
+		return fmt.Errorf("failed to store submission metadata: %w", err)
+	}
+
+	if err := g.redisClient.Expire(g.ctx, metadataKey, 24*time.Hour).Err(); err != nil {
+		log.WithError(err).Warn("Failed to set TTL on submission metadata")
+	}
+
+	log.Debugf("Stored submission metadata for entity %s", metadata.EntityID)
+	return nil
+}
+
+// GetSubmissionMetadata retrieves detailed submission metadata from Redis
+func (g *P2PGateway) GetSubmissionMetadata(entityID string) (*SubmissionMetadata, error) {
+	metadataKey := g.keyBuilder.MetricsSubmissionsMetadata(entityID)
+
+	result := g.redisClient.HGetAll(g.ctx, metadataKey)
+	if result.Err() != nil {
+		if result.Err() == redis.Nil {
+			return nil, fmt.Errorf("submission metadata not found for entity: %s", entityID)
+		}
+		return nil, fmt.Errorf("failed to retrieve submission metadata: %w", result.Err())
+	}
+
+	data := result.Val()
+	if len(data) == 0 {
+		return nil, fmt.Errorf("submission metadata not found for entity: %s", entityID)
+	}
+
+	metadata := &SubmissionMetadata{}
+
+	// Parse numeric fields safely
+	if epochID, err := strconv.ParseUint(data["epochId"], 10, 64); err == nil {
+		metadata.EpochID = epochID
+	}
+	if slotID, err := strconv.ParseUint(data["slotId"], 10, 64); err == nil {
+		metadata.SlotID = slotID
+	}
+	if timestamp, err := strconv.ParseInt(data["timestamp"], 10, 64); err == nil {
+		metadata.Timestamp = timestamp
+	}
+	if messageSize, err := strconv.Atoi(data["messageSize"]); err == nil {
+		metadata.MessageSize = messageSize
+	}
+
+	// Parse string fields
+	metadata.EntityID = data["entityId"]
+	metadata.ProjectID = data["projectId"]
+	metadata.PeerID = data["peerId"]
+	metadata.DataMarket = data["dataMarket"]
+	metadata.NodeVersion = data["nodeVersion"]
+	metadata.TopicName = data["topicName"]
+
+	return metadata, nil
+}
 
 type P2PGateway struct {
 	ctx        context.Context
@@ -553,16 +719,37 @@ func (g *P2PGateway) handleSubmissionMessages(sub *pubsub.Subscription, topicNam
 			counter.Add(float64(len(msg.Data)))
 		}
 
-		// Write to submissions timeline
+		// Write to submissions timeline with enhanced entity ID generation
 		timestamp := time.Now().Unix()
 		timelineKey := g.keyBuilder.MetricsSubmissionsTimeline()
-		submissionID := fmt.Sprintf("peer-%s-%d", msg.ReceivedFrom.ShortString(), timestamp)
 
+		// Extract detailed metadata from the submission message
+		metadata, err := g.extractSubmissionMetadata(msg.Data, msg.ReceivedFrom, timestamp, topicName)
+		if err != nil {
+			log.WithError(err).Warn("Failed to extract submission metadata, using basic info")
+		}
+
+		// Generate enhanced entity ID
+		entityID, idType := g.generateEntityID(metadata)
+		metadata.EntityID = entityID
+
+		// Add entity ID to timeline
 		if err := g.redisClient.ZAdd(g.ctx, timelineKey, redis.Z{
 			Score:  float64(timestamp),
-			Member: fmt.Sprintf("received:%s:%d", submissionID, timestamp),
+			Member: entityID,
 		}).Err(); err != nil {
 			log.WithError(err).Error("Failed to write submission to timeline")
+		}
+
+		// Store detailed metadata for enhanced monitoring
+		if idType == "enhanced" {
+			if err := g.storeSubmissionMetadata(metadata); err != nil {
+				log.WithError(err).Warn("Failed to store submission metadata")
+			}
+			log.Infof("📝 Enhanced submission timeline entry: %s (epoch=%d, slot=%d, project=%s, peer=%s)",
+				entityID, metadata.EpochID, metadata.SlotID, metadata.ProjectID, msg.ReceivedFrom.ShortString())
+		} else {
+			log.Infof("📝 Legacy submission timeline entry: %s (peer=%s)", entityID, msg.ReceivedFrom.ShortString())
 		}
 
 		// Route to Redis for dequeuer processing (namespaced by protocol:market)

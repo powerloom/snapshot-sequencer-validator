@@ -207,6 +207,11 @@ func (kb *KeyBuilder) MetricsSubmissionsTimeline() string {
 	return fmt.Sprintf("%s:%s:metrics:submissions:timeline", kb.ProtocolState, kb.DataMarket)
 }
 
+// MetricsSubmissionsMetadata returns the namespaced key for submissions metadata
+func (kb *KeyBuilder) MetricsSubmissionsMetadata(entityID string) string {
+	return fmt.Sprintf("%s:%s:metrics:submissions:metadata:%s", kb.ProtocolState, kb.DataMarket, entityID)
+}
+
 // MetricsValidationsTimeline returns the namespaced key for validations timeline
 func (kb *KeyBuilder) MetricsValidationsTimeline() string {
 	return fmt.Sprintf("%s:%s:metrics:validations:timeline", kb.ProtocolState, kb.DataMarket)

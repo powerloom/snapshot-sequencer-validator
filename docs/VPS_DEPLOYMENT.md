@@ -1602,6 +1602,43 @@ docker images | grep snapshot-sequencer
 docker exec <container> grep -A5 "RedisPassword" /app/main.go
 ```
 
+## Recent Updates (November 12, 2025)
+
+### CRITICAL: Aggregator Metrics Reporting Fix (NEW - November 12, 2025)
+
+#### Critical Production Issue Resolved:
+Fixed critical bug in aggregator metrics reporting where finalized batches were being counted incorrectly.
+
+**Issue**: Aggregator metrics reporting "finalized_batches=0" despite successful batch finalizations
+- **Root Cause**: Aggregator was counting ActiveEpochs entries instead of timeline entries
+- **Impact**: Misleading metrics indicating no finalization activity
+- **Solution**: Changed from counting `ActiveEpochs` set to counting timeline entries with "aggregated:" prefix
+
+**Technical Implementation**:
+```go
+// OLD CODE: Counted ActiveEpochs (wrong)
+activeEpochs, err := a.redisClient.SMembers(a.ctx, a.keyBuilder.ActiveEpochs()).Result()
+
+// NEW CODE: Counts timeline entries (correct)
+timelineKey := a.keyBuilder.MetricsBatchesTimeline(protocol, market)
+timelineEntries, err := a.redisClient.ZRange(a.ctx, timelineKey, 0, -1).Result()
+for _, entry := range timelineEntries {
+    if strings.HasPrefix(entry, "aggregated:") {
+        aggregatedCount++
+    }
+}
+```
+
+**Impact**:
+- Now correctly counts all finalized batches stored in the timeline
+- Aligns aggregator internal metrics with monitoring API expectations
+- Provides accurate finalization activity tracking
+
+**Files Modified**:
+- `decentralized-sequencer/cmd/aggregator/main.go` lines 1138-1154
+
+---
+
 ## Recent Updates (October 24, 2025)
 
 ### CRITICAL: Redis Architecture Fixes Complete (NEW - October 24, 2025)

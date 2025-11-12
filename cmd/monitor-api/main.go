@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -88,6 +89,36 @@ type QueueStatus struct {
 	QueueName string `json:"queue_name"`
 	Depth     int64  `json:"depth"`
 	Status    string `json:"status"` // "empty", "healthy", "moderate", "high", "critical"
+}
+
+// TimelineEventMetadata contains enriched metadata for timeline events
+type TimelineEventMetadata struct {
+	EpochID        string `json:"epoch_id,omitempty"`
+	SlotID         string `json:"slot_id,omitempty"`
+	ProjectID      string `json:"project_id,omitempty"`
+	PeerID         string `json:"peer_id,omitempty"`
+	ValidatorID    string `json:"validator_id,omitempty"`
+	DataMarket     string `json:"data_market,omitempty"`
+	SubmissionType string `json:"submission_type,omitempty"` // "snapshot", "validation"
+	EventType      string `json:"event_type,omitempty"`      // "submission", "validation", "batch", "epoch"
+	IsEnhanced     bool   `json:"is_enhanced"`               // Whether entity ID uses new enhanced format
+}
+
+// EnhancedTimelineEvent represents a timeline event with enriched metadata
+type EnhancedTimelineEvent struct {
+	EntityID string                `json:"entity_id"`
+	Timestamp int64                `json:"timestamp"`
+	Time      string                `json:"time"`
+	Metadata  *TimelineEventMetadata `json:"metadata,omitempty"`
+}
+
+// EnhancedTimelineResponse is the response structure for the enhanced timeline endpoint
+type EnhancedTimelineResponse struct {
+	Type      string                  `json:"type"`
+	Minutes   int                     `json:"minutes"`
+	Count     int                     `json:"count"`
+	Events    []EnhancedTimelineEvent `json:"events"`
+	Timestamp time.Time               `json:"timestamp"`
 }
 
 func NewMonitorAPI(redisClient *redis.Client, protocol, market string) *MonitorAPI {
@@ -430,16 +461,19 @@ func (m *MonitorAPI) PipelineOverview(c *gin.Context) {
 }
 
 // @Summary Recent timeline
-// @Description Get recent events from timeline sorted sets
+// @Description Get recent events from timeline sorted sets with enriched metadata
 // @Tags timeline
 // @Produce json
 // @Param type query string false "Event type (submission, validation, epoch, batch)"
 // @Param minutes query int false "Minutes to look back (default 5)"
-// @Success 200 {object} map[string]interface{}
+// @Param include_metadata query bool false "Include detailed metadata from Redis (default true)"
+// @Success 200 {object} EnhancedTimelineResponse
 // @Router /timeline/recent [get]
 func (m *MonitorAPI) RecentTimeline(c *gin.Context) {
 	protocol := c.Query("protocol")
 	market := c.Query("market")
+	includeMetadataParam := c.DefaultQuery("include_metadata", "true")
+	includeMetadata, _ := strconv.ParseBool(includeMetadataParam)
 
 	// Use specified protocol/market or fall back to default
 	kb := m.keyBuilder
@@ -496,27 +530,78 @@ func (m *MonitorAPI) RecentTimeline(c *gin.Context) {
 	}).Result()
 
 	if err != nil {
+		log.WithError(err).WithField("timeline_key", timelineKey).Error("Failed to fetch timeline events")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Format events
-	formattedEvents := make([]map[string]interface{}, 0, len(events))
+	// Format enhanced events
+	enhancedEvents := make([]EnhancedTimelineEvent, 0, len(events))
 	for _, event := range events {
-		formattedEvents = append(formattedEvents, map[string]interface{}{
-			"entity_id": event.Member,
-			"timestamp": int64(event.Score),
-			"time":      time.Unix(int64(event.Score), 0).Format(time.RFC3339),
-		})
+		entityID := event.Member.(string)
+		timestamp := int64(event.Score)
+
+		enhancedEvent := EnhancedTimelineEvent{
+			EntityID: entityID,
+			Timestamp: timestamp,
+			Time:      time.Unix(timestamp, 0).Format(time.RFC3339),
+		}
+
+		// Parse entity ID to extract semantic information
+		parsedMetadata := parseEntityID(entityID, eventType)
+		if parsedMetadata != nil {
+			enhancedEvent.Metadata = parsedMetadata
+		}
+
+		// If metadata is requested and this is a submission, try to fetch detailed metadata
+		if includeMetadata && eventType == "submission" {
+			if detailedMetadata, err := m.fetchSubmissionMetadata(kb, entityID); err == nil && detailedMetadata != nil {
+				// Merge detailed metadata with parsed metadata, preferring detailed values
+				if enhancedEvent.Metadata == nil {
+					enhancedEvent.Metadata = detailedMetadata
+				} else {
+					// Merge fields, with detailed metadata taking precedence
+					if detailedMetadata.EpochID != "" {
+						enhancedEvent.Metadata.EpochID = detailedMetadata.EpochID
+					}
+					if detailedMetadata.SlotID != "" {
+						enhancedEvent.Metadata.SlotID = detailedMetadata.SlotID
+					}
+					if detailedMetadata.ProjectID != "" {
+						enhancedEvent.Metadata.ProjectID = detailedMetadata.ProjectID
+					}
+					if detailedMetadata.PeerID != "" {
+						enhancedEvent.Metadata.PeerID = detailedMetadata.PeerID
+					}
+					if detailedMetadata.ValidatorID != "" {
+						enhancedEvent.Metadata.ValidatorID = detailedMetadata.ValidatorID
+					}
+					if detailedMetadata.DataMarket != "" {
+						enhancedEvent.Metadata.DataMarket = detailedMetadata.DataMarket
+					}
+					if detailedMetadata.SubmissionType != "" {
+						enhancedEvent.Metadata.SubmissionType = detailedMetadata.SubmissionType
+					}
+					enhancedEvent.Metadata.IsEnhanced = detailedMetadata.IsEnhanced
+				}
+			} else if err != nil {
+				// Log error but continue without detailed metadata
+				log.WithError(err).WithField("entity_id", entityID).Debug("Failed to fetch detailed metadata")
+			}
+		}
+
+		enhancedEvents = append(enhancedEvents, enhancedEvent)
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"type":      eventType,
-		"minutes":   minutes,
-		"count":     len(formattedEvents),
-		"events":    formattedEvents,
-		"timestamp": time.Now(),
-	})
+	response := EnhancedTimelineResponse{
+		Type:      eventType,
+		Minutes:   minutes,
+		Count:     len(enhancedEvents),
+		Events:    enhancedEvents,
+		Timestamp: time.Now(),
+	}
+
+	c.JSON(http.StatusOK, response)
 }
 
 // @Summary Health check
@@ -1059,6 +1144,116 @@ func getQueueStatus(depth int) string {
 	default:
 		return "critical"
 	}
+}
+
+// parseEntityID extracts semantic information from entity ID formats
+// Supports both enhanced format (epoch:slot:project:peer) and legacy formats
+func parseEntityID(entityID string, eventType string) *TimelineEventMetadata {
+	metadata := &TimelineEventMetadata{
+		EventType: eventType,
+	}
+
+	// Enhanced format pattern: epoch:slot:project:peer_id
+	enhancedPattern := regexp.MustCompile(`^(\d+):(\d+):([a-fA-F0-9]+):([a-fA-F0-9]+)$`)
+	if matches := enhancedPattern.FindStringSubmatch(entityID); len(matches) == 5 {
+		metadata.IsEnhanced = true
+		metadata.EpochID = matches[1]
+		metadata.SlotID = matches[2]
+		metadata.ProjectID = matches[3]
+		metadata.PeerID = matches[4]
+		metadata.SubmissionType = "snapshot"
+		return metadata
+	}
+
+	// Legacy format patterns
+	switch eventType {
+	case "submission":
+		// Pattern: epoch:project_id (legacy)
+		legacyPattern := regexp.MustCompile(`^(\d+):([a-fA-F0-9]+)$`)
+		if matches := legacyPattern.FindStringSubmatch(entityID); len(matches) == 3 {
+			metadata.EpochID = matches[1]
+			metadata.ProjectID = matches[2]
+			metadata.SubmissionType = "snapshot"
+		}
+	case "validation":
+		// Pattern: epoch:project_id:validator_id (legacy)
+		validationPattern := regexp.MustCompile(`^(\d+):([a-fA-F0-9]+):([a-zA-Z0-9]+)$`)
+		if matches := validationPattern.FindStringSubmatch(entityID); len(matches) == 4 {
+			metadata.EpochID = matches[1]
+			metadata.ProjectID = matches[2]
+			metadata.ValidatorID = matches[3]
+			metadata.SubmissionType = "validation"
+		}
+	case "batch":
+		// Pattern: type:epoch_id (local:123, aggregated:123)
+		batchPattern := regexp.MustCompile(`^(local|aggregated):(.+)$`)
+		if matches := batchPattern.FindStringSubmatch(entityID); len(matches) == 3 {
+			metadata.EpochID = matches[2]
+		}
+	case "epoch":
+		// Pattern: action:epoch_id (open:123, close:123)
+		epochPattern := regexp.MustCompile(`^(open|close):(.+)$`)
+		if matches := epochPattern.FindStringSubmatch(entityID); len(matches) == 3 {
+			metadata.EpochID = matches[2]
+		}
+	}
+
+	return metadata
+}
+
+// fetchSubmissionMetadata retrieves detailed submission metadata from Redis
+func (m *MonitorAPI) fetchSubmissionMetadata(kb *keys.KeyBuilder, entityID string) (*TimelineEventMetadata, error) {
+	// Get metadata key for this entity
+	metadataKey := kb.MetricsSubmissionsMetadata(entityID)
+
+	// Try to get metadata from Redis
+	metadataJSON, err := m.redis.Get(m.ctx, metadataKey).Result()
+	if err != nil {
+		if err == redis.Nil {
+			// No metadata found, return nil without error
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to fetch submission metadata: %w", err)
+	}
+
+	// Parse metadata JSON
+	var metadata map[string]interface{}
+	if err := json.Unmarshal([]byte(metadataJSON), &metadata); err != nil {
+		return nil, fmt.Errorf("failed to parse submission metadata: %w", err)
+	}
+
+	// Convert to TimelineEventMetadata
+	result := &TimelineEventMetadata{
+		IsEnhanced: true,
+	}
+
+	// Extract known fields with type safety
+	if epochID, ok := metadata["epoch_id"].(string); ok {
+		result.EpochID = epochID
+	}
+	if slotID, ok := metadata["slot_id"].(string); ok {
+		result.SlotID = slotID
+	}
+	if projectID, ok := metadata["project_id"].(string); ok {
+		result.ProjectID = projectID
+	}
+	if peerID, ok := metadata["peer_id"].(string); ok {
+		result.PeerID = peerID
+	}
+	if validatorID, ok := metadata["validator_id"].(string); ok {
+		result.ValidatorID = validatorID
+	}
+	if dataMarket, ok := metadata["data_market"].(string); ok {
+		result.DataMarket = dataMarket
+	}
+	if submissionType, ok := metadata["submission_type"].(string); ok {
+		result.SubmissionType = submissionType
+	}
+	if eventType, ok := metadata["event_type"].(string); ok {
+		result.EventType = eventType
+	}
+
+	return result, nil
 }
 
 func getEnv(key, defaultValue string) string {
