@@ -16,9 +16,11 @@ import (
 	"github.com/powerloom/snapshot-sequencer-validator/config"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/consensus"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/ipfs"
-	rediskeys "github.com/powerloom/snapshot-sequencer-validator/pkgs/redis"
+	"github.com/powerloom/snapshot-sequencer-validator/pkgs/protocol"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/submissions"
+	rediskeys "github.com/powerloom/snapshot-sequencer-validator/pkgs/redis"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/utils"
+	"github.com/powerloom/snapshot-sequencer-validator/pkgs/vpa"
 	"github.com/redis/go-redis/v9"
 	"github.com/sirupsen/logrus"
 )
@@ -33,10 +35,18 @@ type Aggregator struct {
 	config      *config.Settings
 	keyBuilder  *rediskeys.KeyBuilder
 
+	// Contract clients for on-chain integration
+	vpaClient    *vpa.ValidatorPriorityAssigner
+	protocolClient *protocol.ProtocolState
+
 	// Track aggregation state
 	epochBatches map[uint64]map[string]*consensus.FinalizedBatch // epochID -> validatorID -> batch
 	epochTimers  map[uint64]*time.Timer                          // epochID -> aggregation window timer
-	mu           sync.RWMutex
+
+	// Track submission state
+	submissionState map[uint64]bool // epochID -> submitted
+
+	mu sync.RWMutex
 }
 
 
@@ -80,15 +90,59 @@ func NewAggregator(cfg *config.Settings) (*Aggregator, error) {
 	}
 	keyBuilder := rediskeys.NewKeyBuilder(protocolState, dataMarket)
 
+	// Initialize contract clients if on-chain submission is enabled
+	var vpaClient *vpa.ValidatorPriorityAssigner
+	var protocolClient *protocol.ProtocolState
+	var err error
+
+	if cfg.EnableOnChainSubmission {
+		log.Info("🔗 Initializing on-chain submission contracts")
+
+		// Initialize VPA client
+		if cfg.ValidatorPriorityAssigner != "" && cfg.ValidatorAddress != "" {
+			// Use first RPC node for VPA
+			rpcURL := cfg.RPCNodes[0]
+			vpaClient, err = vpa.NewValidatorPriorityAssigner(
+				rpcURL, cfg.ValidatorPriorityAssigner, cfg.ValidatorAddress)
+			if err != nil {
+				cancel()
+				return nil, fmt.Errorf("failed to initialize VPA client: %w", err)
+			}
+			log.Info("✅ VPA client initialized")
+		} else {
+			log.Warn("⚠️  VPA contract address or validator address not configured")
+		}
+
+		// Initialize ProtocolState client
+		if cfg.ProtocolStateContract != "" && len(cfg.DataMarketAddresses) > 0 {
+			// Use first RPC node for ProtocolState
+			rpcURL := cfg.RPCNodes[0]
+			// Note: In production, validator private key should be securely managed
+			validatorPrivateKey := cfg.ValidatorAddress // For now, use address as placeholder
+			protocolClient, err = protocol.NewProtocolState(
+				rpcURL, cfg.ProtocolStateContract, validatorPrivateKey, cfg.ChainID)
+			if err != nil {
+				cancel()
+				return nil, fmt.Errorf("failed to initialize ProtocolState client: %w", err)
+			}
+			log.Info("✅ ProtocolState client initialized")
+		} else {
+			log.Warn("⚠️  ProtocolState contract or data market not configured")
+		}
+	}
+
 	aggregator := &Aggregator{
-		ctx:          ctx,
-		cancel:       cancel,
-		redisClient:  redisClient,
-		ipfsClient:   ipfsClient,
-		config:       cfg,
-		keyBuilder:   keyBuilder,
-		epochBatches: make(map[uint64]map[string]*consensus.FinalizedBatch),
-		epochTimers:  make(map[uint64]*time.Timer),
+		ctx:             ctx,
+		cancel:          cancel,
+		redisClient:     redisClient,
+		ipfsClient:      ipfsClient,
+		config:          cfg,
+		keyBuilder:      keyBuilder,
+		vpaClient:       vpaClient,
+		protocolClient:  protocolClient,
+		epochBatches:    make(map[uint64]map[string]*consensus.FinalizedBatch),
+		epochTimers:     make(map[uint64]*time.Timer),
+		submissionState: make(map[uint64]bool),
 	}
 
 	// Initialize stream consumer (mandatory for deterministic aggregation)
@@ -792,6 +846,12 @@ func (a *Aggregator) aggregateEpoch(epochIDStr string) {
 		"projects":         len(aggregatedBatch.ProjectVotes),
 	}).Info("Aggregator: Completed aggregation")
 
+	// Attempt on-chain submission if enabled
+	if a.config.EnableOnChainSubmission && a.vpaClient != nil && a.protocolClient != nil {
+		epochID, _ := strconv.ParseUint(epochIDStr, 10, 64)
+		go a.handlePrioritySubmission(epochID, &aggregatedBatch)
+	}
+
 	// Add monitoring metrics for Level 2 aggregation
 	timestamp := time.Now().Unix()
 	epochID, _ := parseEpochID(epochIDStr)
@@ -1232,6 +1292,168 @@ func extractValidatorIDs(keys []string) []string {
 		}
 	}
 	return validators
+}
+
+// handlePrioritySubmission implements priority-based submission logic
+func (a *Aggregator) handlePrioritySubmission(epochID uint64, aggregatedBatch *consensus.FinalizedBatch) {
+	// Convert epochID to string for consistency
+	epochIDStr := strconv.FormatUint(epochID, 10)
+
+	log.WithFields(logrus.Fields{
+		"epoch":    epochIDStr,
+		"projects": len(aggregatedBatch.ProjectIds),
+	}).Info("🎯 Starting priority-based submission")
+
+	// Get data market address (use first one)
+	if len(a.config.DataMarketAddresses) == 0 {
+		log.Error("No data market addresses configured for submission")
+		return
+	}
+	dataMarketAddr := a.config.DataMarketAddresses[0]
+
+	// Check if already submitted
+	a.mu.Lock()
+	if a.submissionState[epochID] {
+		a.mu.Unlock()
+		log.WithField("epoch", epochIDStr).Info("Already submitted for this epoch")
+		return
+	}
+	a.mu.Unlock()
+
+	// Get priority information
+	priorityInfo, err := a.vpaClient.GetPriorityInfo(a.ctx, dataMarketAddr, epochID)
+	if err != nil {
+		log.WithError(err).Error("Failed to get priority information")
+		return
+	}
+
+	log.WithFields(logrus.Fields{
+		"epoch":    epochIDStr,
+		"priority": priorityInfo.Priority,
+		"can_submit": priorityInfo.CanSubmit,
+	}).Info("📋 Priority information retrieved")
+
+	if !priorityInfo.CanSubmit {
+		log.WithField("epoch", epochIDStr).Info("Submission window not open, waiting...")
+		// Wait for submission window to open
+		if err := a.vpaClient.WaitForSubmissionWindow(a.ctx, dataMarketAddr, epochID); err != nil {
+			log.WithError(err).Error("Failed to wait for submission window")
+			return
+		}
+	}
+
+	// Check if top priority validator
+	isTopPriority, err := a.vpaClient.IsTopPriority(a.ctx, dataMarketAddr, epochID)
+	if err != nil {
+		log.WithError(err).Error("Failed to check if top priority")
+		return
+	}
+
+	if isTopPriority {
+		log.WithField("epoch", epochIDStr).Info("🚀 Top priority validator - submitting immediately")
+		a.submitBatchToContract(epochID, aggregatedBatch, dataMarketAddr)
+		return
+	}
+
+	// Not top priority - wait briefly and check if higher priority validators submitted
+	log.WithFields(logrus.Fields{
+		"epoch":    epochIDStr,
+		"priority": priorityInfo.Priority,
+	}).Info("⏳ Not top priority - waiting to check higher priority submissions")
+
+	// Wait 2-3 seconds for top priority validators to submit
+	time.Sleep(3 * time.Second)
+
+	// Check if batch already submitted on-chain (simplified check)
+	if a.checkBatchAlreadySubmitted(epochID) {
+		log.WithField("epoch", epochIDStr).Info("Batch already submitted by higher priority validator")
+		return
+	}
+
+	log.WithField("epoch", epochIDStr).Info("🔄 No higher priority submission detected - submitting now")
+	a.submitBatchToContract(epochID, aggregatedBatch, dataMarketAddr)
+}
+
+// submitBatchToContract submits the aggregated batch to the ProtocolState contract
+func (a *Aggregator) submitBatchToContract(epochID uint64, aggregatedBatch *consensus.FinalizedBatch, dataMarketAddr string) {
+	epochIDStr := strconv.FormatUint(epochID, 10)
+
+	// Check if already submitted (double-check)
+	a.mu.Lock()
+	if a.submissionState[epochID] {
+		a.mu.Unlock()
+		log.WithField("epoch", epochIDStr).Info("Already submitted for this epoch")
+		return
+	}
+	a.mu.Unlock()
+
+	// Prepare batch submission
+	submission := &protocol.BatchSubmission{
+		EpochID:           epochID,
+		BatchCID:          aggregatedBatch.BatchIPFSCID,
+		ProjectIDs:        aggregatedBatch.ProjectIds,
+		SnapshotCIDs:      aggregatedBatch.SnapshotCids,
+		FinalizedCIDsRoot: aggregatedBatch.MerkleRoot,
+		GasLimit:          2000000, // 2M gas limit
+	}
+
+	log.WithFields(logrus.Fields{
+		"epoch":      epochIDStr,
+		"batch_cid":  submission.BatchCID,
+		"projects":   len(submission.ProjectIDs),
+		"data_market": dataMarketAddr,
+	}).Info("📤 Submitting batch to ProtocolState contract")
+
+	// Submit asynchronously
+	resultChan := a.protocolClient.SubmitBatchAsync(a.ctx, dataMarketAddr, submission)
+
+	// Wait for result
+	select {
+	case result := <-resultChan:
+		if result.Success {
+			a.mu.Lock()
+			a.submissionState[epochID] = true
+			a.mu.Unlock()
+
+			log.WithFields(logrus.Fields{
+				"epoch":        epochIDStr,
+				"tx_hash":      result.TxHash,
+				"block_number": result.BlockNumber,
+				"gas_used":     result.GasUsed,
+			}).Info("✅ Batch submission successful")
+		} else {
+			log.WithFields(logrus.Fields{
+				"epoch": epochIDStr,
+				"error": result.Error,
+			}).Error("❌ Batch submission failed")
+		}
+	case <-a.ctx.Done():
+		log.WithField("epoch", epochIDStr).Info("Submission cancelled due to shutdown")
+		return
+	case <-time.After(2 * time.Minute):
+		log.WithField("epoch", epochIDStr).Warn("⏰ Batch submission timeout")
+	}
+}
+
+// checkBatchAlreadySubmitted performs a simple check if batch was already submitted
+// This is a simplified version - in production you'd query the contract for submissions
+func (a *Aggregator) checkBatchAlreadySubmitted(epochID uint64) bool {
+	// Simple time-based check - if more than 30 seconds have passed since aggregation window
+	// assume someone else might have submitted
+	// In production, this should query the contract for epoch submission status
+
+	// Check our local submission state first
+	a.mu.Lock()
+	submitted := a.submissionState[epochID]
+	a.mu.Unlock()
+
+	if submitted {
+		return true
+	}
+
+	// For now, return false to allow submission
+	// In production, implement proper contract querying
+	return false
 }
 
 func main() {

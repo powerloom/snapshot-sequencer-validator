@@ -97,6 +97,11 @@ type Settings struct {
 	// Aggregation Configuration
 	AggregationWindowDuration time.Duration // Time to wait for validator batches before aggregating (Level 2)
 
+	// Validator Priority Assignment (VPA) Configuration
+	ValidatorPriorityAssigner string // VPA contract address for proposer election
+	ValidatorAddress          string // This validator's address for priority checking
+	EnableOnChainSubmission   bool   // Enable submission to ProtocolState contract
+
 	// Stream Configuration for Deterministic Aggregation
 	StreamConsumerGroup       string        // Consumer group name for aggregator
 	StreamConsumerName        string        // Consumer instance name
@@ -209,6 +214,11 @@ func LoadConfig() error {
 
 		// Aggregation Configuration
 		AggregationWindowDuration: time.Duration(getEnvAsInt("AGGREGATION_WINDOW_SECONDS", 30)) * time.Second,
+
+		// Validator Priority Assignment (VPA) Configuration
+		ValidatorPriorityAssigner: getEnv("VALIDATOR_PRIORITY_ASSIGNER", ""),
+		ValidatorAddress:          getEnv("VALIDATOR_ADDRESS", ""),
+		EnableOnChainSubmission:   getBoolEnv("ENABLE_ONCHAIN_SUBMISSION", false),
 
 		// Stream Configuration for Deterministic Aggregation
 		StreamConsumerGroup: getEnv("STREAM_CONSUMER_GROUP", "aggregator-group"),
