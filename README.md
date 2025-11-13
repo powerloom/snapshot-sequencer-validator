@@ -20,6 +20,9 @@ cp .env.example .env
 
 # Access monitoring dashboard
 ./dsv.sh dashboard
+
+# Validate monitoring API endpoints
+./scripts/validate-monitoring.sh .env
 ```
 
 ## Features
