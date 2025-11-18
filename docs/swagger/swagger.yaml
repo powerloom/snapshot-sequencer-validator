@@ -1,0 +1,340 @@
+basePath: /api/v1
+definitions:
+  main.DailyStats:
+    properties:
+      hourly_breakdown:
+        items:
+          additionalProperties: true
+          type: object
+        type: array
+      summary:
+        additionalProperties: true
+        type: object
+      timestamp:
+        type: string
+    type: object
+  main.DashboardSummary:
+    properties:
+      current_stats:
+        additionalProperties: true
+        description: From stats:current
+        type: object
+      metrics:
+        additionalProperties: true
+        description: From dashboard:summary
+        type: object
+      recent_activity:
+        additionalProperties: true
+        description: 1m and 5m activity
+        type: object
+      timestamp:
+        type: string
+      validator_id:
+        type: string
+    type: object
+  main.EpochInfo:
+    properties:
+      data_market:
+        type: string
+      duration:
+        type: integer
+      epoch_id:
+        type: string
+      level1_batch_exists:
+        type: boolean
+      level2_batch_exists:
+        type: boolean
+      phase:
+        description: '"submission", "finalization", "aggregation", "complete"'
+        type: string
+      start_time:
+        type: integer
+      status:
+        description: '"open", "closed"'
+        type: string
+    type: object
+  main.FinalizedBatch:
+    properties:
+      epoch_id:
+        type: string
+      ipfs_cid:
+        type: string
+      level:
+        description: 1 for local, 2 for aggregated
+        type: integer
+      merkle_root:
+        type: string
+      project_count:
+        type: integer
+      timestamp:
+        type: integer
+      type:
+        description: '"local" or "aggregated"'
+        type: string
+      validator_count:
+        description: Level 2 only
+        type: integer
+      validator_id:
+        description: Level 1 only
+        type: string
+      validator_ids:
+        description: Level 2 only
+        items:
+          type: string
+        type: array
+    type: object
+  main.HourlyStats:
+    properties:
+      hours:
+        items:
+          additionalProperties: true
+          type: object
+        type: array
+      timestamp:
+        type: string
+    type: object
+  main.QueueStatus:
+    properties:
+      depth:
+        type: integer
+      queue_name:
+        type: string
+      status:
+        description: '"empty", "healthy", "moderate", "high", "critical"'
+        type: string
+    type: object
+info:
+  contact: {}
+  description: Monitoring API that reads pre-aggregated data from state-tracker worker
+  title: DSV Pipeline Monitor API (Direct Redis)
+  version: "3.0"
+paths:
+  /aggregation/results:
+    get:
+      description: Get network-wide aggregated batches with validator contributions
+      parameters:
+      - description: Protocol state identifier
+        in: query
+        name: protocol
+        type: string
+      - description: Data market address
+        in: query
+        name: market
+        type: string
+      - description: Number of results (default 20)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/main.FinalizedBatch'
+            type: array
+      summary: Aggregation results
+      tags:
+      - aggregation
+  /batches/finalized:
+    get:
+      description: Get Level 1 (local) or Level 2 (aggregated) finalized batches
+      parameters:
+      - description: Protocol state identifier
+        in: query
+        name: protocol
+        type: string
+      - description: Data market address
+        in: query
+        name: market
+        type: string
+      - description: Batch level (1 or 2, default both)
+        in: query
+        name: level
+        type: integer
+      - description: Specific epoch ID
+        in: query
+        name: epoch_id
+        type: string
+      - description: Number of batches to retrieve (default 50)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/main.FinalizedBatch'
+            type: array
+      summary: Finalized batches
+      tags:
+      - batches
+  /dashboard/summary:
+    get:
+      description: Get pre-aggregated dashboard metrics from state-tracker
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/main.DashboardSummary'
+      summary: Dashboard summary
+      tags:
+      - dashboard
+  /epochs/timeline:
+    get:
+      description: Get epoch progression with phases and batch status
+      parameters:
+      - description: Protocol state identifier
+        in: query
+        name: protocol
+        type: string
+      - description: Data market address
+        in: query
+        name: market
+        type: string
+      - description: Number of epochs (default 50)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/main.EpochInfo'
+            type: array
+      summary: Epochs timeline
+      tags:
+      - epochs
+  /health:
+    get:
+      description: Check if the API and Redis connection are healthy
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Health check
+      tags:
+      - health
+  /pipeline/overview:
+    get:
+      description: Get pipeline metrics from pre-aggregated data
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Pipeline overview (legacy support)
+      tags:
+      - pipeline
+  /queues/status:
+    get:
+      description: Get real-time queue depths and processing rates
+      parameters:
+      - description: Protocol state identifier
+        in: query
+        name: protocol
+        type: string
+      - description: Data market address
+        in: query
+        name: market
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/main.QueueStatus'
+            type: array
+      summary: Queue status
+      tags:
+      - queues
+  /stats/daily:
+    get:
+      description: Get pre-aggregated 24-hour statistics
+      parameters:
+      - description: Protocol state identifier
+        in: query
+        name: protocol
+        type: string
+      - description: Data market address
+        in: query
+        name: market
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/main.DailyStats'
+      summary: Daily statistics
+      tags:
+      - stats
+  /stats/hourly:
+    get:
+      description: Get pre-aggregated hourly statistics
+      parameters:
+      - description: Protocol state identifier
+        in: query
+        name: protocol
+        type: string
+      - description: Data market address
+        in: query
+        name: market
+        type: string
+      - description: Number of hours to retrieve (default 24)
+        in: query
+        name: hours
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/main.HourlyStats'
+      summary: Hourly statistics
+      tags:
+      - stats
+  /timeline/recent:
+    get:
+      description: Get recent events from timeline sorted sets
+      parameters:
+      - description: Event type (submission, validation, epoch, batch)
+        in: query
+        name: type
+        type: string
+      - description: Minutes to look back (default 5)
+        in: query
+        name: minutes
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Recent timeline
+      tags:
+      - timeline
+swagger: "2.0"

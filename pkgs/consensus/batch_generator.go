@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"math/rand"
 	"time"
+	
+	"github.com/powerloom/snapshot-sequencer-validator/pkgs/submissions"
 )
 
 // DummyBatchGenerator creates test finalized batches for Phase 3 testing
@@ -121,12 +123,16 @@ func (g *DummyBatchGenerator) generateDummySignature(epochID uint64, merkleRoot 
 
 // FinalizedBatch struct (will be generated from protobuf in production)
 type FinalizedBatch struct {
-	EpochId      uint64
-	ProjectIds   []string
-	SnapshotCids []string
-	MerkleRoot   []byte
-	BlsSignature []byte
-	SequencerId  string
-	Timestamp    uint64
-	ProjectVotes map[string]uint32
+	EpochId           uint64                                       `json:"EpochId"`
+	ProjectIds        []string                                     `json:"ProjectIds"`
+	SnapshotCids      []string                                     `json:"SnapshotCids"`
+	MerkleRoot        []byte                                       `json:"MerkleRoot"`
+	BlsSignature      []byte                                       `json:"BlsSignature"`
+	SequencerId       string                                       `json:"SequencerId"`
+	Timestamp         uint64                                       `json:"Timestamp"`
+	ProjectVotes      map[string]uint32                            `json:"ProjectVotes"`
+	SubmissionDetails map[string][]submissions.SubmissionMetadata `json:"submission_details"`  // project→submissions mapping with snapshotter attribution (enables challenges/proofs)
+	ValidatorBatches  map[string]string                            `json:"ValidatorBatches,omitempty"`   // Attribution tracking: validator_id → ipfs_cid of their individual Level 1 finalization
+	BatchIPFSCID      string                                       `json:"batch_ipfs_cid,omitempty"`      // IPFS CID of this aggregated batch (Level 2)
+	ValidatorCount    int                                          `json:"ValidatorCount,omitempty"`      // Number of validators who contributed
 }

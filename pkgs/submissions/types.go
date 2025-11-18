@@ -40,4 +40,17 @@ type ProcessedSubmission struct {
 	DataMarketAddr   string
 	ProcessedAt      time.Time
 	ValidatorID      string
+	MetaData         map[string]interface{}
+}
+
+// SubmissionMetadata tracks WHO submitted WHAT for challenges/proofs
+// This provides accountability and enables challenge workflows in the protocol
+type SubmissionMetadata struct {
+	SubmitterID          string   `json:"submitter_id"`            // Snapshotter's EVM address extracted from EIP-712 signature
+	SnapshotCID          string   `json:"snapshot_cid"`            // IPFS CID of the snapshot data they submitted
+	Timestamp            uint64   `json:"timestamp"`               // Unix timestamp when submission was finalized
+	Signature            []byte   `json:"signature"`               // Snapshotter's EIP-712 signature proving they submitted this CID (base64 encoded)
+	SlotID               uint64   `json:"slot_id"`                 // Numeric slot ID of the snapshotter
+	VoteCount            int      `json:"vote_count"`              // How many validators confirmed seeing this submission
+	ValidatorsConfirming []string `json:"validators_confirming"`   // List of validator IDs that saw and confirmed this submission
 }

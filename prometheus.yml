@@ -1,0 +1,40 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # DSV State Tracker metrics
+  - job_name: 'state-tracker'
+    static_configs:
+      - targets: ['state-tracker:9094']
+    metrics_path: '/metrics'
+
+  # DSV Metrics Server metrics
+  - job_name: 'metrics-server'
+    static_configs:
+      - targets: ['metrics-server:9095']
+    metrics_path: '/metrics'
+
+  # DSV Aggregator metrics
+  - job_name: 'aggregator'
+    static_configs:
+      - targets: ['aggregator:9091']
+    metrics_path: '/metrics'
+
+  # DSV Unified Sequencer metrics
+  - job_name: 'unified-sequencer'
+    static_configs:
+      - targets: ['unified:9092']
+    metrics_path: '/metrics'
+
+  # DSV P2P Gateway metrics
+  - job_name: 'p2p-gateway'
+    static_configs:
+      - targets: ['p2p-gateway:9093']
+    metrics_path: '/metrics'
+
+  # DSV Monitor API metrics
+  - job_name: 'monitor-api'
+    static_configs:
+      - targets: ['monitor-api:9096']
+    metrics_path: '/metrics'

@@ -7,18 +7,25 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/redis/go-redis/v9"
+	redislib "github.com/powerloom/snapshot-sequencer-validator/pkgs/redis"
+	customcrypto "github.com/powerloom/snapshot-sequencer-validator/pkgs/crypto"
 	log "github.com/sirupsen/logrus"
 )
 
 // Dequeuer handles processing of queued submissions
 type Dequeuer struct {
-	redisClient         *redis.Client
-	sequencerID         string
+	redisClient          *redis.Client
+	keyBuilder           *redislib.KeyBuilder
+	sequencerID          string
+	eip712Verifier       *customcrypto.EIP712Verifier
+	slotValidator        *SlotValidator
+	enableSlotValidation bool
 	processedSubmissions map[string]*ProcessedSubmission
 	submissionsMutex     sync.RWMutex
-	stats               DequeuerStats
-	statsMutex          sync.RWMutex
+	stats                DequeuerStats
+	statsMutex           sync.RWMutex
 }
 
 // DequeuerStats tracks processing metrics
@@ -31,16 +38,27 @@ type DequeuerStats struct {
 }
 
 // NewDequeuer creates a new submission dequeuer
-func NewDequeuer(redisClient *redis.Client, sequencerID string) *Dequeuer {
+func NewDequeuer(redisClient *redis.Client, keyBuilder *redislib.KeyBuilder, sequencerID string, chainID int64, protocolStateContract string, enableSlotValidation bool) (*Dequeuer, error) {
+	verifier, err := customcrypto.NewEIP712Verifier(chainID, protocolStateContract)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create EIP-712 verifier: %w", err)
+	}
+
+	slotValidator := NewSlotValidator(redisClient)
+
 	return &Dequeuer{
 		redisClient:          redisClient,
+		keyBuilder:           keyBuilder,
 		sequencerID:          sequencerID,
+		eip712Verifier:       verifier,
+		slotValidator:        slotValidator,
+		enableSlotValidation: enableSlotValidation,
 		processedSubmissions: make(map[string]*ProcessedSubmission),
-	}
+	}, nil
 }
 
 // ProcessSubmission validates and stores a submission
-func (d *Dequeuer) ProcessSubmission(submission *SnapshotSubmission, submissionID string) error {
+func (d *Dequeuer) ProcessSubmission(submission *SnapshotSubmission, submissionID string, metaData map[string]interface{}) error {
 	startTime := time.Now()
 	
 	// Check for duplicate
@@ -57,14 +75,35 @@ func (d *Dequeuer) ProcessSubmission(submission *SnapshotSubmission, submissionI
 		d.updateStats(false, time.Since(startTime))
 		return fmt.Errorf("validation failed: %w", err)
 	}
-	
+
+	// Verify signature and extract snapshotter address
+	snapshotterAddr, err := d.verifySignature(submission)
+	if err != nil {
+		d.updateStats(false, time.Since(startTime))
+		return fmt.Errorf("signature verification failed: %w", err)
+	}
+
+	// Validate snapshotter address against slot registration (if enabled)
+	if d.enableSlotValidation && snapshotterAddr != (common.Address{}) {
+		if err := d.slotValidator.ValidateSnapshotterForSlot(submission.Request.SlotId, snapshotterAddr); err != nil {
+			d.updateStats(false, time.Since(startTime))
+			log.Errorf("Slot validation failed for submission (epoch=%d, slot=%d, signer=%s): %v",
+				submission.Request.EpochId, submission.Request.SlotId, snapshotterAddr.Hex(), err)
+			return fmt.Errorf("slot validation failed: %w", err)
+		}
+		log.Debugf("Slot validation passed: slot %d is registered to %s",
+			submission.Request.SlotId, snapshotterAddr.Hex())
+	}
+
 	// Store in local state
 	processed := &ProcessedSubmission{
-		ID:             submissionID,
-		Submission:     submission,
-		DataMarketAddr: submission.DataMarket,
-		ProcessedAt:    time.Now(),
-		ValidatorID:    d.sequencerID,
+		ID:              submissionID,
+		Submission:      submission,
+		SnapshotterAddr: snapshotterAddr.Hex(),
+		DataMarketAddr:  submission.DataMarket,
+		ProcessedAt:     time.Now(),
+		ValidatorID:     d.sequencerID,
+		MetaData:        metaData,
 	}
 	
 	d.submissionsMutex.Lock()
@@ -84,29 +123,162 @@ func (d *Dequeuer) ProcessSubmission(submission *SnapshotSubmission, submissionI
 	
 	log.Debugf("Successfully processed submission %s for epoch %d, slot %d",
 		submissionID, submission.Request.EpochId, submission.Request.SlotId)
-	
+
+	// Get peer ID from submission metadata if available
+	var peerID string
+	if processed.MetaData != nil {
+		if p, ok := processed.MetaData["peer_id"].(string); ok {
+			peerID = p
+		}
+	}
+
+	// Add enhanced submission timeline entry with detailed context
+	timestamp := time.Now().Unix()
+	enhancedSubmissionID := fmt.Sprintf("received:%d:%d:%s:%d:%s",
+		submission.Request.EpochId,
+		submission.Request.SlotId,
+		submission.Request.ProjectId,
+		timestamp,
+		peerID)
+
+	// Pipeline for monitoring metrics
+	pipe := d.redisClient.Pipeline()
+
+	// Store in submissions timeline with enhanced format
+	pipe.ZAdd(context.Background(), d.keyBuilder.MetricsSubmissionsTimeline(), redis.Z{
+		Score:  float64(timestamp),
+		Member: enhancedSubmissionID,
+	})
+
+	// Store submission metadata for enhanced monitoring
+	metadata := map[string]interface{}{
+		"epoch_id":    submission.Request.EpochId,
+		"slot_id":     submission.Request.SlotId,
+		"project_id":  submission.Request.ProjectId,
+		"timestamp":   timestamp,
+		"cid":         submission.Request.SnapshotCid,
+		"peer_id":     peerID,
+		"entity_id":   enhancedSubmissionID,
+	}
+
+	metadataJSON, _ := json.Marshal(metadata)
+	metadataKey := d.keyBuilder.MetricsSubmissionsMetadata(enhancedSubmissionID)
+	pipe.SetEx(context.Background(), metadataKey, metadataJSON, 24*time.Hour)
+
+	log.Infof("📝 Enhanced submission timeline entry: %s (epoch=%d, slot=%d, project=%s)",
+		enhancedSubmissionID, submission.Request.EpochId, submission.Request.SlotId, submission.Request.ProjectId)
+
+	// Add monitoring metrics for validated submission
+	hour := time.Now().Format("2006010215") // YYYYMMDDHH format
+
+	// Continue with existing pipeline operations...
+
+	// 1. Add to validations timeline (sorted set, no TTL - pruned daily)
+	pipe.ZAdd(context.Background(), d.keyBuilder.MetricsValidationsTimeline(), redis.Z{
+		Score:  float64(timestamp),
+		Member: submissionID,
+	})
+
+	// 2. Store validation details with TTL (1 hour)
+	validationData := map[string]interface{}{
+		"submission_id":   submissionID,
+		"epoch_id":        submission.Request.EpochId,
+		"project_id":      submission.Request.ProjectId,
+		"validator_id":    d.sequencerID,
+		"snapshotter":     snapshotterAddr.Hex(),
+		"timestamp":       timestamp,
+		"data_market":     submission.DataMarket,
+	}
+	jsonData, _ := json.Marshal(validationData)
+	pipe.SetEx(context.Background(), fmt.Sprintf("metrics:validation:%s", submissionID), string(jsonData), time.Hour)
+
+	// 3. Add to epoch validated set with TTL
+	epochValidatedKey := fmt.Sprintf("metrics:epoch:%d:validated", submission.Request.EpochId)
+	pipe.SAdd(context.Background(), epochValidatedKey, submissionID)
+	pipe.Expire(context.Background(), epochValidatedKey, 2*time.Hour)
+
+	// 4. Update hourly counter
+	pipe.HIncrBy(context.Background(), fmt.Sprintf("metrics:hourly:%s:validations", hour), "total", 1)
+	pipe.Expire(context.Background(), fmt.Sprintf("metrics:hourly:%s:validations", hour), 2*time.Hour)
+
+	// 5. Add to submissions timeline
+	timestamp = time.Now().Unix()
+	// Note: We don't have access to namespaced keyBuilder here, so we use the non-namespaced timeline key
+	pipe.ZAdd(context.Background(), redislib.MetricsSubmissionsTimeline(), redis.Z{
+		Score:  float64(timestamp),
+		Member: fmt.Sprintf("validated:%s:%d", submissionID, timestamp),
+	})
+
+	// 6. Publish state change event
+	pipe.Publish(context.Background(), "state:change", fmt.Sprintf("submission:validated:%s", submissionID))
+
+	// Execute pipeline (ignore errors - monitoring is non-critical)
+	if _, err := pipe.Exec(context.Background()); err != nil {
+		log.Debugf("Failed to write monitoring metrics: %v", err)
+	}
+
 	return nil
 }
 
 func (d *Dequeuer) validateSubmission(submission *SnapshotSubmission) error {
-	// Basic validation
-	if submission.Request.EpochId == 0 {
-		return fmt.Errorf("invalid epoch ID: 0")
+	// Epoch 0 heartbeat handling: Skip validation for epoch 0 with empty CID
+	// These are P2P mesh maintenance messages from Go local collector, not actual submissions
+	if submission.Request.EpochId == 0 && submission.Request.SnapshotCid == "" {
+		return fmt.Errorf("epoch 0 heartbeat: skipping")
 	}
-	
+
+	// Basic validation for real submissions
 	if submission.Request.SnapshotCid == "" {
 		return fmt.Errorf("empty snapshot CID")
 	}
-	
+
 	if submission.Request.ProjectId == "" {
 		return fmt.Errorf("empty project ID")
 	}
-	
+
 	if submission.DataMarket == "" {
 		return fmt.Errorf("empty data market address")
 	}
-	
+
 	return nil
+}
+
+func (d *Dequeuer) verifySignature(submission *SnapshotSubmission) (common.Address, error) {
+	// Skip signature verification for epoch 0 heartbeats
+	if submission.Request.EpochId == 0 && submission.Request.SnapshotCid == "" {
+		return common.Address{}, nil
+	}
+
+	// Check signature exists
+	if submission.Signature == "" {
+		log.Errorf("EIP-712 verification failed: empty signature (epoch=%d, project=%s, CID=%s, slot=%d)",
+			submission.Request.EpochId, submission.Request.ProjectId, submission.Request.SnapshotCid, submission.Request.SlotId)
+		return common.Address{}, fmt.Errorf("empty signature")
+	}
+
+	// Create EIP-712 request from submission
+	request := &customcrypto.SnapshotRequest{
+		SlotId:      submission.Request.SlotId,
+		Deadline:    submission.Request.Deadline,
+		SnapshotCid: submission.Request.SnapshotCid,
+		EpochId:     submission.Request.EpochId,
+		ProjectId:   submission.Request.ProjectId,
+	}
+
+	// Verify signature and recover signer address
+	signerAddr, err := d.eip712Verifier.VerifySignature(request, submission.Signature)
+	if err != nil {
+		log.Errorf("EIP-712 verification failed: %v (epoch=%d, project=%s, CID=%s, slot=%d, signature=%s)",
+			err, submission.Request.EpochId, submission.Request.ProjectId,
+			submission.Request.SnapshotCid, submission.Request.SlotId, submission.Signature[:20]+"...")
+		return common.Address{}, fmt.Errorf("signature verification failed: %w", err)
+	}
+
+	log.Infof("EIP-712 signature verified: epoch=%d, slot=%d, deadline=%d, project=%s, signer=%s, CID=%s",
+		submission.Request.EpochId, submission.Request.SlotId, submission.Request.Deadline,
+		submission.Request.ProjectId, signerAddr.Hex(), submission.Request.SnapshotCid)
+
+	return signerAddr, nil
 }
 
 func (d *Dequeuer) storeProcessingResult(submissionID string, processed *ProcessedSubmission) {

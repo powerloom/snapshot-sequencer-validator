@@ -72,7 +72,7 @@ func ValidatorVotesPeerScoreThresholds() *pubsub.PeerScoreThresholds {
 // ConfigureValidatorVotesMesh configures a pubsub instance with parameters
 // optimized for the validator votes mesh. This will be used by validator nodes
 // participating in consensus.
-func ConfigureValidatorVotesMesh(hostID peer.ID, validatorTopics []string) (*pubsub.GossipSubParams, *pubsub.PeerScoreParams, *pubsub.PeerScoreThresholds) {
+func ConfigureValidatorVotesMesh(hostID peer.ID, validatorTopics []string, consensusVotesTopic, consensusProposalsTopic string) (*pubsub.GossipSubParams, *pubsub.PeerScoreParams, *pubsub.PeerScoreThresholds) {
 	// Get validator votes mesh parameters
 	gossipParams := ValidatorVotesGossipParams()
 	peerScoreParams := ValidatorVotesPeerScoreParams(hostID)
@@ -80,15 +80,15 @@ func ConfigureValidatorVotesMesh(hostID peer.ID, validatorTopics []string) (*pub
 
 	// Configure topic score parameters for validator topics
 	topicScoreParams := ValidatorVotesTopicScoreParams()
-	
+
 	// Set scoring for provided validator topics
 	for _, topic := range validatorTopics {
 		peerScoreParams.Topics[topic] = topicScoreParams
 	}
-	
-	// Common validator topics (to be expanded)
-	peerScoreParams.Topics["/powerloom/consensus/votes"] = topicScoreParams
-	peerScoreParams.Topics["/powerloom/consensus/proposals"] = topicScoreParams
+
+	// Common validator topics (using configurable parameters)
+	peerScoreParams.Topics[consensusVotesTopic] = topicScoreParams
+	peerScoreParams.Topics[consensusProposalsTopic] = topicScoreParams
 
 	return gossipParams, peerScoreParams, peerScoreThresholds
 }

@@ -12,8 +12,9 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	rpchelper "github.com/powerloom/go-rpc-helper"
+	rediskeys "github.com/powerloom/snapshot-sequencer-validator/pkgs/redis"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -60,6 +61,29 @@ type WindowManager struct {
 	redisClient     *redis.Client
 	protocolState   string // Protocol state contract address for namespacing
 	finalizationBatchSize int // Number of projects per finalization batch
+	keyBuilders     map[string]*rediskeys.KeyBuilder // Cache key builders per data market
+}
+
+// scanKeys uses SCAN instead of KEYS for production safety
+func (wm *WindowManager) scanKeys(ctx context.Context, pattern string) ([]string, error) {
+	var keys []string
+	var cursor uint64
+
+	for {
+		scanKeys, nextCursor, err := wm.redisClient.Scan(ctx, cursor, pattern, 100).Result()
+		if err != nil {
+			return nil, err
+		}
+
+		keys = append(keys, scanKeys...)
+		cursor = nextCursor
+
+		if cursor == 0 {
+			break
+		}
+	}
+
+	return keys, nil
 }
 
 // EpochWindow represents an active submission window
@@ -132,6 +156,7 @@ func NewEventMonitor(cfg *Config) (*EventMonitor, error) {
 	if contractABI != nil {
 		sig, err := contractABI.GetEventHash("EpochReleased")
 		if err != nil {
+			cancel()
 			return nil, fmt.Errorf("failed to get EpochReleased event hash from ABI: %w", err)
 		}
 		epochReleasedSig = sig
@@ -149,6 +174,7 @@ func NewEventMonitor(cfg *Config) (*EventMonitor, error) {
 		redisClient:     cfg.RedisClient,
 		protocolState:   cfg.ContractAddress, // Use protocol state for namespacing
 		finalizationBatchSize: cfg.FinalizationBatchSize,
+		keyBuilders:     make(map[string]*rediskeys.KeyBuilder),
 	}
 	
 	return &EventMonitor{
@@ -363,10 +389,10 @@ func (m *EventMonitor) handleEpochReleased(event *EpochReleasedEvent) {
 	pipe.HMSet(m.ctx, epochKey, epochData)
 	pipe.Expire(m.ctx, epochKey, 24*time.Hour)
 	
-	// Also add to active epochs set
-	activeKey := fmt.Sprintf("active_epochs:%s", event.DataMarketAddress.Hex())
-	pipe.SAdd(m.ctx, activeKey, event.EpochID.String())
-	pipe.Expire(m.ctx, activeKey, 24*time.Hour)
+	// Also add to active epochs set (use namespaced keys)
+	kb := m.windowManager.getKeyBuilder(event.DataMarketAddress.Hex())
+	pipe.SAdd(m.ctx, kb.ActiveEpochs(), event.EpochID.String())
+	pipe.Expire(m.ctx, kb.ActiveEpochs(), 24*time.Hour)
 	
 	if _, err := pipe.Exec(m.ctx); err != nil {
 		log.Errorf("Failed to store epoch info: %v", err)
@@ -426,13 +452,45 @@ func (wm *WindowManager) StartSubmissionWindow(ctx context.Context, dataMarket s
 		wm.closeWindow(dataMarket, epochID)
 	})
 	
-	// Mark window as open in Redis
-	windowKey := fmt.Sprintf("epoch:%s:%s:window", dataMarket, epochID.String())
+	// Mark window as open in Redis - namespaced with protocol:market
+	kb := wm.getKeyBuilder(dataMarket)
+	windowKey := kb.EpochWindow(epochID.String())
 	wm.redisClient.Set(context.Background(), windowKey, "open", duration)
 	
 	log.Infof("⏰ Submission window opened for epoch %s in market %s (duration: %v, active: %d)",
 		epochID, dataMarket, duration, activeCount)
-	
+
+	// Add monitoring metrics for window open
+	timestamp := time.Now().Unix()
+
+	// Pipeline for monitoring metrics
+	pipe := wm.redisClient.Pipeline()
+
+	// 1. Add to epochs timeline
+	pipe.ZAdd(context.Background(), kb.MetricsEpochsTimeline(), redis.Z{
+		Score:  float64(timestamp),
+		Member: fmt.Sprintf("open:%s", epochID.String()),
+	})
+
+	// 2. Store epoch info with TTL
+	epochInfoKey := kb.MetricsEpochInfo(epochID.String())
+	pipe.HSet(context.Background(), epochInfoKey, map[string]interface{}{
+		"status":      "open",
+		"start":       timestamp,
+		"data_market": dataMarket,
+		"duration":    duration.Seconds(),
+		"start_block": startBlock,
+	})
+	pipe.Expire(context.Background(), epochInfoKey, 2*time.Hour)
+
+	// 3. Publish state change
+	pipe.Publish(context.Background(), "state:change", fmt.Sprintf("epoch:open:%s", epochID.String()))
+
+	// Execute pipeline
+	if _, err := pipe.Exec(context.Background()); err != nil {
+		log.Debugf("Failed to write monitoring metrics: %v", err)
+	}
+
 	return nil
 }
 
@@ -457,9 +515,10 @@ func (wm *WindowManager) closeWindow(dataMarket string, epochID *big.Int) {
 	// Close the done channel
 	close(window.Done)
 	
-	// Mark window as closed in Redis
+	// Mark window as closed in Redis - namespaced with protocol:market
 	ctx := context.Background()
-	windowKey := fmt.Sprintf("epoch:%s:%s:window", dataMarket, epochID.String())
+	kb := wm.getKeyBuilder(dataMarket)
+	windowKey := kb.EpochWindow(epochID.String())
 	wm.redisClient.Set(ctx, windowKey, "closed", 1*time.Hour)
 	
 	// Trigger finalization
@@ -467,6 +526,33 @@ func (wm *WindowManager) closeWindow(dataMarket string, epochID *big.Int) {
 	
 	log.Infof("⏱️ Submission window closed for epoch %s in market %s (remaining: %d)",
 		epochID, dataMarket, activeCount)
+
+	// Add monitoring metrics for window close
+	timestamp := time.Now().Unix()
+
+	// Pipeline for monitoring metrics
+	pipe := wm.redisClient.Pipeline()
+
+	// 1. Add to epochs timeline
+	pipe.ZAdd(context.Background(), kb.MetricsEpochsTimeline(), redis.Z{
+		Score:  float64(timestamp),
+		Member: fmt.Sprintf("close:%s", epochID.String()),
+	})
+
+	// 2. Update epoch info (already has TTL from open)
+	epochInfoKey := kb.MetricsEpochInfo(epochID.String())
+	pipe.HSet(context.Background(), epochInfoKey, map[string]interface{}{
+		"status": "closed",
+		"end":    timestamp,
+	})
+
+	// 3. Publish state change
+	pipe.Publish(context.Background(), "state:change", fmt.Sprintf("epoch:closed:%s", epochID.String()))
+
+	// Execute pipeline
+	if _, err := pipe.Exec(context.Background()); err != nil {
+		log.Debugf("Failed to write monitoring metrics: %v", err)
+	}
 }
 
 func (wm *WindowManager) triggerFinalization(dataMarket string, epochID *big.Int, startBlock uint64) {
@@ -482,7 +568,8 @@ func (wm *WindowManager) triggerFinalization(dataMarket string, epochID *big.Int
 	
 	// Track batch metadata in Redis for aggregation worker
 	ctx := context.Background()
-	batchMetaKey := fmt.Sprintf("%s:%s:epoch:%s:batch:meta", 
+	kb := wm.getKeyBuilder(dataMarket)
+	batchMetaKey := fmt.Sprintf("%s:%s:epoch:%s:batch:meta",
 		wm.protocolState, dataMarket, epochID.String())
 	
 	batchMeta := map[string]interface{}{
@@ -497,7 +584,7 @@ func (wm *WindowManager) triggerFinalization(dataMarket string, epochID *big.Int
 	wm.redisClient.Set(ctx, batchMetaKey, metaData, 2*time.Hour)
 	
 	// Push each batch to finalization queue
-	queueKey := fmt.Sprintf("%s:%s:finalizationQueue", wm.protocolState, dataMarket)
+	queueKey := kb.FinalizationQueue()
 	log.Debugf("Pushing %d batches to finalization queue: %s", len(batches), queueKey)
 	
 	for i, batch := range batches {
@@ -548,55 +635,96 @@ func (wm *WindowManager) splitIntoBatches(submissions map[string]interface{}, ba
 // collectEpochSubmissions retrieves all processed submissions for an epoch
 func (wm *WindowManager) collectEpochSubmissions(dataMarket string, epochID *big.Int) map[string]interface{} {
 	ctx := context.Background()
-	
-	// Get protocol state from config (assuming it's stored in window manager)
-	protocolState := wm.protocolState // You'll need to add this field
-	
+
+	// Get key builder for this data market
+	kb := wm.getKeyBuilder(dataMarket)
+
 	// Get all submission IDs from the epoch set (namespaced)
 	// Format: {protocol}:{market}:epoch:{epochID}:processed
-	epochKey := fmt.Sprintf("%s:%s:epoch:%s:processed", 
-		protocolState, dataMarket, epochID.String())
-	log.Debugf("Looking for submissions with key: %s (protocolState=%s)", epochKey, protocolState)
+	epochKey := kb.EpochProcessed(epochID.String())
+	log.Debugf("Looking for submissions with key: %s (protocolState=%s)", epochKey, wm.protocolState)
 	submissionIDs, err := wm.redisClient.SMembers(ctx, epochKey).Result()
 	if err != nil {
-		log.Errorf("Failed to get submission IDs for epoch %s in market %s: %v", 
+		log.Errorf("Failed to get submission IDs for epoch %s in market %s: %v",
 			epochID, dataMarket, err)
 		return make(map[string]interface{})
 	}
 	log.Debugf("Found %d submission IDs for epoch %s", len(submissionIDs), epochID)
-	
-	// Track CIDs per project with vote counts
+
+	// Track CIDs per project with vote counts AND submitter details
 	// Structure: map[projectID]map[CID]count
 	projectVotes := make(map[string]map[string]int)
-	
+	// Track WHO submitted WHAT for challenges/proofs
+	submissionMetadata := make(map[string][]map[string]interface{}) // projectID -> list of submissions
+
 	for _, submissionID := range submissionIDs {
 		// Get the processed submission data
 		// Keys are formatted as: {protocol}:{market}:processed:{sequencer_id}:{submission_id}
-		pattern := fmt.Sprintf("%s:%s:processed:*:%s", 
-			protocolState, dataMarket, submissionID)
-		keys, _ := wm.redisClient.Keys(ctx, pattern).Result()
+		pattern := fmt.Sprintf("%s:%s:processed:*:%s",
+			wm.protocolState, dataMarket, submissionID)
+		keys, _ := wm.scanKeys(ctx, pattern)
 		
 		for _, key := range keys {
+			// Extract validator ID from key: {protocol}:{market}:processed:{validator_id}:{submission_id}
+			// Note: validatorID extraction removed as reported_by_validator field no longer needed
+
 			data, err := wm.redisClient.Get(ctx, key).Result()
 			if err != nil {
 				continue
 			}
-			
+
 			var submission map[string]interface{}
 			if err := json.Unmarshal([]byte(data), &submission); err != nil {
 				log.Errorf("Failed to unmarshal submission: %v", err)
 				continue
 			}
-			
+
 			if subData, ok := submission["Submission"].(map[string]interface{}); ok {
 				if request, ok := subData["request"].(map[string]interface{}); ok {
 					if projectID, ok := request["projectId"].(string); ok {
 						if snapshotCID, ok := request["snapshotCid"].(string); ok {
+							// Track vote counts
 							if projectVotes[projectID] == nil {
 								projectVotes[projectID] = make(map[string]int)
 							}
 							projectVotes[projectID][snapshotCID]++
-							log.Debugf("Found submission: project=%s, CID=%s", projectID, snapshotCID)
+
+							// Track submission metadata for challenges/proofs
+							slotID := uint64(0)
+							if slot, ok := request["slotId"].(float64); ok {
+								slotID = uint64(slot)
+							}
+
+							// Extract submitter info from submission
+							// EIP-712 signature verification is done by dequeuer during processing
+							// The verified snapshotter EVM address is stored in SnapshotterAddr field
+							submitterID := ""
+							if addr, ok := submission["SnapshotterAddr"].(string); ok && addr != "" {
+								submitterID = addr
+							} else {
+								// Missing SnapshotterAddr indicates signature verification failed in dequeuer
+								// This submission should not have been processed - log error and skip
+								log.Errorf("Missing SnapshotterAddr for submission %s (epoch=%d, project=%s, CID=%s) - signature verification may have failed",
+									submissionID, submission["Submission"].(map[string]interface{})["request"].(map[string]interface{})["epochId"],
+									projectID, snapshotCID)
+								continue
+							}
+
+							signature := ""
+							if sig, ok := subData["signature"].(string); ok {
+								signature = sig
+							}
+
+							metadata := map[string]interface{}{
+								"submitter_id": submitterID,
+								"snapshot_cid": snapshotCID,
+								"slot_id":      slotID,
+								"signature":    signature,
+								"timestamp":    time.Now().Unix(),
+							}
+
+							submissionMetadata[projectID] = append(submissionMetadata[projectID], metadata)
+							log.Debugf("Found submission: project=%s, CID=%s, submitter=%s", projectID, snapshotCID, submitterID)
 						} else {
 							log.Warnf("No snapshotCid in request: %+v", request)
 						}
@@ -617,20 +745,21 @@ func (wm *WindowManager) collectEpochSubmissions(dataMarket string, epochID *big
 		projectSubmissions[projectID] = map[string]interface{}{
 			"cid_votes": cidVotes,
 			"total_submissions": len(cidVotes),
+			"submission_metadata": submissionMetadata[projectID], // Add WHO submitted WHAT
 		}
 		
 		totalVotes := 0
 		for _, votes := range cidVotes {
 			totalVotes += votes
 		}
-		log.Debugf("Project %s: Collected %d unique CIDs with %d total submissions", 
-			projectID, len(cidVotes), totalVotes)
+		log.Debugf("Project %s: Collected %d unique CIDs with %d total submissions from %d submitters", 
+			projectID, len(cidVotes), totalVotes, len(submissionMetadata[projectID]))
 	}
 	
 	// Store the collected batch in Redis for finalizer (namespaced)
 	// Format: {protocol}:{market}:batch:ready:{epochID}
-	batchKey := fmt.Sprintf("%s:%s:batch:ready:%s", 
-		protocolState, dataMarket, epochID.String())
+	batchKey := fmt.Sprintf("%s:%s:batch:ready:%s",
+		wm.protocolState, dataMarket, epochID.String())
 	batchData, _ := json.Marshal(projectSubmissions)
 	wm.redisClient.Set(ctx, batchKey, batchData, 1*time.Hour)
 	
@@ -644,6 +773,20 @@ func (wm *WindowManager) GetActiveCount() int {
 	wm.mu.RLock()
 	defer wm.mu.RUnlock()
 	return len(wm.activeWindows)
+}
+
+// getKeyBuilder returns a cached KeyBuilder for the given data market
+func (wm *WindowManager) getKeyBuilder(dataMarket string) *rediskeys.KeyBuilder {
+	wm.mu.Lock()
+	defer wm.mu.Unlock()
+
+	if kb, exists := wm.keyBuilders[dataMarket]; exists {
+		return kb
+	}
+
+	kb := rediskeys.NewKeyBuilder(wm.protocolState, dataMarket)
+	wm.keyBuilders[dataMarket] = kb
+	return kb
 }
 
 func (wm *WindowManager) IsWindowOpen(dataMarket string, epochID *big.Int) bool {

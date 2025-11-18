@@ -200,21 +200,21 @@ func GenerateParamHash(params *pubsub.GossipSubParams) string {
 // optimized for the snapshot submissions mesh. This should be called by all nodes
 // participating in snapshot submission topics.
 // Returns gossipsub params, peer score params, thresholds, and a parameter hash for verification.
-func ConfigureSnapshotSubmissionsMesh(hostID peer.ID) (*pubsub.GossipSubParams, *pubsub.PeerScoreParams, *pubsub.PeerScoreThresholds, string) {
+func ConfigureSnapshotSubmissionsMesh(hostID peer.ID, discoveryTopic, submissionsTopic string) (*pubsub.GossipSubParams, *pubsub.PeerScoreParams, *pubsub.PeerScoreThresholds, string) {
 	// Get snapshot submissions mesh parameters
 	gossipParams := SnapshotSubmissionsGossipParams()
 	peerScoreParams := SnapshotSubmissionsPeerScoreParams(hostID)
 	peerScoreThresholds := SnapshotSubmissionsPeerScoreThresholds()
-	
+
 	// Generate parameter hash for verification
 	paramHash := GenerateParamHash(gossipParams)
 
 	// Configure topic score parameters for snapshot submission topics
 	topicScoreParams := SnapshotSubmissionsTopicScoreParams()
-	
-	// Set scoring for both snapshot submission topics
-	peerScoreParams.Topics["/powerloom/snapshot-submissions/0"] = topicScoreParams   // Discovery topic
-	peerScoreParams.Topics["/powerloom/snapshot-submissions/all"] = topicScoreParams // Submissions topic
+
+	// Set scoring for both snapshot submission topics using configurable parameters
+	peerScoreParams.Topics[discoveryTopic] = topicScoreParams   // Discovery topic
+	peerScoreParams.Topics[submissionsTopic] = topicScoreParams // Submissions topic
 
 	return gossipParams, peerScoreParams, peerScoreThresholds, paramHash
 }

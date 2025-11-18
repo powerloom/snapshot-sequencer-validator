@@ -1,0 +1,396 @@
+services:
+  redis:
+    image: redis:8-alpine
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes --maxmemory 2gb
+    ports:
+      # defaulting to expose on 6380 to avoid conflicts with existing redis which is the most common scenario
+      - "127.0.0.1:${REDIS_EXTERNAL_PORT:-6380}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - sequencer-net
+
+  # P2P Gateway - Singleton for ALL P2P communication
+  p2p-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.p2p-gateway
+    environment:
+      - SEQUENCER_ID=${SEQUENCER_ID:-validator1}
+      - P2P_PORT=${P2P_PORT:-9001}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=${REDIS_DB:-0}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - BOOTSTRAP_PEERS=${BOOTSTRAP_PEERS}
+      - BOOTSTRAP_MULTIADDR=${BOOTSTRAP_MULTIADDR}
+      - RENDEZVOUS_POINT=${RENDEZVOUS_POINT:-powerloom-snapshot-sequencer-network}
+      - PRIVATE_KEY=${PRIVATE_KEY}
+      - PUBLIC_IP=${PUBLIC_IP}
+      - DEBUG_MODE=${DEBUG_MODE:-false}
+      # Protocol/Market config
+      - PROTOCOL_STATE_CONTRACT=${PROTOCOL_STATE_CONTRACT}
+      - DATA_MARKET_ADDRESSES=${DATA_MARKET_ADDRESSES}
+      # Gossipsub topic configuration
+      - GOSSIPSUB_SNAPSHOT_SUBMISSION_PREFIX=${GOSSIPSUB_SNAPSHOT_SUBMISSION_PREFIX:-/powerloom/snapshot-submissions}
+      - GOSSIPSUB_FINALIZED_BATCH_PREFIX=${GOSSIPSUB_FINALIZED_BATCH_PREFIX:-/powerloom/finalized-batches}
+      - GOSSIPSUB_VALIDATOR_PRESENCE_TOPIC=${GOSSIPSUB_VALIDATOR_PRESENCE_TOPIC:-/powerloom/validator/presence}
+      - GOSSIPSUB_CONSENSUS_VOTES_TOPIC=${GOSSIPSUB_CONSENSUS_VOTES_TOPIC:-/powerloom/consensus/votes}
+      - GOSSIPSUB_CONSENSUS_PROPOSALS_TOPIC=${GOSSIPSUB_CONSENSUS_PROPOSALS_TOPIC:-/powerloom/consensus/proposals}
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "${P2P_PORT:-9001}:${P2P_PORT:-9001}"
+    networks:
+      - sequencer-net
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Dequeuer - Processes submissions from Redis queue (scalable)
+  dequeuer:
+    build:
+      context: .
+      dockerfile: Dockerfile.snapshot-sequencer
+    environment:
+      - SEQUENCER_ID=${SEQUENCER_ID:-validator1}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=${REDIS_DB:-0}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - DEBUG_MODE=${DEBUG_MODE:-false}
+      # Component toggles - ONLY DEQUEUER
+      - ENABLE_LISTENER=false
+      - ENABLE_DEQUEUER=true
+      - ENABLE_FINALIZER=false
+      - ENABLE_BATCH_AGGREGATION=false
+      - ENABLE_EVENT_MONITOR=false
+      # Dequeuer specific
+      - DEQUEUER_WORKERS=${DEQUEUER_WORKERS:-5}
+      - MAX_SUBMISSIONS_PER_EPOCH=${MAX_SUBMISSIONS_PER_EPOCH:-100}
+      # Identity verification
+      - SKIP_IDENTITY_VERIFICATION=${SKIP_IDENTITY_VERIFICATION:-false}
+      - CHECK_FLAGGED_SNAPSHOTTERS=${CHECK_FLAGGED_SNAPSHOTTERS:-true}
+      - VERIFICATION_CACHE_TTL=${VERIFICATION_CACHE_TTL:-600}
+      # Protocol/Market config
+      - PROTOCOL_STATE_CONTRACT=${PROTOCOL_STATE_CONTRACT}
+      - DATA_MARKET_ADDRESSES=${DATA_MARKET_ADDRESSES}
+      - POWERLOOM_RPC_NODES=${POWERLOOM_RPC_NODES}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - sequencer-net
+    restart: unless-stopped
+    deploy:
+      replicas: ${DEQUEUER_REPLICAS:-2}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Event Monitor - Watches for EpochReleased events
+  event-monitor:
+    build:
+      context: .
+      dockerfile: Dockerfile.snapshot-sequencer
+    environment:
+      - SEQUENCER_ID=${SEQUENCER_ID:-validator1}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=${REDIS_DB:-0}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - DEBUG_MODE=${DEBUG_MODE:-false}
+      # Component toggles - ONLY EVENT MONITOR
+      - ENABLE_LISTENER=false
+      - ENABLE_DEQUEUER=false
+      - ENABLE_FINALIZER=false
+      - ENABLE_BATCH_AGGREGATION=false
+      - ENABLE_EVENT_MONITOR=true
+      # RPC Configuration
+      - POWERLOOM_RPC_NODES=${POWERLOOM_RPC_NODES}
+      - POWERLOOM_ARCHIVE_RPC_NODES=${POWERLOOM_ARCHIVE_RPC_NODES:-[]}
+      # Contract addresses
+      - PROTOCOL_STATE_CONTRACT=${PROTOCOL_STATE_CONTRACT}
+      - DATA_MARKET_ADDRESSES=${DATA_MARKET_ADDRESSES}
+      # Contract ABI path
+      - CONTRACT_ABI_PATH=${CONTRACT_ABI_PATH:-./abi/ProtocolContract.json}
+      # Event monitoring config
+      - EVENT_POLL_INTERVAL=${EVENT_POLL_INTERVAL:-12}
+      - EVENT_START_BLOCK=${EVENT_START_BLOCK:-0}
+      - EVENT_BLOCK_BATCH_SIZE=${EVENT_BLOCK_BATCH_SIZE:-1000}
+      - MAX_CONCURRENT_WINDOWS=${MAX_CONCURRENT_WINDOWS:-100}
+      - SUBMISSION_WINDOW_DURATION=${SUBMISSION_WINDOW_DURATION:-60}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - sequencer-net
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Finalizer - Creates batches, stores in IPFS (scalable)
+  finalizer:
+    build:
+      context: .
+      dockerfile: Dockerfile.snapshot-sequencer
+    environment:
+      - SEQUENCER_ID=${SEQUENCER_ID:-validator1}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=${REDIS_DB:-0}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - DEBUG_MODE=${DEBUG_MODE:-false}
+      # Component toggles - ONLY FINALIZER (NO AGGREGATION)
+      - ENABLE_LISTENER=false
+      - ENABLE_DEQUEUER=false
+      - ENABLE_FINALIZER=true
+      - ENABLE_BATCH_AGGREGATION=false  # Aggregation is separate now
+      - ENABLE_EVENT_MONITOR=false
+      # Storage configuration
+      - STORAGE_PROVIDER=${STORAGE_PROVIDER:-ipfs}
+      - IPFS_HOST=${IPFS_HOST:-localhost:5001}
+      - DA_PROVIDER=${DA_PROVIDER:-none}
+      # Protocol/Market config
+      - PROTOCOL_STATE_CONTRACT=${PROTOCOL_STATE_CONTRACT}
+      - DATA_MARKET_ADDRESSES=${DATA_MARKET_ADDRESSES}
+      - SUBMISSION_WINDOW_DURATION=${SUBMISSION_WINDOW_DURATION:-60}
+      # Finalizer specific
+      - FINALIZER_WORKERS=${FINALIZER_WORKERS:-5}
+      - FINALIZATION_BATCH_SIZE=${FINALIZATION_BATCH_SIZE:-20}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - sequencer-net
+    restart: unless-stopped
+    deploy:
+      replicas: ${FINALIZER_REPLICAS:-2}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Aggregator - Singleton for consensus/batch aggregation
+  aggregator:
+    build:
+      context: .
+      dockerfile: Dockerfile.aggregator
+    environment:
+      - SEQUENCER_ID=${SEQUENCER_ID:-validator1}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=${REDIS_DB:-0}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - DEBUG_MODE=${DEBUG_MODE:-false}
+      # Storage configuration for aggregated results
+      - IPFS_HOST=${IPFS_HOST:-localhost:5001}
+      # Protocol/Market config
+      - PROTOCOL_STATE_CONTRACT=${PROTOCOL_STATE_CONTRACT}
+      - DATA_MARKET_ADDRESSES=${DATA_MARKET_ADDRESSES}
+      - POWERLOOM_RPC_NODES=${POWERLOOM_RPC_NODES}
+    depends_on:
+      redis:
+        condition: service_healthy
+      p2p-gateway:
+        condition: service_started
+    networks:
+      - sequencer-net
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # State Tracker - Background worker for data aggregation
+  state-tracker:
+    build:
+      context: .
+      dockerfile: Dockerfile.state-tracker
+    container_name: dsv-state-tracker
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=
+      - REDIS_DB=0
+      - PROTOCOL_STATE_CONTRACT=${PROTOCOL_STATE_CONTRACT}
+      - DATA_MARKET_ADDRESSES=${DATA_MARKET_ADDRESSES}
+      - STATE_TRACKER_RETENTION_DAYS=7
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - sequencer-net
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+  # Monitor API - REST API for pipeline monitoring
+  monitor-api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.monitor-api
+    container_name: dsv-monitor-api
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=${REDIS_DB:-0}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - MONITOR_API_PORT=${MONITOR_API_PORT:-9091}
+      - VALIDATOR_ID=${SEQUENCER_ID:-validator-001}
+      - PROTOCOL_STATE_CONTRACT=${PROTOCOL_STATE_CONTRACT}
+      - DATA_MARKET_ADDRESSES=${DATA_MARKET_ADDRESSES}
+    ports:
+      - "127.0.0.1:${MONITOR_API_PORT:-9091}:${MONITOR_API_PORT:-9091}"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - sequencer-net
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+  # Optional: Monitoring with Prometheus + Grafana
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    ports:
+      - "9090:9090"
+    networks:
+      - sequencer-net
+    profiles:
+      - monitoring
+
+  grafana:
+    image: grafana/grafana:latest
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    networks:
+      - sequencer-net
+    profiles:
+      - monitoring
+
+# IPFS Node - Optional local IPFS service for reduced latency
+  ipfs:
+    image: ipfs/kubo:master-latest
+    container_name: dsv-ipfs
+    volumes:
+      - ${IPFS_DATA_DIR:-/data/ipfs}:/data/ipfs
+    ports:
+      - "127.0.0.1:${IPFS_API_PORT:-5001}:5001"    # IPFS API port (required for DSV)
+      - "127.0.0.1:${IPFS_SWARM_PORT:-4001}:4001"  # IPFS Swarm port for P2P communication
+    environment:
+      - IPFS_PROFILE=server
+      - IPFS_PATH=/data/ipfs
+      # Cleanup configuration
+      - DATA_CLEANUP_DAYS=${IPFS_CLEANUP_MAX_AGE_DAYS:-7}
+      - CLEANUP_SCHEDULE=0 */${IPFS_CLEANUP_INTERVAL_HOURS:-72} * * *
+    entrypoint: >
+      sh -c '
+        echo "Setting up data cleanup cron job..."
+        mkdir -p /var/spool/cron/crontabs
+
+        cleanup_cmd="date && echo Starting IPFS cleanup process... && find /data/ipfs -type f -mtime +$${DATA_CLEANUP_DAYS} -name *.data -print -delete && echo Cleanup process completed."
+        echo "$${CLEANUP_SCHEDULE} $${cleanup_cmd} >> /proc/1/fd/1 2>&1" > /var/spool/cron/crontabs/root
+        chmod 0644 /var/spool/cron/crontabs/root
+
+        echo "Cron job set up. Will clean files older than $${DATA_CLEANUP_DAYS} days every $${IPFS_CLEANUP_INTERVAL_HOURS:-72} hours ($${CLEANUP_SCHEDULE})"
+
+        # Initialize IPFS repository if not exists
+        if [ ! -f /data/ipfs/config ]; then
+          echo "Initializing IPFS repository..."
+          ipfs init --profile server
+
+          # Configure for server deployment
+          ipfs config Addresses.API /ip4/0.0.0.0/tcp/5001
+          ipfs config Addresses.Gateway /ip4/0.0.0.0/tcp/8080
+          ipfs config Addresses.Swarm /ip4/0.0.0.0/tcp/4001
+          ipfs config Swarm.ConnMgr.HighWater 2000
+          ipfs config Swarm.ConnMgr.LowWater 500
+          ipfs config Datastore.StorageMax "200GB"
+
+          # Enable pubsub for P2P messaging
+          ipfs config Pubsub.Enabled true
+
+          # Set up CORS for API access
+          ipfs config API.HTTPHeaders.Access-Control-Allow-Origin "[*]"
+          ipfs config API.HTTPHeaders.Access-Control-Allow-Methods "[\"PUT\", \"POST\", \"GET\"]"
+
+          # Optimize for performance
+          ipfs config --json Experimental.FilestoreEnabled true
+          echo "IPFS configuration completed"
+        fi
+
+        echo "Starting cron daemon..."
+        crond
+
+        echo "Starting IPFS daemon..."
+        exec /sbin/tini -- ipfs daemon --migrate=true --enable-pubsub-experiment
+      '
+    # System resource limits for optimal IPFS performance
+    ulimits:
+      nofile:
+        soft: 1000000
+        hard: 1000000
+      memlock:
+        soft: -1      # Unlimited memory lock
+        hard: -1
+      nproc:
+        soft: 32768   # High process limit for concurrent connections
+        hard: 32768
+    healthcheck:
+      test: ["CMD", "ipfs", "id"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s  # Allow time for initialization
+    networks:
+      - sequencer-net
+    restart: unless-stopped
+    profiles:
+      - ipfs
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"  # Increased log size for IPFS debugging
+        max-file: "5"
+
+  
+volumes:
+  redis-data:
+  ipfs-data:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  sequencer-net:
+    driver: bridge

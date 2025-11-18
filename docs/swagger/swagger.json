@@ -1,0 +1,512 @@
+{
+    "swagger": "2.0",
+    "info": {
+        "description": "Monitoring API that reads pre-aggregated data from state-tracker worker",
+        "title": "DSV Pipeline Monitor API (Direct Redis)",
+        "contact": {},
+        "version": "3.0"
+    },
+    "basePath": "/api/v1",
+    "paths": {
+        "/aggregation/results": {
+            "get": {
+                "description": "Get network-wide aggregated batches with validator contributions",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "aggregation"
+                ],
+                "summary": "Aggregation results",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Number of results (default 20)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/main.FinalizedBatch"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/batches/finalized": {
+            "get": {
+                "description": "Get Level 1 (local) or Level 2 (aggregated) finalized batches",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "batches"
+                ],
+                "summary": "Finalized batches",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Batch level (1 or 2, default both)",
+                        "name": "level",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Specific epoch ID",
+                        "name": "epoch_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Number of batches to retrieve (default 50)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/main.FinalizedBatch"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/dashboard/summary": {
+            "get": {
+                "description": "Get pre-aggregated dashboard metrics from state-tracker",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "dashboard"
+                ],
+                "summary": "Dashboard summary",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/main.DashboardSummary"
+                        }
+                    }
+                }
+            }
+        },
+        "/epochs/timeline": {
+            "get": {
+                "description": "Get epoch progression with phases and batch status",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "epochs"
+                ],
+                "summary": "Epochs timeline",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Number of epochs (default 50)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/main.EpochInfo"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/health": {
+            "get": {
+                "description": "Check if the API and Redis connection are healthy",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "health"
+                ],
+                "summary": "Health check",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/pipeline/overview": {
+            "get": {
+                "description": "Get pipeline metrics from pre-aggregated data",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "pipeline"
+                ],
+                "summary": "Pipeline overview (legacy support)",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/queues/status": {
+            "get": {
+                "description": "Get real-time queue depths and processing rates",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "queues"
+                ],
+                "summary": "Queue status",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/main.QueueStatus"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/stats/daily": {
+            "get": {
+                "description": "Get pre-aggregated 24-hour statistics",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "stats"
+                ],
+                "summary": "Daily statistics",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/main.DailyStats"
+                        }
+                    }
+                }
+            }
+        },
+        "/stats/hourly": {
+            "get": {
+                "description": "Get pre-aggregated hourly statistics",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "stats"
+                ],
+                "summary": "Hourly statistics",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Number of hours to retrieve (default 24)",
+                        "name": "hours",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/main.HourlyStats"
+                        }
+                    }
+                }
+            }
+        },
+        "/timeline/recent": {
+            "get": {
+                "description": "Get recent events from timeline sorted sets",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "timeline"
+                ],
+                "summary": "Recent timeline",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Event type (submission, validation, epoch, batch)",
+                        "name": "type",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Minutes to look back (default 5)",
+                        "name": "minutes",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "definitions": {
+        "main.DailyStats": {
+            "type": "object",
+            "properties": {
+                "hourly_breakdown": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                    }
+                },
+                "summary": {
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "timestamp": {
+                    "type": "string"
+                }
+            }
+        },
+        "main.DashboardSummary": {
+            "type": "object",
+            "properties": {
+                "current_stats": {
+                    "description": "From stats:current",
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "metrics": {
+                    "description": "From dashboard:summary",
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "recent_activity": {
+                    "description": "1m and 5m activity",
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "timestamp": {
+                    "type": "string"
+                },
+                "validator_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "main.EpochInfo": {
+            "type": "object",
+            "properties": {
+                "data_market": {
+                    "type": "string"
+                },
+                "duration": {
+                    "type": "integer"
+                },
+                "epoch_id": {
+                    "type": "string"
+                },
+                "level1_batch_exists": {
+                    "type": "boolean"
+                },
+                "level2_batch_exists": {
+                    "type": "boolean"
+                },
+                "phase": {
+                    "description": "\"submission\", \"finalization\", \"aggregation\", \"complete\"",
+                    "type": "string"
+                },
+                "start_time": {
+                    "type": "integer"
+                },
+                "status": {
+                    "description": "\"open\", \"closed\"",
+                    "type": "string"
+                }
+            }
+        },
+        "main.FinalizedBatch": {
+            "type": "object",
+            "properties": {
+                "epoch_id": {
+                    "type": "string"
+                },
+                "ipfs_cid": {
+                    "type": "string"
+                },
+                "level": {
+                    "description": "1 for local, 2 for aggregated",
+                    "type": "integer"
+                },
+                "merkle_root": {
+                    "type": "string"
+                },
+                "project_count": {
+                    "type": "integer"
+                },
+                "timestamp": {
+                    "type": "integer"
+                },
+                "type": {
+                    "description": "\"local\" or \"aggregated\"",
+                    "type": "string"
+                },
+                "validator_count": {
+                    "description": "Level 2 only",
+                    "type": "integer"
+                },
+                "validator_id": {
+                    "description": "Level 1 only",
+                    "type": "string"
+                },
+                "validator_ids": {
+                    "description": "Level 2 only",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "main.HourlyStats": {
+            "type": "object",
+            "properties": {
+                "hours": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                    }
+                },
+                "timestamp": {
+                    "type": "string"
+                }
+            }
+        },
+        "main.QueueStatus": {
+            "type": "object",
+            "properties": {
+                "depth": {
+                    "type": "integer"
+                },
+                "queue_name": {
+                    "type": "string"
+                },
+                "status": {
+                    "description": "\"empty\", \"healthy\", \"moderate\", \"high\", \"critical\"",
+                    "type": "string"
+                }
+            }
+        }
+    }
+}

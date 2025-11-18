@@ -6,7 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	rediskeys "github.com/powerloom/snapshot-sequencer-validator/pkgs/redis"
+	"github.com/redis/go-redis/v9"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -48,7 +49,7 @@ func NewWorkerMonitor(redisClient *redis.Client, workerID string, workerType Wor
 // UpdateStatus updates the worker's current status in Redis
 func (wm *WorkerMonitor) UpdateStatus(status WorkerStatus) error {
 	ctx := context.Background()
-	key := fmt.Sprintf("worker:%s:%s:status", wm.workerType, wm.workerID)
+	key := rediskeys.WorkerStatus(string(wm.workerType), wm.workerID)
 	
 	err := wm.redisClient.Set(ctx, key, string(status), 24*time.Hour).Err()
 	if err != nil {
@@ -66,7 +67,7 @@ func (wm *WorkerMonitor) UpdateStatus(status WorkerStatus) error {
 // UpdateHeartbeat updates the worker's last heartbeat timestamp
 func (wm *WorkerMonitor) UpdateHeartbeat() error {
 	ctx := context.Background()
-	key := fmt.Sprintf("worker:%s:%s:heartbeat", wm.workerType, wm.workerID)
+	key := rediskeys.WorkerHeartbeat(string(wm.workerType), wm.workerID)
 	
 	timestamp := time.Now().Unix()
 	err := wm.redisClient.Set(ctx, key, timestamp, 5*time.Minute).Err()
@@ -84,9 +85,9 @@ func (wm *WorkerMonitor) SetCurrentBatch(batchInfo string) error {
 	
 	var key string
 	if wm.workerType == WorkerTypeFinalizer {
-		key = fmt.Sprintf("worker:%s:%s:current_batch", wm.workerType, wm.workerID)
+		key = rediskeys.WorkerCurrentBatch(string(wm.workerType), wm.workerID)
 	} else if wm.workerType == WorkerTypeAggregator {
-		key = fmt.Sprintf("worker:%s:current_epoch", wm.workerType)
+		key = rediskeys.WorkerCurrentEpoch(string(wm.workerType))
 	}
 	
 	err := wm.redisClient.Set(ctx, key, batchInfo, 1*time.Hour).Err()
@@ -101,7 +102,7 @@ func (wm *WorkerMonitor) SetCurrentBatch(batchInfo string) error {
 // IncrementProcessedCount increments the count of processed items
 func (wm *WorkerMonitor) IncrementProcessedCount() error {
 	ctx := context.Background()
-	key := fmt.Sprintf("worker:%s:%s:batches_processed", wm.workerType, wm.workerID)
+	key := rediskeys.WorkerBatchesProcessed(string(wm.workerType), wm.workerID)
 	
 	err := wm.redisClient.Incr(ctx, key).Err()
 	if err != nil {
@@ -115,7 +116,7 @@ func (wm *WorkerMonitor) IncrementProcessedCount() error {
 // TrackBatchPart tracks the status of a batch part
 func TrackBatchPart(redisClient *redis.Client, epochID string, batchID int, status string) error {
 	ctx := context.Background()
-	key := fmt.Sprintf("batch:%s:part:%d:status", epochID, batchID)
+	key := rediskeys.BatchPartStatus(epochID, batchID)
 	
 	err := redisClient.Set(ctx, key, status, 2*time.Hour).Err()
 	if err != nil {
@@ -125,7 +126,7 @@ func TrackBatchPart(redisClient *redis.Client, epochID string, batchID int, stat
 	
 	// Update worker assignment if processing
 	if status == "processing" {
-		workerKey := fmt.Sprintf("batch:%s:part:%d:worker", epochID, batchID)
+		workerKey := rediskeys.BatchPartWorker(epochID, batchID)
 		// Worker ID should be passed in context or as parameter
 		redisClient.Set(ctx, workerKey, "worker-id", 2*time.Hour)
 	}
@@ -134,23 +135,25 @@ func TrackBatchPart(redisClient *redis.Client, epochID string, batchID int, stat
 }
 
 // UpdateBatchPartsProgress updates the progress of batch parts completion
-func UpdateBatchPartsProgress(redisClient *redis.Client, epochID string, completed, total int) error {
+func UpdateBatchPartsProgress(redisClient *redis.Client, protocolState, dataMarket, epochID string, completed, total int) error {
 	ctx := context.Background()
-	
-	completedKey := fmt.Sprintf("epoch:%s:parts:completed", epochID)
-	totalKey := fmt.Sprintf("epoch:%s:parts:total", epochID)
-	
+
+	// Create key builder for namespaced keys
+	keyBuilder := rediskeys.NewKeyBuilder(protocolState, dataMarket)
+	completedKey := keyBuilder.EpochPartsCompleted(epochID)
+	totalKey := keyBuilder.EpochPartsTotal(epochID)
+
 	pipe := redisClient.Pipeline()
 	pipe.Set(ctx, completedKey, completed, 2*time.Hour)
 	pipe.Set(ctx, totalKey, total, 2*time.Hour)
-	
+
 	// Mark as ready if all parts are complete
 	if completed == total && total > 0 {
-		readyKey := fmt.Sprintf("epoch:%s:parts:ready", epochID)
+		readyKey := keyBuilder.EpochPartsReady(epochID)
 		pipe.Set(ctx, readyKey, "true", 2*time.Hour)
-		
-		// Push to aggregation queue
-		aggQueueKey := "aggregationQueue"
+
+		// Push to aggregation queue - namespaced
+		aggQueueKey := keyBuilder.AggregationQueueLevel1()
 		aggData := map[string]interface{}{
 			"epoch_id":        epochID,
 			"parts_completed": completed,
@@ -172,7 +175,7 @@ func UpdateBatchPartsProgress(redisClient *redis.Client, epochID string, complet
 // TrackFinalizedBatch tracks a fully finalized batch with IPFS and merkle root
 func TrackFinalizedBatch(redisClient *redis.Client, epochID string, ipfsCID string, merkleRoot string) error {
 	ctx := context.Background()
-	key := fmt.Sprintf("batch:finalized:%s", epochID)
+	key := rediskeys.BatchFinalized(epochID)
 	
 	pipe := redisClient.Pipeline()
 	pipe.HSet(ctx, key, "ipfs_cid", ipfsCID)
@@ -187,7 +190,7 @@ func TrackFinalizedBatch(redisClient *redis.Client, epochID string, ipfsCID stri
 	}
 	
 	// Update metrics
-	metricsKey := "metrics:total_processed"
+	metricsKey := rediskeys.MetricsTotalProcessed()
 	redisClient.Incr(ctx, metricsKey)
 	
 	return nil
@@ -196,10 +199,10 @@ func TrackFinalizedBatch(redisClient *redis.Client, epochID string, ipfsCID stri
 // UpdatePerformanceMetrics updates system-wide performance metrics
 func UpdatePerformanceMetrics(redisClient *redis.Client, processingRate float64, avgLatency int64) error {
 	ctx := context.Background()
-	
+
 	pipe := redisClient.Pipeline()
-	pipe.Set(ctx, "metrics:processing_rate", fmt.Sprintf("%.2f", processingRate), 5*time.Minute)
-	pipe.Set(ctx, "metrics:avg_latency", avgLatency, 5*time.Minute)
+	pipe.Set(ctx, rediskeys.MetricsProcessingRate(), fmt.Sprintf("%.2f", processingRate), 5*time.Minute)
+	pipe.Set(ctx, rediskeys.MetricsAvgLatency(), avgLatency, 5*time.Minute)
 	
 	_, err := pipe.Exec(ctx)
 	if err != nil {
@@ -254,7 +257,7 @@ func (wm *WorkerMonitor) ProcessingCompleted() {
 	// Clear current batch
 	ctx := context.Background()
 	if wm.workerType == WorkerTypeFinalizer {
-		key := fmt.Sprintf("worker:%s:%s:current_batch", wm.workerType, wm.workerID)
+		key := rediskeys.WorkerCurrentBatch(string(wm.workerType), wm.workerID)
 		wm.redisClient.Del(ctx, key)
 	}
 }
@@ -265,7 +268,7 @@ func (wm *WorkerMonitor) ProcessingFailed(err error) {
 	
 	// Log error details
 	ctx := context.Background()
-	errorKey := fmt.Sprintf("worker:%s:%s:last_error", wm.workerType, wm.workerID)
+	errorKey := rediskeys.WorkerLastError(string(wm.workerType), wm.workerID)
 	errorInfo := map[string]interface{}{
 		"error":     err.Error(),
 		"timestamp": time.Now().Unix(),
@@ -280,11 +283,11 @@ func (wm *WorkerMonitor) CleanupWorker() {
 	
 	// Remove all worker keys
 	keys := []string{
-		fmt.Sprintf("worker:%s:%s:status", wm.workerType, wm.workerID),
-		fmt.Sprintf("worker:%s:%s:heartbeat", wm.workerType, wm.workerID),
-		fmt.Sprintf("worker:%s:%s:current_batch", wm.workerType, wm.workerID),
-		fmt.Sprintf("worker:%s:%s:batches_processed", wm.workerType, wm.workerID),
-		fmt.Sprintf("worker:%s:%s:last_error", wm.workerType, wm.workerID),
+		rediskeys.WorkerStatus(string(wm.workerType), wm.workerID),
+		rediskeys.WorkerHeartbeat(string(wm.workerType), wm.workerID),
+		rediskeys.WorkerCurrentBatch(string(wm.workerType), wm.workerID),
+		rediskeys.WorkerBatchesProcessed(string(wm.workerType), wm.workerID),
+		rediskeys.WorkerLastError(string(wm.workerType), wm.workerID),
 	}
 	
 	for _, key := range keys {

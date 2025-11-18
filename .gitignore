@@ -1,6 +1,7 @@
+.DS_Store
 # Environment files
-.env
-.env.*
+.localenvs/
+
 
 # Binary output directory
 bin/
@@ -8,15 +9,14 @@ bin/
 # Binary files (never commit these)
 # Main binaries
 unified
-sequencer-consensus-test
 cmd/unified/unified
-cmd/sequencer-consensus-test/sequencer-consensus-test
 
 # Any file without extension in cmd directories
 cmd/*/[!.]*
 !cmd/*/
 !cmd/*/*.go
 !cmd/*/*.md
+!cmd/*/Dockerfile*
 
 # Test binaries
 *.test
