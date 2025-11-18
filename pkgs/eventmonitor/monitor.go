@@ -15,29 +15,41 @@ import (
 	"github.com/redis/go-redis/v9"
 	rpchelper "github.com/powerloom/go-rpc-helper"
 	rediskeys "github.com/powerloom/snapshot-sequencer-validator/pkgs/redis"
+	"github.com/powerloom/snapshot-sequencer-validator/pkgs/vpa"
 	log "github.com/sirupsen/logrus"
 )
 
-// EventMonitor watches for EpochReleased events and manages submission windows
+// EventMonitor watches for EpochReleased and PrioritiesAssigned events and manages submission windows
 type EventMonitor struct {
 	rpcHelper       *rpchelper.RPCHelper
 	redisClient     *redis.Client
 	contractAddr    common.Address
 	contractABI     *ContractABI
-	
+
+	// VPA Contract Monitoring
+	vpaContractAddr   common.Address
+	vpaContractABI    *ContractABI
+	vpaClient         *vpa.PriorityCachingClient
+	vpaEnabled        bool
+
 	// Window management
 	windowManager   *WindowManager
-	
+
 	// Event tracking
-	lastProcessedBlock uint64
-	eventChan          chan *EpochReleasedEvent
-	epochReleasedSig   common.Hash // Cache the event signature to avoid recomputing
-	
+	lastProcessedBlock      uint64
+	eventChan              chan *EpochReleasedEvent
+	epochReleasedSig       common.Hash // Cache the event signature to avoid recomputing
+
+	// VPA Event tracking
+	vpaEventChan           chan *PrioritiesAssignedEvent
+	prioritiesAssignedSig  common.Hash // Cache VPA event signature
+	lastProcessedVPABlock  uint64      // Separate block tracking for VPA contract
+
 	// Configuration
 	pollInterval    time.Duration
 	windowDuration  time.Duration
 	dataMarkets     []string // List of data market addresses to monitor
-	
+
 	ctx    context.Context
 	cancel context.CancelFunc
 }
@@ -50,6 +62,17 @@ type EpochReleasedEvent struct {
 	Timestamp         uint64
 	TransactionHash   common.Hash
 	BlockNumber       uint64
+}
+
+// PrioritiesAssignedEvent represents a priority assignment from the VPA contract
+type PrioritiesAssignedEvent struct {
+	EpochID         *big.Int
+	Seed            *big.Int
+	Timestamp       uint64
+	ValidatorCount  *big.Int
+	DataMarket      common.Address
+	TransactionHash common.Hash
+	BlockNumber     uint64
 }
 
 // WindowManager manages submission windows for epochs
@@ -110,6 +133,13 @@ type Config struct {
 	DataMarkets      []string // Data market addresses to monitor
 	MaxWindows       int      // Max concurrent submission windows
 	FinalizationBatchSize int  // Number of projects per finalization batch
+
+	// VPA Configuration (optional)
+	VPAContractAddress  string // VPA contract address for priority monitoring
+	VPAContractABIPath  string // Path to VPA contract ABI JSON file
+	VPAValidatorAddress string // This validator's address for VPA client
+	VPARPCURL           string // RPC URL for VPA client (if different from main RPC)
+	ProtocolState       string // Protocol state contract address for namespacing
 }
 
 // NewEventMonitor creates a new event monitor
@@ -166,7 +196,74 @@ func NewEventMonitor(cfg *Config) (*EventMonitor, error) {
 		epochReleasedSig = getEpochReleasedEventSignature()
 		log.Infof("✅ Using hardcoded EpochReleased event signature: %s", epochReleasedSig.Hex())
 	}
-	
+
+	// Initialize VPA components if configured
+	var vpaContractAddr common.Address
+	var vpaContractABI *ContractABI
+	var vpaClient *vpa.PriorityCachingClient
+	var prioritiesAssignedSig common.Hash
+	var vpaEnabled bool
+
+	if cfg.VPAContractAddress != "" && cfg.VPAValidatorAddress != "" {
+		vpaEnabled = true
+		vpaContractAddr = common.HexToAddress(cfg.VPAContractAddress)
+
+		// Load VPA contract ABI if path provided
+		if cfg.VPAContractABIPath != "" {
+			abi, err := LoadContractABI(cfg.VPAContractABIPath)
+			if err != nil {
+				cancel()
+				return nil, fmt.Errorf("failed to load VPA contract ABI: %w", err)
+			}
+			vpaContractABI = abi
+			log.Infof("✅ Loaded VPA contract ABI from %s", cfg.VPAContractABIPath)
+
+			// Verify the ABI has the PrioritiesAssigned event
+			if !vpaContractABI.HasEvent("PrioritiesAssigned") {
+				cancel()
+				return nil, fmt.Errorf("VPA ABI does not contain PrioritiesAssigned event")
+			}
+
+			// Get VPA event signature from ABI
+			sig, err := vpaContractABI.GetEventHash("PrioritiesAssigned")
+			if err != nil {
+				cancel()
+				return nil, fmt.Errorf("failed to get PrioritiesAssigned event hash from VPA ABI: %w", err)
+			}
+			prioritiesAssignedSig = sig
+			log.Infof("✅ Using ABI-derived PrioritiesAssigned event signature: %s", prioritiesAssignedSig.Hex())
+		} else {
+			// Fallback to hardcoded signature
+			prioritiesAssignedSig = getPrioritiesAssignedEventSignature()
+			log.Infof("✅ Using hardcoded PrioritiesAssigned event signature: %s", prioritiesAssignedSig.Hex())
+		}
+
+		// Initialize VPA client for the first data market (if available)
+		if len(cfg.DataMarkets) > 0 {
+			if cfg.VPARPCURL == "" {
+				log.Warn("VPA RPC URL not configured, VPA client will not be initialized")
+				vpaEnabled = false
+			} else {
+				var err error
+				vpaClient, err = vpa.NewPriorityCachingClient(
+					cfg.VPARPCURL,
+					cfg.VPAContractAddress,
+					cfg.VPAValidatorAddress,
+					cfg.RedisClient,
+					cfg.ProtocolState,
+					cfg.DataMarkets[0], // Use first data market as default
+				)
+				if err != nil {
+					cancel()
+					return nil, fmt.Errorf("failed to create VPA caching client: %w", err)
+				}
+				log.Infof("✅ Initialized VPA caching client for validator %s", cfg.VPAValidatorAddress)
+			}
+		}
+	} else {
+		log.Info("VPA monitoring disabled - no VPA contract address or validator address configured")
+	}
+
 	windowManager := &WindowManager{
 		activeWindows:   make(map[string]*EpochWindow),
 		windowSemaphore: make(chan struct{}, cfg.MaxWindows),
@@ -176,19 +273,35 @@ func NewEventMonitor(cfg *Config) (*EventMonitor, error) {
 		finalizationBatchSize: cfg.FinalizationBatchSize,
 		keyBuilders:     make(map[string]*rediskeys.KeyBuilder),
 	}
-	
+
 	return &EventMonitor{
 		rpcHelper:          cfg.RPCHelper,
 		redisClient:        cfg.RedisClient,
 		contractAddr:       common.HexToAddress(cfg.ContractAddress),
 		contractABI:        contractABI,
+
+		// VPA configuration
+		vpaContractAddr:     vpaContractAddr,
+		vpaContractABI:      vpaContractABI,
+		vpaClient:          vpaClient,
+		vpaEnabled:         vpaEnabled,
+		prioritiesAssignedSig: prioritiesAssignedSig,
+		lastProcessedVPABlock: startBlock, // Start from same block as main monitoring
+
+		// Window management
 		windowManager:      windowManager,
 		windowDuration:     cfg.WindowDuration,
+
+		// Event tracking
 		lastProcessedBlock: startBlock,
 		eventChan:          make(chan *EpochReleasedEvent, 100),
-		epochReleasedSig:   epochReleasedSig, // Set the cached signature
+		epochReleasedSig:   epochReleasedSig,
+		vpaEventChan:       make(chan *PrioritiesAssignedEvent, 100),
+
+		// Configuration
 		pollInterval:       cfg.PollInterval,
 		dataMarkets:        cfg.DataMarkets,
+
 		ctx:                ctx,
 		cancel:             cancel,
 	}, nil
@@ -197,13 +310,19 @@ func NewEventMonitor(cfg *Config) (*EventMonitor, error) {
 // Start begins monitoring for events
 func (m *EventMonitor) Start() error {
 	log.Info("🚀 Starting event monitor...")
-	
+
 	// Start event processor
 	go m.processEvents()
-	
+
+	// Start VPA event processor if enabled
+	if m.vpaEnabled {
+		go m.processVPAEvents()
+		log.Info("✅ VPA event processor started")
+	}
+
 	// Start block poller
 	go m.pollBlocks()
-	
+
 	return nil
 }
 
@@ -229,7 +348,7 @@ func (m *EventMonitor) pollBlocks() {
 	}
 }
 
-// checkForNewEvents queries for new EpochReleased events
+// checkForNewEvents queries for new EpochReleased and PrioritiesAssigned events
 func (m *EventMonitor) checkForNewEvents() {
 	// Get current block
 	currentBlock, err := m.rpcHelper.BlockNumber(m.ctx)
@@ -237,18 +356,29 @@ func (m *EventMonitor) checkForNewEvents() {
 		log.Errorf("Failed to get current block: %v", err)
 		return
 	}
-	
+
+	// Check for legacy EpochReleased events
+	m.checkForEpochReleasedEvents(currentBlock)
+
+	// Check for VPA PrioritiesAssigned events if enabled
+	if m.vpaEnabled {
+		m.checkForPrioritiesAssignedEvents(currentBlock)
+	}
+}
+
+// checkForEpochReleasedEvents queries for new EpochReleased events from legacy protocol state contract
+func (m *EventMonitor) checkForEpochReleasedEvents(currentBlock uint64) {
 	// Don't scan if we're already up to date
 	if m.lastProcessedBlock >= currentBlock {
 		return
 	}
-	
+
 	// Limit scan range to avoid overwhelming the node
 	toBlock := m.lastProcessedBlock + 1000
 	if toBlock > currentBlock {
 		toBlock = currentBlock
 	}
-	
+
 	// Use cached event signature (computed once at startup)
 	query := ethereum.FilterQuery{
 		FromBlock: big.NewInt(int64(m.lastProcessedBlock + 1)),
@@ -256,13 +386,13 @@ func (m *EventMonitor) checkForNewEvents() {
 		Addresses: []common.Address{m.contractAddr},
 		Topics:    [][]common.Hash{{m.epochReleasedSig}},
 	}
-	
+
 	logs, err := m.rpcHelper.FilterLogs(m.ctx, query)
 	if err != nil {
-		log.Errorf("Failed to filter logs: %v", err)
+		log.Errorf("Failed to filter EpochReleased logs: %v", err)
 		return
 	}
-	
+
 	for _, vLog := range logs {
 		event := m.parseEpochReleasedEvent(vLog)
 		if event != nil {
@@ -272,8 +402,48 @@ func (m *EventMonitor) checkForNewEvents() {
 			}
 		}
 	}
-	
+
 	m.lastProcessedBlock = toBlock
+}
+
+// checkForPrioritiesAssignedEvents queries for new PrioritiesAssigned events from VPA contract
+func (m *EventMonitor) checkForPrioritiesAssignedEvents(currentBlock uint64) {
+	// Don't scan if we're already up to date
+	if m.lastProcessedVPABlock >= currentBlock {
+		return
+	}
+
+	// Limit scan range to avoid overwhelming the node
+	toBlock := m.lastProcessedVPABlock + 1000
+	if toBlock > currentBlock {
+		toBlock = currentBlock
+	}
+
+	// Use cached VPA event signature
+	query := ethereum.FilterQuery{
+		FromBlock: big.NewInt(int64(m.lastProcessedVPABlock + 1)),
+		ToBlock:   big.NewInt(int64(toBlock)),
+		Addresses: []common.Address{m.vpaContractAddr},
+		Topics:    [][]common.Hash{{m.prioritiesAssignedSig}},
+	}
+
+	logs, err := m.rpcHelper.FilterLogs(m.ctx, query)
+	if err != nil {
+		log.Errorf("Failed to filter PrioritiesAssigned logs: %v", err)
+		return
+	}
+
+	for _, vLog := range logs {
+		event := m.parsePrioritiesAssignedEvent(vLog)
+		if event != nil {
+			// Only process events for configured data markets
+			if m.isValidDataMarket(event.DataMarket.Hex()) {
+				m.vpaEventChan <- event
+			}
+		}
+	}
+
+	m.lastProcessedVPABlock = toBlock
 }
 
 // parseEpochReleasedEvent parses the log into an EpochReleasedEvent
@@ -317,6 +487,49 @@ func (m *EventMonitor) parseEpochReleasedEvent(vLog types.Log) *EpochReleasedEve
 	}
 }
 
+// parsePrioritiesAssignedEvent parses the log into a PrioritiesAssignedEvent
+func (m *EventMonitor) parsePrioritiesAssignedEvent(vLog types.Log) *PrioritiesAssignedEvent {
+	// Event: PrioritiesAssigned(address indexed dataMarket, uint256 indexed epochId, uint256 seed, uint256 timestamp, uint256 validatorCount)
+	// topics[0] = event signature
+	// topics[1] = dataMarket (indexed)
+	// topics[2] = epochId (indexed)
+	// data contains: seed, timestamp, validatorCount (non-indexed)
+
+	if len(vLog.Topics) < 3 {
+		log.Warnf("Invalid PrioritiesAssigned event: expected at least 3 topics, got %d", len(vLog.Topics))
+		return nil
+	}
+
+	// Parse indexed fields from topics
+	dataMarket := common.HexToAddress(vLog.Topics[1].Hex())
+	epochID := new(big.Int).SetBytes(vLog.Topics[2].Bytes())
+
+	// Parse non-indexed fields from data
+	// The data contains: seed (uint256), timestamp (uint256), validatorCount (uint256)
+	if len(vLog.Data) < 96 { // 3 * 32 bytes
+		log.Warnf("Invalid PrioritiesAssigned event data: expected at least 96 bytes, got %d", len(vLog.Data))
+		return nil
+	}
+
+	// Each uint256 is 32 bytes
+	seed := new(big.Int).SetBytes(vLog.Data[0:32])
+	timestamp := new(big.Int).SetBytes(vLog.Data[32:64])
+	validatorCount := new(big.Int).SetBytes(vLog.Data[64:96])
+
+	log.Debugf("Parsed PrioritiesAssigned event: DataMarket=%s, EpochID=%s, Seed=%s, Timestamp=%s, ValidatorCount=%s",
+		dataMarket.Hex(), epochID.String(), seed.String(), timestamp.String(), validatorCount.String())
+
+	return &PrioritiesAssignedEvent{
+		EpochID:         epochID,
+		Seed:            seed,
+		Timestamp:       timestamp.Uint64(),
+		ValidatorCount:  validatorCount,
+		DataMarket:      dataMarket,
+		TransactionHash: vLog.TxHash,
+		BlockNumber:     vLog.BlockNumber,
+	}
+}
+
 // isValidDataMarket checks if the data market is in our configured list
 func (m *EventMonitor) isValidDataMarket(address string) bool {
 	for _, market := range m.dataMarkets {
@@ -340,8 +553,26 @@ func getEpochReleasedEventSignature() common.Hash {
 	// );
 	eventSignature := []byte("EpochReleased(address,uint256,uint256,uint256,uint256)")
 	hash := crypto.Keccak256Hash(eventSignature)
-	
+
 	log.Debugf("Computed EpochReleased event signature: %s", hash.Hex())
+	return hash
+}
+
+// getPrioritiesAssignedEventSignature computes the keccak256 hash of the VPA event signature
+func getPrioritiesAssignedEventSignature() common.Hash {
+	// Event signature: PrioritiesAssigned(address,uint256,uint256,uint256,uint256)
+	// This matches the event definition:
+	// event PrioritiesAssigned(
+	//     address indexed dataMarket,
+	//     uint256 indexed epochId,
+	//     uint256 seed,
+	//     uint256 timestamp,
+	//     uint256 validatorCount
+	// );
+	eventSignature := []byte("PrioritiesAssigned(address,uint256,uint256,uint256,uint256)")
+	hash := crypto.Keccak256Hash(eventSignature)
+
+	log.Debugf("Computed PrioritiesAssigned event signature: %s", hash.Hex())
 	return hash
 }
 
@@ -355,6 +586,41 @@ func (m *EventMonitor) processEvents() {
 			m.handleEpochReleased(event)
 		}
 	}
+}
+
+// processVPAEvents handles incoming VPA priority assignment events
+func (m *EventMonitor) processVPAEvents() {
+	for {
+		select {
+		case <-m.ctx.Done():
+			return
+		case event := <-m.vpaEventChan:
+			m.handlePrioritiesAssigned(event)
+		}
+	}
+}
+
+// handlePrioritiesAssigned processes a new priority assignment
+func (m *EventMonitor) handlePrioritiesAssigned(event *PrioritiesAssignedEvent) {
+	log.Infof("🎯 Priorities assigned for epoch %s in market %s (seed: %s, validators: %s) at block %d",
+		event.EpochID, event.DataMarket.Hex(), event.Seed.String(), event.ValidatorCount.String(), event.BlockNumber)
+
+	// Only cache priorities if VPA client is available
+	if m.vpaClient == nil {
+		log.Warn("VPA client not available, skipping priority caching")
+		return
+	}
+
+	// Cache priorities for this epoch and data market
+	err := m.vpaClient.CacheEpochPriorities(m.ctx, event.DataMarket.Hex(), event.EpochID.Uint64())
+	if err != nil {
+		log.Errorf("Failed to cache VPA priorities for epoch %s in market %s: %v",
+			event.EpochID, event.DataMarket.Hex(), err)
+		return
+	}
+
+	log.Infof("✅ Successfully cached VPA priorities for epoch %s in market %s",
+		event.EpochID, event.DataMarket.Hex())
 }
 
 // handleEpochReleased processes a new epoch release

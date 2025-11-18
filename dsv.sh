@@ -84,6 +84,7 @@ start_services() {
     # Check for flags
     local enable_monitoring=true
     local enable_ipfs=false
+    local enable_vpa=false
     local compose_args="-f docker-compose.separated.yml"
 
     # Parse arguments
@@ -94,6 +95,9 @@ start_services() {
                 ;;
             --with-ipfs)
                 enable_ipfs=true
+                ;;
+            --with-vpa)
+                enable_vpa=true
                 ;;
         esac
     done
@@ -113,6 +117,23 @@ start_services() {
             print_color "$YELLOW" "Then try again: ./dsv.sh start --with-ipfs"
             exit 1
         fi
+
+    # Check VPA configuration if --with-vpa flag is used
+    if [ "$enable_vpa" = true ]; then
+        if [ -z "$VPA_RELAYER_ENDPOINT" ]; then
+            print_color "$YELLOW" "⚠️  WARNING: VPA_RELAYER_ENDPOINT not set, using default"
+        fi
+        if [ -z "$VPA_SIGNER_ADDRESSES" ] || [ -z "$VPA_SIGNER_PRIVATE_KEYS" ]; then
+            print_color "$RED" "❌ CRITICAL: VPA multi-signer configuration incomplete"
+            print_color "$YELLOW" "Required environment variables:"
+            print_color "$YELLOW" "  VPA_SIGNER_ADDRESSES - Comma-separated list of signer addresses"
+            print_color "$YELLOW" "  VPA_SIGNER_PRIVATE_KEYS - Comma-separated list of private keys"
+            print_color "$YELLOW" ""
+            print_color "$YELLOW" "Add these to your .env file, then try again:"
+            print_color "$YELLOW" "  ./dsv.sh start --with-vpa"
+            exit 1
+        fi
+    fi
 
         # Check permissions
         if [ ! -r "$IPFS_DIR" ] || [ ! -w "$IPFS_DIR" ]; then
@@ -145,6 +166,9 @@ start_services() {
     fi
     if [ "$enable_ipfs" = true ]; then
         profiles="$profiles --profile ipfs"
+    fi
+    if [ "$enable_vpa" = true ]; then
+        profiles="$profiles --profile vpa"
     fi
 
     # Start services with specified profiles

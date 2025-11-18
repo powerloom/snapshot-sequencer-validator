@@ -99,6 +99,40 @@ func (kb *KeyBuilder) FinalizedBatch(epochID string) string {
 	return fmt.Sprintf("%s:%s:finalized:%s", kb.ProtocolState, kb.DataMarket, epochID)
 }
 
+// VPA Priority Caching Keys
+
+// VPAPriorities returns the key for cached validator priorities for an epoch
+func (kb *KeyBuilder) VPAPriorities(epochID string) string {
+	return fmt.Sprintf("%s:%s:vpa:priorities:%s", kb.ProtocolState, kb.DataMarket, epochID)
+}
+
+// VPAValidatorPriority returns the key for cached priority of a specific validator
+func (kb *KeyBuilder) VPAValidatorPriority(epochID, validatorID string) string {
+	return fmt.Sprintf("%s:%s:vpa:priority:%s:%s", kb.ProtocolState, kb.DataMarket, epochID, validatorID)
+}
+
+// VPATopValidator returns the key for cached top priority validator for an epoch
+func (kb *KeyBuilder) VPATopValidator(epochID string) string {
+	return fmt.Sprintf("%s:%s:vpa:top:%s", kb.ProtocolState, kb.DataMarket, epochID)
+}
+
+// VPAActiveValidators returns the key for cached list of active validators for an epoch
+func (kb *KeyBuilder) VPAActiveValidators(epochID string) string {
+	return fmt.Sprintf("%s:%s:vpa:validators:%s", kb.ProtocolState, kb.DataMarket, epochID)
+}
+
+// VPAPriorityMetadata returns the key for priority assignment metadata
+func (kb *KeyBuilder) VPAPriorityMetadata(epochID string) string {
+	return fmt.Sprintf("%s:%s:vpa:metadata:%s", kb.ProtocolState, kb.DataMarket, epochID)
+}
+
+// VPA Submission Queue Keys
+
+// VPASubmissionQueue returns the key for VPA submission requests queue
+func (kb *KeyBuilder) VPASubmissionQueue() string {
+	return fmt.Sprintf("%s:%s:vpa:submission:queue", kb.ProtocolState, kb.DataMarket)
+}
+
 // Aggregator Keys
 
 // BatchAggregated returns the key for network-wide consensus batch

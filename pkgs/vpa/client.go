@@ -2,8 +2,10 @@ package vpa
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math/big"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,7 +14,9 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/redis/go-redis/v9"
 	"github.com/sirupsen/logrus"
+	rediskeys "github.com/powerloom/snapshot-sequencer-validator/pkgs/redis"
 )
 
 // ValidatorPriorityAssigner binds to the VPA contract
@@ -30,6 +34,60 @@ type PriorityInfo struct {
 	CanSubmit   bool
 	WindowStart time.Time
 	WindowEnd   time.Time
+}
+
+// ValidatorPriority represents a validator's priority assignment
+type ValidatorPriority struct {
+	ValidatorID string `json:"validatorId"`
+	Priority    int    `json:"priority"`
+	CanSubmit   bool   `json:"canSubmit"`
+}
+
+// PriorityMetadata holds metadata about priority assignment
+type PriorityMetadata struct {
+	EpochID       uint64    `json:"epochId"`
+	Seed          string    `json:"seed"`
+	Timestamp     time.Time `json:"timestamp"`
+	ValidatorCount int      `json:"validatorCount"`
+	DataMarket    string    `json:"dataMarket"`
+}
+
+// CachedPriorities holds all cached priorities for an epoch
+type CachedPriorities struct {
+	EpochID      uint64              `json:"epochId"`
+	Metadata     PriorityMetadata    `json:"metadata"`
+	Priorities   map[string]int      `json:"priorities"`   // validatorID -> priority
+	TopValidator string              `json:"topValidator"`
+	CachedAt     time.Time           `json:"cachedAt"`
+}
+
+// PriorityCachingClient wraps VPA client with Redis caching
+type PriorityCachingClient struct {
+	*ValidatorPriorityAssigner
+	redisClient  *redis.Client
+	keyBuilder   *rediskeys.KeyBuilder
+	cacheTTL     time.Duration
+	logger       *logrus.Entry
+}
+
+// NewPriorityCachingClient creates a new VPA client with Redis caching
+func NewPriorityCachingClient(rpcURL, contractAddr, validatorAddr string,
+	redisClient *redis.Client, protocolState, dataMarket string) (*PriorityCachingClient, error) {
+
+	vpaClient, err := NewValidatorPriorityAssigner(rpcURL, contractAddr, validatorAddr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create VPA client: %w", err)
+	}
+
+	keyBuilder := rediskeys.NewKeyBuilder(protocolState, dataMarket)
+
+	return &PriorityCachingClient{
+		ValidatorPriorityAssigner: vpaClient,
+		redisClient:               redisClient,
+		keyBuilder:                keyBuilder,
+		cacheTTL:                  24 * time.Hour, // Cache for 24 hours
+		logger:                    logrus.WithField("component", "vpa-caching-client"),
+	}, nil
 }
 
 // NewValidatorPriorityAssigner creates a new VPA contract client
@@ -246,3 +304,154 @@ const VPAABI = `[
 		"type": "function"
 	}
 ]`
+// CacheEpochPriorities caches all validator priorities for an epoch
+func (pcc *PriorityCachingClient) CacheEpochPriorities(ctx context.Context, dataMarket string, epochID uint64) error {
+	pcc.logger.WithFields(logrus.Fields{
+		"epochID":    epochID,
+		"dataMarket": dataMarket,
+	}).Info("Caching VPA priorities for epoch")
+
+	// Get priorities from VPA contract
+	priorities, metadata, err := pcc.getHistoricalPrioritiesFromContract(ctx, dataMarket, epochID)
+	if err != nil {
+		return fmt.Errorf("failed to get historical priorities: %w", err)
+	}
+
+	// Prepare cached data
+	cachedData := CachedPriorities{
+		EpochID:      epochID,
+		Metadata:     metadata,
+		Priorities:   priorities,
+		TopValidator: pcc.findTopValidator(priorities),
+		CachedAt:     time.Now(),
+	}
+
+	// Cache in Redis
+	return pcc.storeCachedPriorities(ctx, epochID, &cachedData)
+}
+
+// GetValidatorPriority gets priority for a specific validator (cache-first)
+func (pcc *PriorityCachingClient) GetValidatorPriority(ctx context.Context, dataMarket string, epochID uint64, validatorID string) (int, error) {
+	// Try cache first
+	if priority, err := pcc.getValidatorPriorityFromCache(ctx, epochID, validatorID); err == nil {
+		return priority, nil
+	}
+
+	// Fallback to contract call
+	pcc.logger.WithFields(logrus.Fields{
+		"epochID":    epochID,
+		"validatorID": validatorID,
+	}).Warn("Cache miss, falling back to contract call")
+
+	return pcc.getHistoricalPriorityFromContract(ctx, dataMarket, epochID, validatorID)
+}
+
+// IsTopPriority checks if validator has top priority for the epoch
+func (pcc *PriorityCachingClient) IsTopPriority(ctx context.Context, dataMarket string, epochID uint64, validatorID string) (bool, error) {
+	// Get top validator from cache
+	topValidatorKey := pcc.keyBuilder.VPATopValidator(strconv.FormatUint(epochID, 10))
+	topValidator, err := pcc.redisClient.Get(ctx, topValidatorKey).Result()
+	if err == nil && topValidator == validatorID {
+		return true, nil
+	}
+
+	// Fallback to checking all priorities
+	priority, err := pcc.GetValidatorPriority(ctx, dataMarket, epochID, validatorID)
+	if err != nil {
+		return false, err
+	}
+
+	return priority == 1, nil // Priority 1 is top priority
+}
+
+// getHistoricalPrioritiesFromContract fetches all priorities from VPA contract
+func (pcc *PriorityCachingClient) getHistoricalPrioritiesFromContract(ctx context.Context, dataMarket string, epochID uint64) (map[string]int, PriorityMetadata, error) {
+	// This is a placeholder - actual implementation would call VPA contract methods
+	// like getHistoricalPriorities() and getHistoricalValidatorCount()
+
+	// For now, return empty data
+	priorities := make(map[string]int)
+	metadata := PriorityMetadata{
+		EpochID:        epochID,
+		Seed:           "",
+		Timestamp:      time.Now(),
+		ValidatorCount: 0,
+		DataMarket:     dataMarket,
+	}
+
+	return priorities, metadata, fmt.Errorf("contract calls not yet implemented")
+}
+
+// storeCachedPriorities stores cached priorities in Redis
+func (pcc *PriorityCachingClient) storeCachedPriorities(ctx context.Context, epochID uint64, data *CachedPriorities) error {
+	epochIDStr := strconv.FormatUint(epochID, 10)
+
+	// Store full priorities object
+	prioritiesJSON, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("failed to marshal cached priorities: %w", err)
+	}
+
+	prioritiesKey := pcc.keyBuilder.VPAPriorities(epochIDStr)
+	if err := pcc.redisClient.Set(ctx, prioritiesKey, prioritiesJSON, pcc.cacheTTL).Err(); err != nil {
+		return fmt.Errorf("failed to cache priorities: %w", err)
+	}
+
+	// Store individual validator priorities for quick lookup
+	for validatorID, priority := range data.Priorities {
+		validatorKey := pcc.keyBuilder.VPAValidatorPriority(epochIDStr, validatorID)
+		if err := pcc.redisClient.Set(ctx, validatorKey, priority, pcc.cacheTTL).Err(); err != nil {
+			pcc.logger.WithError(err).Warn("Failed to cache validator priority")
+		}
+	}
+
+	// Store top validator
+	if data.TopValidator != "" {
+		topValidatorKey := pcc.keyBuilder.VPATopValidator(epochIDStr)
+		if err := pcc.redisClient.Set(ctx, topValidatorKey, data.TopValidator, pcc.cacheTTL).Err(); err != nil {
+			pcc.logger.WithError(err).Warn("Failed to cache top validator")
+		}
+	}
+
+	pcc.logger.WithFields(logrus.Fields{
+		"epochID":        epochID,
+		"validatorCount": len(data.Priorities),
+		"topValidator":   data.TopValidator,
+	}).Info("Successfully cached VPA priorities")
+
+	return nil
+}
+
+// getValidatorPriorityFromCache gets validator priority from Redis cache
+func (pcc *PriorityCachingClient) getValidatorPriorityFromCache(ctx context.Context, epochID uint64, validatorID string) (int, error) {
+	epochIDStr := strconv.FormatUint(epochID, 10)
+	validatorKey := pcc.keyBuilder.VPAValidatorPriority(epochIDStr, validatorID)
+
+	priorityStr, err := pcc.redisClient.Get(ctx, validatorKey).Result()
+	if err != nil {
+		return -1, err // Cache miss
+	}
+
+	priority, err := strconv.Atoi(priorityStr)
+	if err != nil {
+		return -1, fmt.Errorf("invalid priority format: %w", err)
+	}
+
+	return priority, nil
+}
+
+// findTopValidator finds the validator with priority 1
+func (pcc *PriorityCachingClient) findTopValidator(priorities map[string]int) string {
+	for validatorID, priority := range priorities {
+		if priority == 1 {
+			return validatorID
+		}
+	}
+	return ""
+}
+
+// getHistoricalPriorityFromContract fetches priority from VPA contract (placeholder)
+func (pcc *PriorityCachingClient) getHistoricalPriorityFromContract(ctx context.Context, dataMarket string, epochID uint64, validatorID string) (int, error) {
+	// Placeholder for actual contract call implementation
+	return -1, fmt.Errorf("contract call not yet implemented")
+}

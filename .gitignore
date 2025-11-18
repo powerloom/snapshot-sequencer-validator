@@ -7,9 +7,17 @@
 bin/
 
 # Binary files (never commit these)
-# Main binaries
+# Main binaries - NEVER COMMIT BINARIES
 unified
 cmd/unified/unified
+cmd/aggregator/aggregator
+cmd/dequeuer/dequeuer
+cmd/finalizer/finalizer
+cmd/p2p-gateway/p2p-gateway
+cmd/state-tracker/state-tracker
+cmd/vpa-relayer/vpa-relayer
+cmd/epoch-manager/epoch_generator
+cmd/monitor-api/monitor-api
 
 # Any file without extension in cmd directories
 cmd/*/[!.]*
@@ -17,6 +25,17 @@ cmd/*/[!.]*
 !cmd/*/*.go
 !cmd/*/*.md
 !cmd/*/Dockerfile*
+
+# Specific binary names (catch-all)
+vpa-relayer
+aggregator
+dequeuer
+finalizer
+p2p-gateway
+state-tracker
+epoch_generator
+monitor-api
+unified-sequencer
 
 # Test binaries
 *.test
