@@ -15,7 +15,7 @@ require (
 	github.com/multiformats/go-multiaddr v0.16.1
 	github.com/powerloom/go-rpc-helper v1.0.5
 	github.com/prometheus/client_golang v1.23.0
-	github.com/redis/go-redis/v9 v9.7.0
+	github.com/redis/go-redis/v9 v9.7.3
 	github.com/sirupsen/logrus v1.9.3
 	github.com/spf13/viper v1.21.0
 	github.com/swaggo/files v1.0.1
