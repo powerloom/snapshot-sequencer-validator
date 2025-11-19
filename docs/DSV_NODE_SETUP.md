@@ -13,6 +13,7 @@ This comprehensive guide walks you through deploying and configuring a DSV node 
 7. [Monitoring and Operations](#monitoring-and-operations)
 8. [Troubleshooting](#troubleshooting)
 9. [Advanced Configuration](#advanced-configuration)
+10. [VPA (Validator Priority Assigner) Integration](#vpa-validator-priority-assigner-integration)
 
 ---
 
@@ -80,6 +81,12 @@ sudo chmod -R 755 /data/ipfs
 
 # Or start with IPFS support
 ./dsv.sh start --with-ipfs
+
+# Or start with VPA (Validator Priority Assigner) support
+./dsv.sh start --with-vpa
+
+# Or start with both IPFS and VPA
+./dsv.sh start --with-ipfs --with-vpa
 ```
 
 ### Option 2: Development Mode (Single Container)
@@ -232,6 +239,11 @@ docker compose -f docker-compose.separated.yml up -d --scale dequeuer=3
 #### IPFS Profile
 - IPFS Node (port 5001 API, 8080 Gateway)
 - Automatic cleanup and management
+
+#### VPA Profile
+- relayer-py service (port 8080)
+- Multi-signer transaction relayer for new contracts
+- Automatic repository cloning and configuration
 
 ### Environment Variables for Deployment
 
@@ -559,6 +571,148 @@ IPFS_DATA_DIR=/mnt/storage/ipfs
 sudo mkdir -p /mnt/storage/ipfs
 sudo chown -R 1000:1000 /mnt/storage/ipfs
 ```
+
+---
+
+## VPA (Validator Priority Assigner) Integration
+
+The VPA system enables priority-based batch submission to new protocol contracts, replacing legacy contract submission with a more efficient, multi-signer approach.
+
+### VPA Architecture Overview
+
+The VPA integration adds a Python-based relayer service that handles transaction submission to new contracts:
+
+1. **relayer-py Service**: Multi-signer transaction relayer
+2. **Priority Caching**: Redis-based validator priority storage
+3. **Dual Contract Support**: New contracts with VPA, legacy contracts without
+4. **Automatic Setup**: Repository cloning and configuration via dsv.sh
+
+### VPA Environment Configuration
+
+Add these variables to your `.env` file:
+
+```bash
+# Enable VPA integration (required for new contracts)
+USE_NEW_CONTRACTS=true
+
+# New protocol contract addresses
+NEW_PROTOCOL_STATE_CONTRACT=0xC9e7304f719D35919b0371d8B242ab59E0966d63
+NEW_DATA_MARKET_CONTRACT=0xb6c1392944a335b72b9e34f9D4b8c0050cdb511f
+
+# relayer-py service endpoint
+RELAYER_PY_ENDPOINT=http://relayer-py:8080
+
+# Multi-signer configuration (comma-separated)
+VPA_SIGNER_ADDRESSES=0xSIGNER1_ADDRESS,0xSIGNER2_ADDRESS
+VPA_SIGNER_PRIVATE_KEYS=0xSIGNER1_PRIVATE_KEY,0xSIGNER2_PRIVATE_KEY
+```
+
+### VPA Deployment
+
+#### Option 1: Quick Start with VPA
+
+```bash
+# Start with VPA support
+./dsv.sh start --with-vpa
+
+# Start with both IPFS and VPA
+./dsv.sh start --with-ipfs --with-vpa
+
+# Start with monitoring and VPA
+./dsv.sh start --with-monitoring --with-vpa
+```
+
+#### Option 2: Manual VPA Setup
+
+```bash
+# Clone relayer-py repository (done automatically by dsv.sh)
+git clone git@github.com:powerloom/relayer-py.git
+
+# Generate settings.json from environment variables
+python3 ./test_relayer_config.py
+
+# Copy settings to relayer-py
+cp /tmp/test_relayer_settings.json ./relayer-py/settings/settings.json
+
+# Build and start relayer-py
+cd relayer-py
+docker build -t relayer-py .
+docker run -p 8080:8080 relayer-py
+```
+
+### VPA Service Management
+
+```bash
+# Check VPA service status
+docker ps | grep relayer-py
+
+# View VPA service logs
+docker logs dsv-relayer-py
+
+# Test VPA health
+curl http://localhost:8080/health
+
+# Restart VPA service
+./dsv.sh stop && ./dsv.sh start --with-vpa
+```
+
+### VPA Contract Behavior
+
+**When USE_NEW_CONTRACTS=true:**
+- Submits ONLY to new contracts (ProtocolState + DataMarket)
+- No submission to legacy contracts
+- Priority-based submission via VPA authorization
+- Multi-signer support for higher throughput
+
+**When USE_NEW_CONTRACTS=false:**
+- No contract submissions (DSV does consensus only)
+- Legacy contract submission is completely disabled
+- Maintains compatibility with existing DSV workflow
+
+### Multi-Signer Configuration
+
+The VPA system supports multiple authorized signers per validator for parallel batch submission:
+
+```bash
+# Example: 2 signers for load balancing
+VPA_SIGNER_ADDRESSES=0x123...,0x456...
+VPA_SIGNER_PRIVATE_KEYS=0xabc...,0xdef...
+
+# Each signer can submit independently
+# Load balancing handled by relayer-py PM2 workers
+```
+
+### VPA Testing and Validation
+
+Use the built-in test suite to validate VPA configuration:
+
+```bash
+# Run VPA deployment test
+./test_vpa_deployment.sh
+
+# Test validates:
+# - Environment variable loading
+# - Settings.json generation
+# - Repository access
+# - Docker build requirements
+# - Complete workflow end-to-end
+```
+
+### VPA Monitoring
+
+The VPA service integrates with the DSV monitoring system:
+
+- **Health Endpoint**: `http://localhost:8080/health`
+- **Service Logs**: Available via `./dsv.sh logs`
+- **Redis Metrics**: Priority caching statistics
+- **Contract Events**: Priority assignments tracked in EventMonitor
+
+### Security Considerations
+
+- **SSH Access**: Ensure SSH keys are configured for `git@github.com:powerloom/relayer-py.git`
+- **Key Management**: Private keys are stored in environment variables, not in code
+- **Network Isolation**: VPA service runs in isolated Docker container
+- **Rate Limiting**: Built-in rate limiting prevents abuse
 
 ---
 
