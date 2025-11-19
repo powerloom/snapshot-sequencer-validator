@@ -202,7 +202,7 @@ func (vpa *ValidatorPriorityAssigner) GetMyPriority(ctx context.Context, dataMar
 
 // getValidatorID gets the validator ID from the ValidatorState contract
 // This is a simplified version - in production you'd call the ValidatorState contract directly
-func (vpa *ValidatorPriorityAssigner) getValidatorID(ctx context.Context) (uint64, error) {
+func (vpa *ValidatorPriorityAssigner) getValidatorID(_ context.Context) (uint64, error) {
 	// For now, use a simple hash of the validator address as ID
 	// In production, this should call validatorToNodeId on the ValidatorState contract
 	hash := crypto.Keccak256Hash(vpa.validator.Bytes())
@@ -365,7 +365,7 @@ func (pcc *PriorityCachingClient) IsTopPriority(ctx context.Context, dataMarket 
 }
 
 // getHistoricalPrioritiesFromContract fetches all priorities from VPA contract
-func (pcc *PriorityCachingClient) getHistoricalPrioritiesFromContract(ctx context.Context, dataMarket string, epochID uint64) (map[string]int, PriorityMetadata, error) {
+func (pcc *PriorityCachingClient) getHistoricalPrioritiesFromContract(_ context.Context, dataMarket string, epochID uint64) (map[string]int, PriorityMetadata, error) {
 	// This is a placeholder - actual implementation would call VPA contract methods
 	// like getHistoricalPriorities() and getHistoricalValidatorCount()
 
@@ -451,7 +451,7 @@ func (pcc *PriorityCachingClient) findTopValidator(priorities map[string]int) st
 }
 
 // getHistoricalPriorityFromContract fetches priority from VPA contract (placeholder)
-func (pcc *PriorityCachingClient) getHistoricalPriorityFromContract(ctx context.Context, dataMarket string, epochID uint64, validatorID string) (int, error) {
+func (pcc *PriorityCachingClient) getHistoricalPriorityFromContract(_ context.Context, _ string, _ uint64, _ string) (int, error) {
 	// Placeholder for actual contract call implementation
 	return -1, fmt.Errorf("contract call not yet implemented")
 }

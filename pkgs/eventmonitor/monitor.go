@@ -227,7 +227,8 @@ func NewEventMonitor(cfg *Config) (*EventMonitor, error) {
 					rpcURL = urls[0]
 				} else {
 					log.Warnf("⚠️  Empty VPARPCURL array")
-					vpaContractAddr = common.Address{}
+					cancel()
+					return nil, fmt.Errorf("empty VPARPCURL array")
 				}
 			} else {
 				rpcURL = cfg.VPARPCURL

@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"os"
 	"strings"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
@@ -24,7 +24,7 @@ type ContractABI struct {
 // LoadContractABI loads and parses a contract ABI from file
 func LoadContractABI(filepath string) (*ContractABI, error) {
 	// Read the ABI file
-	data, err := ioutil.ReadFile(filepath)
+	data, err := os.ReadFile(filepath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read ABI file: %w", err)
 	}
@@ -82,7 +82,7 @@ func (c *ContractABI) GetABI() abi.ABI {
 }
 
 // ParseLog parses a log entry using the ABI
-func (c *ContractABI) ParseLog(log interface{}) (string, interface{}, error) {
+func (c *ContractABI) ParseLog(log any) (string, any, error) {
 	// This is a placeholder - actual implementation would depend on log format
 	// For now, we'll focus on the event hash extraction functionality
 	return "", nil, fmt.Errorf("ParseLog not implemented")
@@ -99,18 +99,12 @@ func FetchVPAAddress(rpcURL, newProtocolStateContract string) (common.Address, e
 		return common.Address{}, fmt.Errorf("NEW ProtocolState contract address is required")
 	}
 
-	// Load NEW ProtocolState ABI - try multiple paths
-	abiPath := "/app/abi/PowerloomProtocolState.json"
+	// Load NEW ProtocolState ABI
+	abiPath := "/app/abi/PowerloomProtocolState.abi.json"
 	fmt.Printf("🔍 DEBUG: Loading ABI from: %s\n", abiPath)
 	protocolStateABI, err := LoadContractABI(abiPath)
 	if err != nil {
-		// Try fallback path
-		abiPath2 := "./abi/PowerloomProtocolState.json"
-		fmt.Printf("🔍 DEBUG: Failed to load ABI from %s, trying: %s\n", abiPath, abiPath2)
-		protocolStateABI, err = LoadContractABI(abiPath2)
-		if err != nil {
-			return common.Address{}, fmt.Errorf("failed to load NEW ProtocolState ABI from both paths: %w", err)
-		}
+		return common.Address{}, fmt.Errorf("failed to load NEW ProtocolState ABI: %w", err)
 	}
 	fmt.Printf("🔍 DEBUG: Successfully loaded ABI\n")
 
@@ -130,7 +124,7 @@ func FetchVPAAddress(rpcURL, newProtocolStateContract string) (common.Address, e
 	fmt.Printf("🔍 DEBUG: Created contract binding for address: %s\n", protocolStateAddress.Hex())
 
 	// Call validatorPriorityAssigner() method
-	var results []interface{}
+	var results []any
 	opts := &bind.CallOpts{Context: context.Background()}
 	fmt.Printf("🔍 DEBUG: Calling validatorPriorityAssigner()...\n")
 	err = contract.Call(opts, &results, "validatorPriorityAssigner")
