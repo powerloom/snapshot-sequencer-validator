@@ -90,6 +90,8 @@ func (c *ContractABI) ParseLog(log interface{}) (string, interface{}, error) {
 
 // FetchVPAAddress fetches the VPA contract address from the NEW ProtocolState contract
 func FetchVPAAddress(rpcURL, newProtocolStateContract string) (common.Address, error) {
+	fmt.Printf("🔍 DEBUG: FetchVPAAddress called with RPC: %s, Contract: %s\n", rpcURL, newProtocolStateContract)
+
 	if rpcURL == "" {
 		return common.Address{}, fmt.Errorf("RPC URL is required")
 	}
@@ -97,31 +99,45 @@ func FetchVPAAddress(rpcURL, newProtocolStateContract string) (common.Address, e
 		return common.Address{}, fmt.Errorf("NEW ProtocolState contract address is required")
 	}
 
-	// Load NEW ProtocolState ABI
-	protocolStateABI, err := LoadContractABI("./abi/PowerloomProtocolState.json")
+	// Load NEW ProtocolState ABI - try multiple paths
+	abiPath := "./abi/PowerloomProtocolState.json"
+	fmt.Printf("🔍 DEBUG: Loading ABI from: %s\n", abiPath)
+	protocolStateABI, err := LoadContractABI(abiPath)
 	if err != nil {
-		return common.Address{}, fmt.Errorf("failed to load NEW ProtocolState ABI: %w", err)
+		// Try fallback path
+		abiPath2 := "./decentralized-sequencer/abi/PowerloomProtocolState.json"
+		fmt.Printf("🔍 DEBUG: Failed to load ABI from %s, trying: %s\n", abiPath, abiPath2)
+		protocolStateABI, err = LoadContractABI(abiPath2)
+		if err != nil {
+			return common.Address{}, fmt.Errorf("failed to load NEW ProtocolState ABI from both paths: %w", err)
+		}
 	}
+	fmt.Printf("🔍 DEBUG: Successfully loaded ABI\n")
 
 	// Create ethclient
+	fmt.Printf("🔍 DEBUG: Creating ethclient...\n")
 	client, err := ethclient.Dial(rpcURL)
 	if err != nil {
 		return common.Address{}, fmt.Errorf("failed to create ethclient: %w", err)
 	}
 	defer client.Close()
+	fmt.Printf("🔍 DEBUG: Successfully created ethclient\n")
 
 	// Create contract binding
 	parsedABI := protocolStateABI.GetABI()
 	protocolStateAddress := common.HexToAddress(newProtocolStateContract)
 	contract := bind.NewBoundContract(protocolStateAddress, parsedABI, client, client, client)
+	fmt.Printf("🔍 DEBUG: Created contract binding for address: %s\n", protocolStateAddress.Hex())
 
 	// Call validatorPriorityAssigner() method
 	var results []interface{}
 	opts := &bind.CallOpts{Context: context.Background()}
+	fmt.Printf("🔍 DEBUG: Calling validatorPriorityAssigner()...\n")
 	err = contract.Call(opts, &results, "validatorPriorityAssigner")
 	if err != nil {
 		return common.Address{}, fmt.Errorf("failed to call validatorPriorityAssigner(): %w", err)
 	}
+	fmt.Printf("🔍 DEBUG: Successfully called validatorPriorityAssigner()\n")
 
 	if len(results) == 0 {
 		return common.Address{}, fmt.Errorf("validatorPriorityAssigner() returned no results")
@@ -131,6 +147,8 @@ func FetchVPAAddress(rpcURL, newProtocolStateContract string) (common.Address, e
 	if !ok {
 		return common.Address{}, fmt.Errorf("validatorPriorityAssigner() returned invalid type: %T", results[0])
 	}
+
+	fmt.Printf("🔍 DEBUG: VPA Address: %s\n", vpaAddress.Hex())
 
 	if vpaAddress == (common.Address{}) {
 		return common.Address{}, fmt.Errorf("NEW ProtocolState returned zero address for validatorPriorityAssigner")
