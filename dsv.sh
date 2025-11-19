@@ -252,8 +252,8 @@ start_services() {
 stop_services() {
     print_color "$YELLOW" "Stopping all services..."
     if is_separated_running; then
-        # Stop all services including monitoring and ipfs profiles
-        $DOCKER_COMPOSE_CMD -f docker-compose.separated.yml --profile monitoring --profile ipfs down
+        # Stop all services including monitoring, ipfs, and vpa profiles
+        $DOCKER_COMPOSE_CMD -f docker-compose.separated.yml --profile monitoring --profile ipfs --profile vpa down
     else
         # Try to stop any running containers
         $DOCKER_COMPOSE_CMD down 2>/dev/null || true
@@ -382,7 +382,7 @@ clean_all() {
         stop_monitoring
         # Only remove volumes belonging to this project
         if is_separated_running || docker ps | grep -q snapshot-sequencer; then
-            $DOCKER_COMPOSE_CMD -f docker-compose.separated.yml down -v 2>/dev/null || true
+            $DOCKER_COMPOSE_CMD -f docker-compose.separated.yml --profile vpa down -v 2>/dev/null || true
         fi
         if [ -f docker-compose.monitoring.yml ]; then
             $DOCKER_COMPOSE_CMD -f docker-compose.monitoring.yml down -v 2>/dev/null || true
