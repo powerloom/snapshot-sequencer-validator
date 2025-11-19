@@ -229,8 +229,8 @@ services:
       - RABBITMQ_DEFAULT_USER=guest
       - RABBITMQ_DEFAULT_PASS=guest
     ports:
-      - "5672:5672"    # AMQP port
-      - "15672:15672"  # Management UI (optional)
+      - "127.0.0.1:${RABBITMQ_EXTERNAL_PORT:-5672}:5672"    # AMQP port
+      - "127.0.0.1:${RABBITMQ_MGMT_PORT:-15672}:15672"      # Management UI (optional)
     networks:
       - sequencer-net
     restart: unless-stopped
@@ -284,6 +284,9 @@ services:
       - REDIS_PORT=6379
       - REDIS_DB=0
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      # RabbitMQ Configuration
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
     depends_on:
       redis:
         condition: service_healthy
