@@ -22,10 +22,11 @@ type Settings struct {
 	SequencerID string
 
 	// Ethereum RPC Configuration
-	RPCNodes              []string // Primary RPC nodes for load balancing
-	ArchiveRPCNodes       []string // Archive nodes for historical queries
-	ProtocolStateContract string   // Protocol state contract address (manages identities)
-	ChainID               int64
+	RPCNodes                []string // Primary RPC nodes for load balancing
+	ArchiveRPCNodes         []string // Archive nodes for historical queries
+	ProtocolStateContract   string   // Protocol state contract address (manages identities)
+	NewProtocolStateContract string   // NEW ProtocolState contract address (VPA-enabled)
+	ChainID                 int64
 
 	// Data Market Configuration
 	DataMarketAddresses []string         // String addresses
@@ -98,9 +99,12 @@ type Settings struct {
 	AggregationWindowDuration time.Duration // Time to wait for validator batches before aggregating (Level 2)
 
 	// Validator Priority Assignment (VPA) Configuration
-	ValidatorPriorityAssigner string // VPA contract address for proposer election
-	ValidatorAddress          string // This validator's address for priority checking
-	EnableOnChainSubmission   bool   // Enable submission to ProtocolState contract
+	ValidatorAddress        string // This validator's address for priority checking
+	EnableOnChainSubmission bool   // Enable submission to ProtocolState contract
+
+	// VPA Event Monitoring Configuration
+	VPAContractAddress  string // VPA contract address for priority monitoring
+	VPAValidatorAddress string // This validator's address for VPA client
 
 	// New Contract Submission Configuration
 	RelayerPyEndpoint string   // relayer-py service endpoint for new contract submissions
@@ -222,9 +226,12 @@ func LoadConfig() error {
 		AggregationWindowDuration: time.Duration(getEnvAsInt("AGGREGATION_WINDOW_SECONDS", 30)) * time.Second,
 
 		// Validator Priority Assignment (VPA) Configuration
-		ValidatorPriorityAssigner: getEnv("VALIDATOR_PRIORITY_ASSIGNER", ""),
-		ValidatorAddress:          getEnv("VALIDATOR_ADDRESS", ""),
-		EnableOnChainSubmission:   getBoolEnv("ENABLE_ONCHAIN_SUBMISSION", false),
+		ValidatorAddress:        getEnv("VALIDATOR_ADDRESS", ""),
+		EnableOnChainSubmission: getBoolEnv("ENABLE_ONCHAIN_SUBMISSION", false),
+
+		// VPA Event Monitoring Configuration
+		VPAContractAddress:  getEnv("VPA_CONTRACT_ADDRESS", ""),
+		VPAValidatorAddress: getEnv("VPA_VALIDATOR_ADDRESS", ""),
 
 		// New Contract Submission Configuration
 		RelayerPyEndpoint: getEnv("RELAYER_PY_ENDPOINT", ""),
@@ -269,7 +276,8 @@ func LoadConfig() error {
 		IPFSAPI: getEnv("IPFS_HOST", ""),
 
 		// Contract Addresses
-		ProtocolStateContract: getEnv("PROTOCOL_STATE_CONTRACT", ""),
+		ProtocolStateContract:   getEnv("PROTOCOL_STATE_CONTRACT", ""),
+		NewProtocolStateContract: getEnv("NEW_PROTOCOL_STATE_CONTRACT", ""),
 	}
 
 	// Load complex configurations that require additional parsing

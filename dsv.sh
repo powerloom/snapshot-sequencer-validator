@@ -178,12 +178,28 @@ start_services() {
             print_color "$GREEN" "✅ Switched to feat/tx-queue branch"
         fi
 
-        # Check if relayer-py has settings.json, otherwise use defaults
-        if [ ! -f "$RELAYER_DIR/settings/settings.json" ]; then
-            print_color "$YELLOW" "⚠️  Warning: No settings.json found in relayer-py, using defaults"
-            print_color "$YELLOW" "  Configure relayer-py/settings.json manually if needed"
+        # Generate settings.json from environment variables using proper script
+        print_color "$CYAN" "🔧 Generating relayer-py settings.json from environment variables..."
+
+        # Check if we have the settings generation script
+        if [ -f "./test_relayer_config.py" ]; then
+            if python3 ./test_relayer_config.py > /dev/null 2>&1; then
+                # Move generated settings to relayer-py directory
+                cp /tmp/test_relayer_settings.json "$RELAYER_DIR/settings/settings.json"
+                print_color "$GREEN" "✅ Generated relayer-py settings.json from environment"
+            else
+                print_color "$YELLOW" "⚠️  Warning: Could not generate settings.json, copying example"
+                cp "$RELAYER_DIR/settings/settings.example.json" "$RELAYER_DIR/settings/settings.json"
+            fi
         else
-            print_color "$GREEN" "✅ relayer-py settings.json found"
+            # Fallback: copy the example settings if generation script not available
+            if [ -f "$RELAYER_DIR/settings/settings.example.json" ]; then
+                print_color "$YELLOW" "⚠️  No settings generator found, using example settings.json"
+                cp "$RELAYER_DIR/settings/settings.example.json" "$RELAYER_DIR/settings/settings.json"
+                print_color "$YELLOW" "  ⚠️  Please configure VPA_SIGNER_ADDRESSES and VPA_SIGNER_PRIVATE_KEYS manually"
+            else
+                print_color "$RED" "❌ No settings.json or example found - relayer-py may not work"
+            fi
         fi
     fi
 

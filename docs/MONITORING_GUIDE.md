@@ -813,3 +813,223 @@ For detailed information about entity ID formats, metadata, and how to interpret
 - **Validations**: `{epoch}-baseSnapshot:{validator}:{market}:{slot}-{project}:{ipfs}` - Validator contributions
 - **Batch Events**: `peer_discovery:{count}:{timestamp}`, `local:{epoch}`, `validator:{validator}:{epoch}`, `aggregated:{epoch}`
 - **Epoch Events**: `open:{epoch}`, `close:{epoch}` - Window lifecycle events
+
+## VPA Integration Monitoring
+
+### Overview
+The Validator Priority Assigner (VPA) integration adds sophisticated priority-based batch submission capabilities to the sequencer. This section provides comprehensive monitoring guidance for VPA integration testing and production operations.
+
+### Priority Assignment Monitoring
+
+Monitor VPA priority caching and assignment operations through the EventMonitor service:
+
+```bash
+# Monitor VPA priority assignment events
+./dsv.sh event-logs | grep -E "(🎯|Priorities|VPA|Priority)"
+
+# Look for priority assignment log patterns
+./dsv.sh event-logs | grep "🎯 Priorities assigned for epoch"
+
+# Monitor VPA contract interaction events
+./dsv.sh event-logs | grep "VPA.*contract"
+```
+
+**Key Log Patterns:**
+- `🎯 Priorities assigned for epoch X` - Successful priority assignment
+- `VPA priority cached for epoch X` - Priority caching confirmation
+- `🔄 New priority assignment request` - Priority assignment initiation
+- `✅ VPA priority assignment successful` - Completion confirmation
+
+### Aggregator Relayer Integration Monitoring
+
+Monitor the Aggregator's integration with the relayer service for contract submissions:
+
+```bash
+# Monitor aggregator relayer integration logs
+./dsv.sh aggregator-logs | grep -E "(🚀|contract|relayer|submission)"
+
+# Track contract submission attempts
+./dsv.sh aggregator-logs | grep "🚀 Starting new contract submission"
+
+# Monitor relayer call success/failure
+./dsv.sh aggregator-logs | grep "🚀 Submitting batch via relayer-py"
+
+# Check for successful batch submissions
+./dsv.sh aggregator-logs | grep "✅ VPA batch submission successful"
+```
+
+**Key Log Patterns:**
+- `🚀 Starting new contract submission` - Initiation of contract submission
+- `🚀 Submitting batch via relayer-py` - Relayer service call
+- `✅ VPA batch submission successful` - Successful contract submission
+- `❌ Contract submission failed` - Failed submission attempt
+- `⏱️ Contract submission completed in Xms` - Performance metrics
+
+### Relayer-PY Service Monitoring
+
+Monitor the relayer-py service for HTTP endpoint availability and transaction submission:
+
+```bash
+# Monitor relayer-py service logs
+./dsv.sh relayer-logs | grep -E "(HTTP|transaction|submission|batch)"
+
+# Track HTTP endpoint availability
+./dsv.sh relayer-logs | grep "HTTP.*endpoint"
+
+# Monitor transaction submission status
+./dsv.sh relayer-logs | grep "transaction.*submitted"
+
+# Check for relayer errors
+./dsv.sh relayer-logs | grep "error\|failed"
+```
+
+**Key Log Patterns:**
+- `HTTP endpoint ready` - Service availability confirmation
+- `Transaction submitted` - Successful transaction submission
+- `Batch submitted via relayer` - Batch submission confirmation
+- `Transaction failed` - Failed transaction attempt
+
+### End-to-End VPA Testing Workflow
+
+Complete flow from epoch release to relayer submission:
+
+```bash
+# 1. Monitor EventMonitor for epoch release
+./dsv.sh event-logs | grep -E "🚀|epoch.*released|priorities"
+
+# 2. Check aggregator processing
+./dsv.sh aggregator-logs | grep -E "epoch.*X|contract|relayer"
+
+# 3. Monitor relayer service
+./dsv.sh relayer-logs | grep -E "transaction|batch|submission"
+
+# 4. Verify contract submission
+./dsv.sh aggregator-logs | grep "✅.*VPA.*submission"
+```
+
+**End-to-End Success Sequence:**
+1. `🚀 Released epoch: X` - Epoch released by EventMonitor
+2. `🎯 Priorities assigned for epoch X` - VPA priorities assigned
+3. `🚀 Starting new contract submission` - Contract submission initiated
+4. `🚀 Submitting batch via relayer-py` - Relayer service called
+5. `✅ VPA batch submission successful` - Final submission confirmation
+
+### Real-Time VPA Monitoring Commands
+
+For comprehensive VPA testing, use these real-time monitoring commands:
+
+```bash
+# Live VPA monitoring dashboard
+./dsv.sh dashboard
+
+# Monitor all VPA-related logs in real-time
+./dsv.sh event-logs --follow | grep -E "(🎯|VPA|Priority)"
+
+# Monitor aggregator contract submissions
+./dsv.sh aggregator-logs --follow | grep -E "(🚀|contract|relayer)"
+
+# Monitor relayer service transactions
+./dsv.sh relayer-logs --follow | grep -E "(HTTP|transaction|batch)"
+
+# Combined VPA monitoring pipeline
+./dsv.sh pipeline-logs | grep -E "(VPA|contract|relayer|priority)"
+```
+
+### VPA-Specific Container Logs
+
+Individual component monitoring for VPA integration:
+
+```bash
+# EventMonitor container (VPA priority assignment)
+./dsv.sh event-logs [lines]
+
+# Aggregator container (relayer integration)
+./dsv.sh aggregator-logs [lines]
+
+# Relayer-PY container (transaction submission)
+./dsv.sh relayer-logs [lines]
+
+# Monitor specific VPA contract interactions
+docker exec <aggregator-container> grep -i "vpa" /app/main.go | head -5
+```
+
+### VPA Health Indicators
+
+**Healthy VPA Integration:**
+- Regular priority assignment logs every epoch
+- Successful contract submission attempts
+- Relayer service availability (>99%)
+- End-to-end pipeline completion time < 30s
+- No relayer transaction failures in last 24h
+
+**Warning Signs:**
+- Missing priority assignment logs
+- Frequent contract submission failures
+- Relayer service errors
+- Inconsistent VPA batch submissions
+- End-to-end processing time > 60s
+
+**Critical Issues:**
+- No VPA activity for multiple epochs
+- Consistent relayer transaction failures
+- Contract submission timeouts
+- VPA service connectivity issues
+
+### VPA Configuration Monitoring
+
+Verify VPA integration configuration:
+
+```bash
+# Check VPA service configuration
+docker exec <event-monitor-container> printenv | grep -i vpa
+
+# Verify relayer service configuration
+docker exec <relayer-container> printenv | grep -i relayer
+
+# Check VPA contract addresses
+docker exec <aggregator-container> grep -i "vpa.*address" /app/main.go
+```
+
+### VPA Performance Metrics
+
+Monitor VPA integration performance:
+
+```bash
+# Check VPA submission success rate
+./dsv.sh aggregator-logs | grep "✅ VPA" | wc -l
+
+# Monitor VPA processing times
+./dsv.sh aggregator-logs | grep "⏱️.*VPA" | head -5
+
+# Check relayer transaction delays
+./dsv.sh relayer-logs | grep "transaction.*delay" | head -5
+```
+
+### VPA Troubleshooting
+
+**Common VPA Issues and Solutions:**
+
+| Issue | Monitoring Command | Solution |
+|-------|-------------------|----------|
+| No priority assignments | `./dsv.sh event-logs | grep "🎯"` | Check VPA contract connectivity |
+| Contract submission failures | `./dsv.sh aggregator-logs | grep "❌"` | Verify relayer service health |
+| Relayer service down | `./dsv.sh relayer-logs | grep "error"` | Restart relayer container |
+| Inconsistent batch submissions | `./dsv.sh aggregator-logs | grep "✅ VPA"` | Check VPA service consistency |
+
+### VPA Integration Testing Commands
+
+For comprehensive VPA integration testing:
+
+```bash
+# Test VPA priority assignment
+curl "http://localhost:9091/api/v1/epochs/timeline" | jq '.epochs[] | select(.status == "released")'
+
+# Monitor VPA batch submissions
+curl "http://localhost:9091/api/v1/batches/finalized" | jq '.batches[] | select(.vpa_submitted == true)'
+
+# Check relayer service health
+curl "http://localhost:9091/api/v1/health" | jq '.services.relayer'
+
+# Test VPA pipeline end-to-end
+./scripts/test_vpa_integration.sh
+```

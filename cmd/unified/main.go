@@ -487,6 +487,13 @@ func main() {
 			DataMarkets:           cfg.DataMarketAddresses,
 			MaxWindows:            cfg.MaxConcurrentWindows,
 			FinalizationBatchSize: cfg.FinalizationBatchSize,
+
+			// VPA Configuration
+			VPAContractAddress:        cfg.VPAContractAddress,
+			VPAValidatorAddress:       cfg.VPAValidatorAddress,
+			VPARPCURL:                 os.Getenv("POWERLOOM_RPC_NODES"),
+			ProtocolState:             cfg.ProtocolStateContract,
+			NewProtocolStateContract:  os.Getenv("NEW_PROTOCOL_STATE_CONTRACT"),
 		}
 
 		var err error

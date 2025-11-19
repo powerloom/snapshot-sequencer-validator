@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/powerloom/snapshot-sequencer-validator/config"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/consensus"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/ipfs"
@@ -105,12 +106,29 @@ func NewAggregator(cfg *config.Settings) (*Aggregator, error) {
 	if cfg.EnableOnChainSubmission {
 		log.Info("🔗 Initializing on-chain submission contracts")
 
-		// Initialize VPA caching client
-		if cfg.ValidatorPriorityAssigner != "" && cfg.ValidatorAddress != "" {
+		// Fetch VPA address from NEW ProtocolState contract if not provided
+		vpaContractAddr := common.HexToAddress(cfg.VPAContractAddress)
+		if vpaContractAddr == (common.Address{}) {
+			log.Infof("🔍 Fetching VPA address from NEW ProtocolState contract...")
+
+			// Use shared VPA fetching function
+			rpcURL := cfg.RPCNodes[0]
+			fetchedVPAAddress, err := vpa.FetchVPAAddress(rpcURL, cfg.NewProtocolStateContract)
+			if err != nil {
+				log.Warnf("⚠️  Failed to fetch VPA address: %v", err)
+				vpaContractAddr = common.Address{}
+			} else {
+				vpaContractAddr = fetchedVPAAddress
+				log.Infof("✅ Successfully fetched VPA address: %s", vpaContractAddr.Hex())
+			}
+		}
+
+		// Initialize VPA caching client with fetched address
+		if vpaContractAddr != (common.Address{}) && cfg.VPAValidatorAddress != "" {
 			// Use first RPC node for VPA
 			rpcURL := cfg.RPCNodes[0]
 			vpaClient, err = vpa.NewPriorityCachingClient(
-				rpcURL, cfg.ValidatorPriorityAssigner, cfg.ValidatorAddress,
+				rpcURL, vpaContractAddr.Hex(), cfg.VPAValidatorAddress,
 				redisClient, protocolState, dataMarket)
 			if err != nil {
 				cancel()
@@ -118,7 +136,7 @@ func NewAggregator(cfg *config.Settings) (*Aggregator, error) {
 			}
 			log.Info("✅ VPA caching client initialized")
 		} else {
-			log.Warn("⚠️  VPA contract address or validator address not configured")
+			log.Warn("⚠️  VPA contract address or validator address not available")
 		}
 
 		// Initialize ProtocolState client

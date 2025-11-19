@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"strings"
 	"sync"
 	"time"
 
@@ -135,11 +136,12 @@ type Config struct {
 	FinalizationBatchSize int  // Number of projects per finalization batch
 
 	// VPA Configuration (optional)
-	VPAContractAddress  string // VPA contract address for priority monitoring
-	VPAContractABIPath  string // Path to VPA contract ABI JSON file
-	VPAValidatorAddress string // This validator's address for VPA client
-	VPARPCURL           string // RPC URL for VPA client (if different from main RPC)
-	ProtocolState       string // Protocol state contract address for namespacing
+	VPAContractAddress        string // VPA contract address for priority monitoring
+	VPAContractABIPath        string // Path to VPA contract ABI JSON file
+	VPAValidatorAddress       string // This validator's address for VPA client
+	VPARPCURL                 string // RPC URL for VPA client (if different from main RPC)
+	ProtocolState             string // Protocol state contract address for namespacing
+	NewProtocolStateContract  string // NEW ProtocolState contract address for VPA integration
 }
 
 // NewEventMonitor creates a new event monitor
@@ -204,61 +206,104 @@ func NewEventMonitor(cfg *Config) (*EventMonitor, error) {
 	var prioritiesAssignedSig common.Hash
 	var vpaEnabled bool
 
-	if cfg.VPAContractAddress != "" && cfg.VPAValidatorAddress != "" {
+	if cfg.VPAValidatorAddress != "" && cfg.ProtocolState != "" {
 		vpaEnabled = true
-		vpaContractAddr = common.HexToAddress(cfg.VPAContractAddress)
 
-		// Load VPA contract ABI if path provided
-		if cfg.VPAContractABIPath != "" {
-			abi, err := LoadContractABI(cfg.VPAContractABIPath)
-			if err != nil {
-				cancel()
-				return nil, fmt.Errorf("failed to load VPA contract ABI: %w", err)
-			}
-			vpaContractABI = abi
-			log.Infof("✅ Loaded VPA contract ABI from %s", cfg.VPAContractABIPath)
-
-			// Verify the ABI has the PrioritiesAssigned event
-			if !vpaContractABI.HasEvent("PrioritiesAssigned") {
-				cancel()
-				return nil, fmt.Errorf("VPA ABI does not contain PrioritiesAssigned event")
-			}
-
-			// Get VPA event signature from ABI
-			sig, err := vpaContractABI.GetEventHash("PrioritiesAssigned")
-			if err != nil {
-				cancel()
-				return nil, fmt.Errorf("failed to get PrioritiesAssigned event hash from VPA ABI: %w", err)
-			}
-			prioritiesAssignedSig = sig
-			log.Infof("✅ Using ABI-derived PrioritiesAssigned event signature: %s", prioritiesAssignedSig.Hex())
+		// For now, use direct VPA address if provided
+		if cfg.VPAContractAddress != "" {
+			vpaContractAddr = common.HexToAddress(cfg.VPAContractAddress)
+			log.Infof("✅ Using fallback VPA contract address: %s", cfg.VPAContractAddress)
 		} else {
-			// Fallback to hardcoded signature
-			prioritiesAssignedSig = getPrioritiesAssignedEventSignature()
-			log.Infof("✅ Using hardcoded PrioritiesAssigned event signature: %s", prioritiesAssignedSig.Hex())
+			vpaContractAddr = common.Address{}
+			log.Infof("📋 No direct VPA address provided - will fetch from NEW ProtocolState")
 		}
 
-		// Initialize VPA client for the first data market (if available)
-		if len(cfg.DataMarkets) > 0 {
-			if cfg.VPARPCURL == "" {
-				log.Warn("VPA RPC URL not configured, VPA client will not be initialized")
-				vpaEnabled = false
-			} else {
-				var err error
-				vpaClient, err = vpa.NewPriorityCachingClient(
-					cfg.VPARPCURL,
-					cfg.VPAContractAddress,
-					cfg.VPAValidatorAddress,
-					cfg.RedisClient,
-					cfg.ProtocolState,
-					cfg.DataMarkets[0], // Use first data market as default
-				)
-				if err != nil {
-					cancel()
-					return nil, fmt.Errorf("failed to create VPA caching client: %w", err)
+		// If no direct VPA address, fetch from NEW ProtocolState contract
+		if vpaContractAddr == (common.Address{}) && cfg.NewProtocolStateContract != "" {
+			log.Infof("🔍 Fetching VPA address from NEW ProtocolState contract...")
+
+			// Parse RPC URL from VPARPCURL (POWERLOOM_RPC_NODES can be comma-separated or JSON array)
+			var rpcURL string
+			if strings.Contains(cfg.VPARPCURL, ",") {
+				urls := strings.Split(cfg.VPARPCURL, ",")
+				rpcURL = strings.TrimSpace(urls[0])
+			} else if strings.HasPrefix(cfg.VPARPCURL, "[") {
+				var urls []string
+				if err := json.Unmarshal([]byte(cfg.VPARPCURL), &urls); err != nil {
+					log.Warnf("⚠️  Failed to parse VPARPCURL as JSON: %v", err)
+					rpcURL = cfg.VPARPCURL
+				} else if len(urls) > 0 {
+					rpcURL = urls[0]
+				} else {
+					log.Warnf("⚠️  Empty VPARPCURL array")
+					vpaContractAddr = common.Address{}
 				}
-				log.Infof("✅ Initialized VPA caching client for validator %s", cfg.VPAValidatorAddress)
+			} else {
+				rpcURL = cfg.VPARPCURL
 			}
+
+			// Use shared VPA fetching function
+			fetchedVPAAddress, err := vpa.FetchVPAAddress(rpcURL, cfg.NewProtocolStateContract)
+			if err != nil {
+				log.Warnf("⚠️  Failed to fetch VPA address: %v", err)
+				vpaContractAddr = common.Address{}
+			} else {
+				vpaContractAddr = fetchedVPAAddress
+				log.Infof("✅ Successfully fetched VPA address from NEW ProtocolState: %s", vpaContractAddr.Hex())
+			}
+		}
+	}
+
+	// Load VPA contract ABI if path provided
+	if cfg.VPAContractABIPath != "" {
+		abi, err := LoadContractABI(cfg.VPAContractABIPath)
+		if err != nil {
+			cancel()
+			return nil, fmt.Errorf("failed to load VPA contract ABI: %w", err)
+		}
+		vpaContractABI = abi
+		log.Infof("✅ Loaded VPA contract ABI from %s", cfg.VPAContractABIPath)
+
+		// Verify the ABI has the PrioritiesAssigned event
+		if !vpaContractABI.HasEvent("PrioritiesAssigned") {
+			cancel()
+			return nil, fmt.Errorf("VPA ABI does not contain PrioritiesAssigned event")
+		}
+
+		// Get VPA event signature from ABI
+		sig, err := vpaContractABI.GetEventHash("PrioritiesAssigned")
+		if err != nil {
+			cancel()
+			return nil, fmt.Errorf("failed to get PrioritiesAssigned event hash from VPA ABI: %w", err)
+		}
+		prioritiesAssignedSig = sig
+		log.Infof("✅ Using ABI-derived PrioritiesAssigned event signature: %s", prioritiesAssignedSig.Hex())
+	} else {
+		// Fallback to hardcoded signature
+		prioritiesAssignedSig = getPrioritiesAssignedEventSignature()
+		log.Infof("✅ Using hardcoded PrioritiesAssigned event signature: %s", prioritiesAssignedSig.Hex())
+	}
+
+		// Initialize VPA client for the first data market (if available)
+	if len(cfg.DataMarkets) > 0 {
+		if cfg.VPARPCURL == "" {
+			log.Warn("VPA RPC URL not configured, VPA client will not be initialized")
+			vpaEnabled = false
+		} else {
+			var err error
+			vpaClient, err = vpa.NewPriorityCachingClient(
+				cfg.VPARPCURL,
+				cfg.VPAContractAddress,
+				cfg.VPAValidatorAddress,
+				cfg.RedisClient,
+				cfg.ProtocolState,
+				cfg.DataMarkets[0], // Use first data market as default
+			)
+			if err != nil {
+				cancel()
+				return nil, fmt.Errorf("failed to create VPA caching client: %w", err)
+			}
+			log.Infof("✅ Initialized VPA caching client for validator %s", cfg.VPAValidatorAddress)
 		}
 	} else {
 		log.Info("VPA monitoring disabled - no VPA contract address or validator address configured")
