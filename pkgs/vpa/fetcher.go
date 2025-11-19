@@ -100,12 +100,12 @@ func FetchVPAAddress(rpcURL, newProtocolStateContract string) (common.Address, e
 	}
 
 	// Load NEW ProtocolState ABI - try multiple paths
-	abiPath := "./abi/PowerloomProtocolState.json"
+	abiPath := "/app/abi/PowerloomProtocolState.json"
 	fmt.Printf("🔍 DEBUG: Loading ABI from: %s\n", abiPath)
 	protocolStateABI, err := LoadContractABI(abiPath)
 	if err != nil {
 		// Try fallback path
-		abiPath2 := "./decentralized-sequencer/abi/PowerloomProtocolState.json"
+		abiPath2 := "./abi/PowerloomProtocolState.json"
 		fmt.Printf("🔍 DEBUG: Failed to load ABI from %s, trying: %s\n", abiPath, abiPath2)
 		protocolStateABI, err = LoadContractABI(abiPath2)
 		if err != nil {

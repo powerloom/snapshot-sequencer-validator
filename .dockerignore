@@ -1,0 +1,94 @@
+# Git
+.git
+.gitignore
+
+# Documentation
+*.md
+docs/
+
+# Logs
+*.log
+logs/
+
+# Temp files
+*.tmp
+*.temp
+.DS_Store
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Node modules (if any)
+node_modules/
+
+# Python cache (if any)
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Test files
+*.test
+*_test.go
+tests/
+
+# Build artifacts
+bin/
+build/
+dist/
+
+# Cache directories
+.cache/
+cache/
+
+# Environment files (they're passed via docker-compose)
+.env
+.env.*
+localenvs/
+
+# Data directories
+data/
+data-*/
+
+# Monitoring and metrics data
+prometheus-data/
+grafana-data/
+ipfs-data/
+
+# Docker files (to avoid copying docker-compose into context)
+docker-compose*.yml
+Dockerfile*
+
+# Scripts and tools that aren't needed in container
+scripts/
+tools/
+*.sh
+
+# Local development files
+*.local
+local.*
+
+# Large files that shouldn't be in containers
+*.tar.gz
+*.zip
+*.tar
+
+# Redis dumps
+*.rdb
+
+# Go specific
+vendor/
+
+# Test coverage
+coverage.out
+coverage.txt
+
+# Local binaries and compiled output
+*.exe
+*.dll
+*.so
+*.dylib
