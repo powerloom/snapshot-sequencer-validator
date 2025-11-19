@@ -866,7 +866,7 @@ func (wm *WindowManager) closeWindow(dataMarket string, epochID *big.Int) {
 	}
 }
 
-func (wm *WindowManager) triggerFinalization(dataMarket string, epochID *big.Int, startBlock uint64) {
+func (wm *WindowManager) triggerFinalization(dataMarket string, epochID *big.Int, _ uint64) {
 	// First, collect all submissions for this epoch from Redis
 	submissions := wm.collectEpochSubmissions(dataMarket, epochID)
 	

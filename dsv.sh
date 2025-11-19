@@ -178,29 +178,9 @@ start_services() {
             print_color "$GREEN" "✅ Switched to feat/tx-queue branch"
         fi
 
-        # Generate settings.json from environment variables using proper script
-        print_color "$CYAN" "🔧 Generating relayer-py settings.json from environment variables..."
-
-        # Check if we have the settings generation script
-        if [ -f "./test_relayer_config.py" ]; then
-            if python3 ./test_relayer_config.py > /dev/null 2>&1; then
-                # Move generated settings to relayer-py directory
-                cp /tmp/test_relayer_settings.json "$RELAYER_DIR/settings/settings.json"
-                print_color "$GREEN" "✅ Generated relayer-py settings.json from environment"
-            else
-                print_color "$YELLOW" "⚠️  Warning: Could not generate settings.json, copying example"
-                cp "$RELAYER_DIR/settings/settings.example.json" "$RELAYER_DIR/settings/settings.json"
-            fi
-        else
-            # Fallback: copy the example settings if generation script not available
-            if [ -f "$RELAYER_DIR/settings/settings.example.json" ]; then
-                print_color "$YELLOW" "⚠️  No settings generator found, using example settings.json"
-                cp "$RELAYER_DIR/settings/settings.example.json" "$RELAYER_DIR/settings/settings.json"
-                print_color "$YELLOW" "  ⚠️  Please configure VPA_SIGNER_ADDRESSES and VPA_SIGNER_PRIVATE_KEYS manually"
-            else
-                print_color "$RED" "❌ No settings.json or example found - relayer-py may not work"
-            fi
-        fi
+        # relayer-py now reads settings directly from environment variables
+        print_color "$CYAN" "🔧 relayer-py will configure from environment variables"
+        print_color "$GREEN" "✅ VPA integration configured via env vars"
     fi
 
     print_color "$GREEN" "🚀 Starting Separated Architecture"
