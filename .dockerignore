@@ -44,9 +44,10 @@ dist/
 .cache/
 cache/
 
-# Environment files (they're passed via docker-compose)
+# Environment files (they're passed via docker-compose, but keep .env.example for containers)
 .env
-.env.*
+.env.local
+.env.*.local
 localenvs/
 
 # Data directories
