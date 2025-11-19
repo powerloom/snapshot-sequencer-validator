@@ -62,6 +62,7 @@ show_usage() {
     echo "  event-logs    - Event monitor logs"
     echo "  redis-logs    - Redis logs"
     echo "  ipfs-logs     - IPFS node logs"
+    echo "  relayer-logs  - Relayer-PY VPA service logs"
     echo ""
     echo "Stream Debugging:"
     echo "  stream-info   - Show Redis streams status"
@@ -134,42 +135,41 @@ start_services() {
             exit 1
         fi
 
-        # Clone relayer-py repository
+        # Clone relayer-py repository (relative to current directory)
         RELAYER_REPO="git@github.com:powerloom/relayer-py.git"
         RELAYER_DIR="./relayer-py"
 
         if [ ! -d "$RELAYER_DIR" ]; then
-            print_color "$CYAN" "📦 Cloning relayer-py repository..."
+            print_color "$CYAN" "📦 Cloning relayer-py repository to $RELAYER_DIR..."
             if ! git clone "$RELAYER_REPO" "$RELAYER_DIR"; then
                 print_color "$RED" "❌ Failed to clone relayer-py repository"
                 print_color "$YELLOW" "Repository: $RELAYER_REPO"
+                print_color "$YELLOW" "Target directory: $RELAYER_DIR"
                 exit 1
             fi
             print_color "$GREEN" "✅ Successfully cloned relayer-py"
         else
-            print_color "$BLUE" "📁 relayer-py directory already exists"
+            print_color "$BLUE" "📁 relayer-py directory already exists at $RELAYER_DIR"
         fi
 
-        # Generate settings.json from environment variables
-        print_color "$CYAN" "🔧 Generating relayer-py settings.json from environment variables..."
-        if python3 ./test_relayer_config.py > /dev/null 2>&1; then
-            # Move generated settings to relayer-py directory
-            cp /tmp/test_relayer_settings.json "$RELAYER_DIR/settings/settings.json"
-            print_color "$GREEN" "✅ Generated relayer-py settings.json from environment"
+        # Check if relayer-py has settings.json, otherwise use defaults
+        if [ ! -f "$RELAYER_DIR/settings/settings.json" ]; then
+            print_color "$YELLOW" "⚠️  Warning: No settings.json found in relayer-py, using defaults"
+            print_color "$YELLOW" "  Configure relayer-py/settings.json manually if needed"
         else
-            print_color "$YELLOW" "⚠️  Warning: Could not generate settings.json, using existing config"
+            print_color "$GREEN" "✅ relayer-py settings.json found"
         fi
+
+    # Check permissions if IPFS was enabled
+    if [ "$enable_ipfs" = true ] && ([ ! -r "$IPFS_DIR" ] || [ ! -w "$IPFS_DIR" ]); then
+        print_color "$RED" "❌ CRITICAL: IPFS data directory has incorrect permissions"
+        print_color "$YELLOW" "Directory: $IPFS_DIR"
+        print_color "$YELLOW" "Required: Read/write access for user 1000:1000"
+        print_color "$YELLOW" "Fix with: sudo chown -R 1000:1000 $IPFS_DIR && sudo chmod -R 755 $IPFS_DIR"
+        exit 1
     fi
 
-        # Check permissions
-        if [ ! -r "$IPFS_DIR" ] || [ ! -w "$IPFS_DIR" ]; then
-            print_color "$RED" "❌ CRITICAL: IPFS data directory has incorrect permissions"
-            print_color "$YELLOW" "Directory: $IPFS_DIR"
-            print_color "$YELLOW" "Required: Read/write access for user 1000:1000"
-            print_color "$YELLOW" "Fix with: sudo chown -R 1000:1000 $IPFS_DIR && sudo chmod -R 755 $IPFS_DIR"
-            exit 1
-        fi
-
+    if [ "$enable_ipfs" = true ]; then
         print_color "$GREEN" "✅ IPFS directory verified: $IPFS_DIR"
     fi
 
@@ -691,6 +691,9 @@ case "${1:-}" in
         ;;
     ipfs-logs)
         show_service_logs "ipfs" "$2"
+        ;;
+    relayer-logs)
+        show_service_logs "relayer-py" "$2"
         ;;
     clean)
         clean_all
