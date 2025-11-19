@@ -13,43 +13,43 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/redis/go-redis/v9"
 	rpchelper "github.com/powerloom/go-rpc-helper"
 	rediskeys "github.com/powerloom/snapshot-sequencer-validator/pkgs/redis"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/vpa"
+	"github.com/redis/go-redis/v9"
 	log "github.com/sirupsen/logrus"
 )
 
 // EventMonitor watches for EpochReleased and PrioritiesAssigned events and manages submission windows
 type EventMonitor struct {
-	rpcHelper       *rpchelper.RPCHelper
-	redisClient     *redis.Client
-	contractAddr    common.Address
-	contractABI     *ContractABI
+	rpcHelper    *rpchelper.RPCHelper
+	redisClient  *redis.Client
+	contractAddr common.Address
+	contractABI  *ContractABI
 
 	// VPA Contract Monitoring
-	vpaContractAddr   common.Address
-	vpaContractABI    *ContractABI
-	vpaClient         *vpa.PriorityCachingClient
-	vpaEnabled        bool
+	vpaContractAddr common.Address
+	vpaContractABI  *ContractABI
+	vpaClient       *vpa.PriorityCachingClient
+	vpaEnabled      bool
 
 	// Window management
-	windowManager   *WindowManager
+	windowManager *WindowManager
 
 	// Event tracking
-	lastProcessedBlock      uint64
-	eventChan              chan *EpochReleasedEvent
-	epochReleasedSig       common.Hash // Cache the event signature to avoid recomputing
+	lastProcessedBlock uint64
+	eventChan          chan *EpochReleasedEvent
+	epochReleasedSig   common.Hash // Cache the event signature to avoid recomputing
 
 	// VPA Event tracking
-	vpaEventChan           chan *PrioritiesAssignedEvent
-	prioritiesAssignedSig  common.Hash // Cache VPA event signature
-	lastProcessedVPABlock  uint64      // Separate block tracking for VPA contract
+	vpaEventChan          chan *PrioritiesAssignedEvent
+	prioritiesAssignedSig common.Hash // Cache VPA event signature
+	lastProcessedVPABlock uint64      // Separate block tracking for VPA contract
 
 	// Configuration
-	pollInterval    time.Duration
-	windowDuration  time.Duration
-	dataMarkets     []string // List of data market addresses to monitor
+	pollInterval   time.Duration
+	windowDuration time.Duration
+	dataMarkets    []string // List of data market addresses to monitor
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -78,14 +78,14 @@ type PrioritiesAssignedEvent struct {
 
 // WindowManager manages submission windows for epochs
 type WindowManager struct {
-	activeWindows   map[string]*EpochWindow // key: dataMarketAddress:epochID
-	mu              sync.RWMutex
-	windowSemaphore chan struct{}
-	maxWindows      int
-	redisClient     *redis.Client
-	protocolState   string // Protocol state contract address for namespacing
-	finalizationBatchSize int // Number of projects per finalization batch
-	keyBuilders     map[string]*rediskeys.KeyBuilder // Cache key builders per data market
+	activeWindows         map[string]*EpochWindow // key: dataMarketAddress:epochID
+	mu                    sync.RWMutex
+	windowSemaphore       chan struct{}
+	maxWindows            int
+	redisClient           *redis.Client
+	protocolState         string                           // Protocol state contract address for namespacing
+	finalizationBatchSize int                              // Number of projects per finalization batch
+	keyBuilders           map[string]*rediskeys.KeyBuilder // Cache key builders per data market
 }
 
 // scanKeys uses SCAN instead of KEYS for production safety
@@ -124,24 +124,24 @@ type EpochWindow struct {
 
 // Config for EventMonitor
 type Config struct {
-	RPCHelper        *rpchelper.RPCHelper
-	ContractAddress  string
-	ContractABIPath  string   // Path to the contract ABI JSON file
-	RedisClient      *redis.Client
-	WindowDuration   time.Duration // Default window duration
-	StartBlock       uint64
-	PollInterval     time.Duration
-	DataMarkets      []string // Data market addresses to monitor
-	MaxWindows       int      // Max concurrent submission windows
-	FinalizationBatchSize int  // Number of projects per finalization batch
+	RPCHelper             *rpchelper.RPCHelper
+	ContractAddress       string
+	ContractABIPath       string // Path to the contract ABI JSON file
+	RedisClient           *redis.Client
+	WindowDuration        time.Duration // Default window duration
+	StartBlock            uint64
+	PollInterval          time.Duration
+	DataMarkets           []string // Data market addresses to monitor
+	MaxWindows            int      // Max concurrent submission windows
+	FinalizationBatchSize int      // Number of projects per finalization batch
 
 	// VPA Configuration (optional)
-	VPAContractAddress        string // VPA contract address for priority monitoring
-	VPAContractABIPath        string // Path to VPA contract ABI JSON file
-	VPAValidatorAddress       string // This validator's address for VPA client
-	VPARPCURL                 string // RPC URL for VPA client (if different from main RPC)
-	ProtocolState             string // Protocol state contract address for namespacing
-	NewProtocolStateContract  string // NEW ProtocolState contract address for VPA integration
+	VPAContractAddress       string // VPA contract address for priority monitoring
+	VPAContractABIPath       string // Path to VPA contract ABI JSON file
+	VPAValidatorAddress      string // This validator's address for VPA client
+	VPARPCURL                string // RPC URL for VPA client (if different from main RPC)
+	ProtocolState            string // Protocol state contract address for namespacing
+	NewProtocolStateContract string // NEW ProtocolState contract address for VPA integration
 }
 
 // NewEventMonitor creates a new event monitor
@@ -149,7 +149,7 @@ func NewEventMonitor(cfg *Config) (*EventMonitor, error) {
 	if cfg.RPCHelper == nil {
 		return nil, fmt.Errorf("RPC helper is required")
 	}
-	
+
 	// Load the contract ABI
 	var contractABI *ContractABI
 	if cfg.ContractABIPath != "" {
@@ -159,15 +159,15 @@ func NewEventMonitor(cfg *Config) (*EventMonitor, error) {
 		}
 		contractABI = abi
 		log.Infof("✅ Loaded contract ABI from %s", cfg.ContractABIPath)
-		
+
 		// Verify the ABI has the EpochReleased event
 		if !contractABI.HasEvent("EpochReleased") {
 			return nil, fmt.Errorf("ABI does not contain EpochReleased event")
 		}
 	}
-	
+
 	ctx, cancel := context.WithCancel(context.Background())
-	
+
 	// If StartBlock is 0, fetch current block to start from latest
 	startBlock := cfg.StartBlock
 	if startBlock == 0 {
@@ -182,7 +182,7 @@ func NewEventMonitor(cfg *Config) (*EventMonitor, error) {
 			log.Infof("Starting event monitor from current block: %d", startBlock)
 		}
 	}
-	
+
 	// Compute and cache event signature once at startup
 	var epochReleasedSig common.Hash
 	if contractABI != nil {
@@ -300,34 +300,33 @@ func NewEventMonitor(cfg *Config) (*EventMonitor, error) {
 		log.Infof("✅ Using hardcoded PrioritiesAssigned event signature: %s", prioritiesAssignedSig.Hex())
 	}
 
-	
 	windowManager := &WindowManager{
-		activeWindows:   make(map[string]*EpochWindow),
-		windowSemaphore: make(chan struct{}, cfg.MaxWindows),
-		maxWindows:      cfg.MaxWindows,
-		redisClient:     cfg.RedisClient,
-		protocolState:   cfg.ContractAddress, // Use protocol state for namespacing
+		activeWindows:         make(map[string]*EpochWindow),
+		windowSemaphore:       make(chan struct{}, cfg.MaxWindows),
+		maxWindows:            cfg.MaxWindows,
+		redisClient:           cfg.RedisClient,
+		protocolState:         cfg.ContractAddress, // Use protocol state for namespacing
 		finalizationBatchSize: cfg.FinalizationBatchSize,
-		keyBuilders:     make(map[string]*rediskeys.KeyBuilder),
+		keyBuilders:           make(map[string]*rediskeys.KeyBuilder),
 	}
 
 	return &EventMonitor{
-		rpcHelper:          cfg.RPCHelper,
-		redisClient:        cfg.RedisClient,
-		contractAddr:       common.HexToAddress(cfg.ContractAddress),
-		contractABI:        contractABI,
+		rpcHelper:    cfg.RPCHelper,
+		redisClient:  cfg.RedisClient,
+		contractAddr: common.HexToAddress(cfg.ContractAddress),
+		contractABI:  contractABI,
 
 		// VPA configuration
-		vpaContractAddr:     vpaContractAddr,
-		vpaContractABI:      vpaContractABI,
-		vpaClient:          vpaClient,
-		vpaEnabled:         vpaEnabled,
+		vpaContractAddr:       vpaContractAddr,
+		vpaContractABI:        vpaContractABI,
+		vpaClient:             vpaClient,
+		vpaEnabled:            vpaEnabled,
 		prioritiesAssignedSig: prioritiesAssignedSig,
 		lastProcessedVPABlock: startBlock, // Start from same block as main monitoring
 
 		// Window management
-		windowManager:      windowManager,
-		windowDuration:     cfg.WindowDuration,
+		windowManager:  windowManager,
+		windowDuration: cfg.WindowDuration,
 
 		// Event tracking
 		lastProcessedBlock: startBlock,
@@ -336,11 +335,11 @@ func NewEventMonitor(cfg *Config) (*EventMonitor, error) {
 		vpaEventChan:       make(chan *PrioritiesAssignedEvent, 100),
 
 		// Configuration
-		pollInterval:       cfg.PollInterval,
-		dataMarkets:        cfg.DataMarkets,
+		pollInterval: cfg.PollInterval,
+		dataMarkets:  cfg.DataMarkets,
 
-		ctx:                ctx,
-		cancel:             cancel,
+		ctx:    ctx,
+		cancel: cancel,
 	}, nil
 }
 
@@ -374,7 +373,7 @@ func (m *EventMonitor) Stop() {
 func (m *EventMonitor) pollBlocks() {
 	ticker := time.NewTicker(m.pollInterval)
 	defer ticker.Stop()
-	
+
 	for {
 		select {
 		case <-m.ctx.Done():
@@ -490,31 +489,31 @@ func (m *EventMonitor) parseEpochReleasedEvent(vLog types.Log) *EpochReleasedEve
 	// topics[1] = dataMarketAddress (indexed)
 	// topics[2] = epochId (indexed)
 	// data contains: begin, end, timestamp (non-indexed)
-	
+
 	if len(vLog.Topics) < 3 {
 		log.Warnf("Invalid EpochReleased event: expected at least 3 topics, got %d", len(vLog.Topics))
 		return nil
 	}
-	
+
 	// Parse indexed fields from topics
 	dataMarketAddress := common.HexToAddress(vLog.Topics[1].Hex())
 	epochID := new(big.Int).SetBytes(vLog.Topics[2].Bytes())
-	
+
 	// Parse non-indexed fields from data
 	// The data contains: begin (uint256), end (uint256), timestamp (uint256)
 	if len(vLog.Data) < 96 { // 3 * 32 bytes
 		log.Warnf("Invalid EpochReleased event data: expected at least 96 bytes, got %d", len(vLog.Data))
 		return nil
 	}
-	
+
 	// Each uint256 is 32 bytes
 	// begin := new(big.Int).SetBytes(vLog.Data[0:32])  // Not needed for our purposes
 	// end := new(big.Int).SetBytes(vLog.Data[32:64])   // Not needed for our purposes
 	timestamp := new(big.Int).SetBytes(vLog.Data[64:96])
-	
+
 	log.Debugf("Parsed EpochReleased event: DataMarket=%s, EpochID=%s, Timestamp=%s",
 		dataMarketAddress.Hex(), epochID.String(), timestamp.String())
-	
+
 	return &EpochReleasedEvent{
 		EpochID:           epochID,
 		DataMarketAddress: dataMarketAddress,
@@ -662,45 +661,45 @@ func (m *EventMonitor) handlePrioritiesAssigned(event *PrioritiesAssignedEvent) 
 
 // handleEpochReleased processes a new epoch release
 func (m *EventMonitor) handleEpochReleased(event *EpochReleasedEvent) {
-	log.Infof("📅 Epoch %s released for market %s at block %d", 
+	log.Infof("📅 Epoch %s released for market %s at block %d",
 		event.EpochID, event.DataMarketAddress.Hex(), event.BlockNumber)
-	
+
 	// Skip old epochs whose windows would have already expired
 	// This prevents filling up the window manager with historical epochs
 	epochAge := time.Since(time.Unix(int64(event.Timestamp), 0))
 	if epochAge > m.windowDuration*2 {
-		log.Debugf("Skipping old epoch %s (age: %v, window duration: %v)", 
+		log.Debugf("Skipping old epoch %s (age: %v, window duration: %v)",
 			event.EpochID, epochAge, m.windowDuration)
 		return
 	}
-	
+
 	// Store epoch info in Redis
 	epochKey := fmt.Sprintf("epoch:%s:%s:info", event.DataMarketAddress.Hex(), event.EpochID.String())
 	epochData := map[string]interface{}{
-		"epoch_id":       event.EpochID.String(),
-		"epoch_end":      event.EpochEnd.String(),
-		"data_market":    event.DataMarketAddress.Hex(),
-		"released_at":    event.Timestamp,
-		"block_number":   event.BlockNumber,
-		"tx_hash":        event.TransactionHash.Hex(),
-		"window_start":   time.Now().Unix(),
-		"window_end":     time.Now().Add(m.windowDuration).Unix(),
+		"epoch_id":     event.EpochID.String(),
+		"epoch_end":    event.EpochEnd.String(),
+		"data_market":  event.DataMarketAddress.Hex(),
+		"released_at":  event.Timestamp,
+		"block_number": event.BlockNumber,
+		"tx_hash":      event.TransactionHash.Hex(),
+		"window_start": time.Now().Unix(),
+		"window_end":   time.Now().Add(m.windowDuration).Unix(),
 	}
-	
+
 	// Store with pipeline for efficiency
 	pipe := m.redisClient.Pipeline()
 	pipe.HMSet(m.ctx, epochKey, epochData)
 	pipe.Expire(m.ctx, epochKey, 24*time.Hour)
-	
+
 	// Also add to active epochs set (use namespaced keys)
 	kb := m.windowManager.getKeyBuilder(event.DataMarketAddress.Hex())
 	pipe.SAdd(m.ctx, kb.ActiveEpochs(), event.EpochID.String())
 	pipe.Expire(m.ctx, kb.ActiveEpochs(), 24*time.Hour)
-	
+
 	if _, err := pipe.Exec(m.ctx); err != nil {
 		log.Errorf("Failed to store epoch info: %v", err)
 	}
-	
+
 	// Start submission window
 	if err := m.windowManager.StartSubmissionWindow(
 		m.ctx,
@@ -717,7 +716,7 @@ func (m *EventMonitor) handleEpochReleased(event *EpochReleasedEvent) {
 
 func (wm *WindowManager) StartSubmissionWindow(ctx context.Context, dataMarket string, epochID *big.Int, duration time.Duration, startBlock uint64) error {
 	key := fmt.Sprintf("%s:%s", dataMarket, epochID.String())
-	
+
 	// Check if window already exists
 	wm.mu.RLock()
 	if _, exists := wm.activeWindows[key]; exists {
@@ -725,7 +724,7 @@ func (wm *WindowManager) StartSubmissionWindow(ctx context.Context, dataMarket s
 		return fmt.Errorf("window already active for epoch %s in market %s", epochID, dataMarket)
 	}
 	wm.mu.RUnlock()
-	
+
 	// Try to acquire semaphore
 	select {
 	case wm.windowSemaphore <- struct{}{}:
@@ -733,7 +732,7 @@ func (wm *WindowManager) StartSubmissionWindow(ctx context.Context, dataMarket s
 	case <-time.After(1 * time.Second):
 		return fmt.Errorf("too many active windows (%d), refusing new window", wm.GetActiveCount())
 	}
-	
+
 	// Create window
 	window := &EpochWindow{
 		EpochID:           epochID,
@@ -743,23 +742,23 @@ func (wm *WindowManager) StartSubmissionWindow(ctx context.Context, dataMarket s
 		Done:              make(chan struct{}),
 		StartBlockNum:     startBlock,
 	}
-	
+
 	// Add to active windows
 	wm.mu.Lock()
 	wm.activeWindows[key] = window
 	activeCount := len(wm.activeWindows)
 	wm.mu.Unlock()
-	
+
 	// Start window timer
 	window.Timer = time.AfterFunc(duration, func() {
 		wm.closeWindow(dataMarket, epochID)
 	})
-	
+
 	// Mark window as open in Redis - namespaced with protocol:market
 	kb := wm.getKeyBuilder(dataMarket)
 	windowKey := kb.EpochWindow(epochID.String())
 	wm.redisClient.Set(context.Background(), windowKey, "open", duration)
-	
+
 	log.Infof("⏰ Submission window opened for epoch %s in market %s (duration: %v, active: %d)",
 		epochID, dataMarket, duration, activeCount)
 
@@ -799,34 +798,34 @@ func (wm *WindowManager) StartSubmissionWindow(ctx context.Context, dataMarket s
 
 func (wm *WindowManager) closeWindow(dataMarket string, epochID *big.Int) {
 	key := fmt.Sprintf("%s:%s", dataMarket, epochID.String())
-	
+
 	wm.mu.Lock()
 	window, exists := wm.activeWindows[key]
 	if !exists {
 		wm.mu.Unlock()
 		return
 	}
-	
+
 	// Remove from active windows
 	delete(wm.activeWindows, key)
 	activeCount := len(wm.activeWindows)
 	wm.mu.Unlock()
-	
+
 	// Release semaphore
 	<-wm.windowSemaphore
-	
+
 	// Close the done channel
 	close(window.Done)
-	
+
 	// Mark window as closed in Redis - namespaced with protocol:market
 	ctx := context.Background()
 	kb := wm.getKeyBuilder(dataMarket)
 	windowKey := kb.EpochWindow(epochID.String())
 	wm.redisClient.Set(ctx, windowKey, "closed", 1*time.Hour)
-	
+
 	// Trigger finalization
 	wm.triggerFinalization(dataMarket, epochID, window.StartBlockNum)
-	
+
 	log.Infof("⏱️ Submission window closed for epoch %s in market %s (remaining: %d)",
 		epochID, dataMarket, activeCount)
 
@@ -861,44 +860,44 @@ func (wm *WindowManager) closeWindow(dataMarket string, epochID *big.Int) {
 func (wm *WindowManager) triggerFinalization(dataMarket string, epochID *big.Int, _ uint64) {
 	// First, collect all submissions for this epoch from Redis
 	submissions := wm.collectEpochSubmissions(dataMarket, epochID)
-	
+
 	// Split submissions into smaller batches for parallel processing
 	batchSize := wm.finalizationBatchSize
 	if batchSize <= 0 {
 		batchSize = 20 // Default fallback
 	}
 	batches := wm.splitIntoBatches(submissions, batchSize)
-	
+
 	// Track batch metadata in Redis for aggregation worker
 	ctx := context.Background()
 	kb := wm.getKeyBuilder(dataMarket)
 	batchMetaKey := fmt.Sprintf("%s:%s:epoch:%s:batch:meta",
 		wm.protocolState, dataMarket, epochID.String())
-	
+
 	batchMeta := map[string]interface{}{
-		"epoch_id":     epochID.String(),
-		"total_batches": len(batches),
+		"epoch_id":       epochID.String(),
+		"total_batches":  len(batches),
 		"total_projects": len(submissions),
-		"created_at":   time.Now().Unix(),
-		"data_market":  dataMarket,
+		"created_at":     time.Now().Unix(),
+		"data_market":    dataMarket,
 	}
-	
+
 	metaData, _ := json.Marshal(batchMeta)
 	wm.redisClient.Set(ctx, batchMetaKey, metaData, 2*time.Hour)
-	
+
 	// Push each batch to finalization queue
 	queueKey := kb.FinalizationQueue()
 	log.Debugf("Pushing %d batches to finalization queue: %s", len(batches), queueKey)
-	
+
 	for i, batch := range batches {
 		batchData := map[string]interface{}{
-			"epoch_id":    epochID.String(),
-			"batch_id":    i,
+			"epoch_id":      epochID.String(),
+			"batch_id":      i,
 			"total_batches": len(batches),
-			"projects":    batch,
-			"data_market": dataMarket,
+			"projects":      batch,
+			"data_market":   dataMarket,
 		}
-		
+
 		data, _ := json.Marshal(batchData)
 		if err := wm.redisClient.LPush(ctx, queueKey, data).Err(); err != nil {
 			log.Errorf("Failed to push batch %d to finalization queue: %v", i, err)
@@ -906,8 +905,8 @@ func (wm *WindowManager) triggerFinalization(dataMarket string, epochID *big.Int
 		}
 		log.Debugf("Pushed batch %d to finalization queue: %s", i, queueKey)
 	}
-	
-	log.Infof("🎯 Split epoch %s into %d batches (%d projects total, batch size %d) for parallel finalization", 
+
+	log.Infof("🎯 Split epoch %s into %d batches (%d projects total, batch size %d) for parallel finalization",
 		epochID, len(batches), len(submissions), batchSize)
 }
 
@@ -915,23 +914,23 @@ func (wm *WindowManager) splitIntoBatches(submissions map[string]interface{}, ba
 	var batches []map[string]interface{}
 	currentBatch := make(map[string]interface{})
 	count := 0
-	
+
 	for projectID, submissionData := range submissions {
 		currentBatch[projectID] = submissionData
 		count++
-		
+
 		if count >= batchSize {
 			batches = append(batches, currentBatch)
 			currentBatch = make(map[string]interface{})
 			count = 0
 		}
 	}
-	
+
 	// Add remaining projects as final batch
 	if len(currentBatch) > 0 {
 		batches = append(batches, currentBatch)
 	}
-	
+
 	return batches
 }
 
@@ -966,7 +965,7 @@ func (wm *WindowManager) collectEpochSubmissions(dataMarket string, epochID *big
 		pattern := fmt.Sprintf("%s:%s:processed:*:%s",
 			wm.protocolState, dataMarket, submissionID)
 		keys, _ := wm.scanKeys(ctx, pattern)
-		
+
 		for _, key := range keys {
 			// Extract validator ID from key: {protocol}:{market}:processed:{validator_id}:{submission_id}
 			// Note: validatorID extraction removed as reported_by_validator field no longer needed
@@ -1042,33 +1041,33 @@ func (wm *WindowManager) collectEpochSubmissions(dataMarket string, epochID *big
 			}
 		}
 	}
-	
+
 	projectSubmissions := make(map[string]interface{})
 	for projectID, cidVotes := range projectVotes {
 		projectSubmissions[projectID] = map[string]interface{}{
-			"cid_votes": cidVotes,
-			"total_submissions": len(cidVotes),
+			"cid_votes":           cidVotes,
+			"total_submissions":   len(cidVotes),
 			"submission_metadata": submissionMetadata[projectID], // Add WHO submitted WHAT
 		}
-		
+
 		totalVotes := 0
 		for _, votes := range cidVotes {
 			totalVotes += votes
 		}
-		log.Debugf("Project %s: Collected %d unique CIDs with %d total submissions from %d submitters", 
+		log.Debugf("Project %s: Collected %d unique CIDs with %d total submissions from %d submitters",
 			projectID, len(cidVotes), totalVotes, len(submissionMetadata[projectID]))
 	}
-	
+
 	// Store the collected batch in Redis for finalizer (namespaced)
 	// Format: {protocol}:{market}:batch:ready:{epochID}
 	batchKey := fmt.Sprintf("%s:%s:batch:ready:%s",
 		wm.protocolState, dataMarket, epochID.String())
 	batchData, _ := json.Marshal(projectSubmissions)
 	wm.redisClient.Set(ctx, batchKey, batchData, 1*time.Hour)
-	
-	log.Infof("📦 Collected %d unique projects for epoch %s", 
+
+	log.Infof("📦 Collected %d unique projects for epoch %s",
 		len(projectSubmissions), epochID)
-	
+
 	return projectSubmissions
 }
 
@@ -1103,7 +1102,7 @@ func (wm *WindowManager) IsWindowOpen(dataMarket string, epochID *big.Int) bool 
 func (wm *WindowManager) Shutdown() {
 	wm.mu.Lock()
 	defer wm.mu.Unlock()
-	
+
 	// Stop all timers
 	for key, window := range wm.activeWindows {
 		window.Timer.Stop()
