@@ -245,6 +245,31 @@ func NewEventMonitor(cfg *Config) (*EventMonitor, error) {
 		}
 	}
 
+	// Initialize VPA client after we have the VPA address
+	if vpaContractAddr != (common.Address{}) && len(cfg.DataMarkets) > 0 {
+		if cfg.VPARPCURL == "" {
+			log.Warn("VPA RPC URL not configured, VPA client will not be initialized")
+			vpaEnabled = false
+		} else {
+			var err error
+			vpaClient, err = vpa.NewPriorityCachingClient(
+				cfg.VPARPCURL,
+				vpaContractAddr.Hex(),
+				cfg.VPAValidatorAddress,
+				cfg.RedisClient,
+				cfg.ProtocolState,
+				cfg.DataMarkets[0], // Use first data market as default
+			)
+			if err != nil {
+				cancel()
+				return nil, fmt.Errorf("failed to create VPA caching client: %w", err)
+			}
+			log.Infof("✅ Initialized VPA caching client for validator %s", cfg.VPAValidatorAddress)
+		}
+	} else {
+		log.Info("VPA monitoring disabled - no VPA contract address fetched or no data markets configured")
+	}
+
 	// Load VPA contract ABI if path provided
 	if cfg.VPAContractABIPath != "" {
 		abi, err := LoadContractABI(cfg.VPAContractABIPath)
@@ -275,31 +300,7 @@ func NewEventMonitor(cfg *Config) (*EventMonitor, error) {
 		log.Infof("✅ Using hardcoded PrioritiesAssigned event signature: %s", prioritiesAssignedSig.Hex())
 	}
 
-		// Initialize VPA client for the first data market (if available)
-	if len(cfg.DataMarkets) > 0 {
-		if cfg.VPARPCURL == "" {
-			log.Warn("VPA RPC URL not configured, VPA client will not be initialized")
-			vpaEnabled = false
-		} else {
-			var err error
-			vpaClient, err = vpa.NewPriorityCachingClient(
-				cfg.VPARPCURL,
-				cfg.VPAContractAddress,
-				cfg.VPAValidatorAddress,
-				cfg.RedisClient,
-				cfg.ProtocolState,
-				cfg.DataMarkets[0], // Use first data market as default
-			)
-			if err != nil {
-				cancel()
-				return nil, fmt.Errorf("failed to create VPA caching client: %w", err)
-			}
-			log.Infof("✅ Initialized VPA caching client for validator %s", cfg.VPAValidatorAddress)
-		}
-	} else {
-		log.Info("VPA monitoring disabled - no VPA contract address or validator address configured")
-	}
-
+	
 	windowManager := &WindowManager{
 		activeWindows:   make(map[string]*EpochWindow),
 		windowSemaphore: make(chan struct{}, cfg.MaxWindows),
