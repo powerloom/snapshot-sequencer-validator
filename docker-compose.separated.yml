@@ -242,35 +242,18 @@ services:
     profiles:
       - monitoring
 
-  # VPA Relayer - Service for submitting batches to VPA-enabled contracts
-  vpa-relayer:
+  # relayer-py - Python-based transaction relayer for VPA-enabled contracts
+  relayer-py:
     build:
-      context: .
-      dockerfile: Dockerfile.vpa-relayer
-    container_name: dsv-vpa-relayer
+      context: ./relayer-py
+      dockerfile: Dockerfile
+    container_name: dsv-relayer-py
     environment:
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - REDIS_PASSWORD=
-      - REDIS_DB=0
-      # Base configuration
-      - PROTOCOL_STATE_CONTRACT=${PROTOCOL_STATE_CONTRACT}
-      - DATA_MARKET_ADDRESSES=${DATA_MARKET_ADDRESSES}
-      - SEQUENCER_ID=${SEQUENCER_ID:-validator1}
-      - LOG_LEVEL=${LOG_LEVEL:-info}
-      # VPA Configuration
-      - VPA_ENABLED=${VPA_ENABLED:-false}
-      - VPA_RELAYER_ENDPOINT=${VPA_RELAYER_ENDPOINT:-http://relayer-py:8080}
-      - VPA_RELAYER_AUTH_TOKEN=${VPA_RELAYER_AUTH_TOKEN:-}
-      - VPA_RELAYER_TIMEOUT=${VPA_RELAYER_TIMEOUT:-30s}
-      - VPA_RELAYER_RETRY_ATTEMPTS=${VPA_RELAYER_RETRY_ATTEMPTS:-3}
-      - VPA_SIGNER_LOAD_BALANCING=${VPA_SIGNER_LOAD_BALANCING:-round-robin}
-      # New Contract Addresses (for VPA integration)
-      - NEW_PROTOCOL_STATE_CONTRACT=${NEW_PROTOCOL_STATE_CONTRACT}
-      - NEW_DATA_MARKET_CONTRACT=${NEW_DATA_MARKET_CONTRACT}
+      # Override protocol state address for new contracts
+      - PROTOCOL_STATE_ADDRESS=${NEW_PROTOCOL_STATE_CONTRACT}
       # Multi-signer Configuration (comma-separated)
-      - VPA_SIGNER_ADDRESSES=${VPA_SIGNER_ADDRESSES}
-      - VPA_SIGNER_PRIVATE_KEYS=${VPA_SIGNER_PRIVATE_KEYS}
+      - RELAYER_SIGNER_ADDRESSES=${VPA_SIGNER_ADDRESSES}
+      - RELAYER_SIGNER_PRIVATE_KEYS=${VPA_SIGNER_PRIVATE_KEYS}
     depends_on:
       redis:
         condition: service_healthy
@@ -280,13 +263,13 @@ services:
     profiles:
       - vpa
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
     ports:
-      - "8081:8081"
+      - "8080:8080"
 
   # Monitor API - REST API for pipeline monitoring
   monitor-api:

@@ -44,7 +44,7 @@ show_usage() {
     echo "Usage: $0 <command> [options]"
     echo ""
     echo "Main Commands:"
-    echo "  start [--with-ipfs] [--no-monitor]  - Start services (monitoring enabled by default)"
+    echo "  start [--with-ipfs] [--with-vpa] [--no-monitor]  - Start services (monitoring enabled by default)"
     echo "  stop                  - Stop all services"
     echo "  restart               - Restart all services"
     echo "  status                - Show service status"
@@ -120,8 +120,8 @@ start_services() {
 
     # Check VPA configuration if --with-vpa flag is used
     if [ "$enable_vpa" = true ]; then
-        if [ -z "$VPA_RELAYER_ENDPOINT" ]; then
-            print_color "$YELLOW" "⚠️  WARNING: VPA_RELAYER_ENDPOINT not set, using default"
+        if [ -z "$RELAYER_PY_ENDPOINT" ]; then
+            print_color "$YELLOW" "⚠️  WARNING: RELAYER_PY_ENDPOINT not set, using default"
         fi
         if [ -z "$VPA_SIGNER_ADDRESSES" ] || [ -z "$VPA_SIGNER_PRIVATE_KEYS" ]; then
             print_color "$RED" "❌ CRITICAL: VPA multi-signer configuration incomplete"
@@ -132,6 +132,32 @@ start_services() {
             print_color "$YELLOW" "Add these to your .env file, then try again:"
             print_color "$YELLOW" "  ./dsv.sh start --with-vpa"
             exit 1
+        fi
+
+        # Clone relayer-py repository
+        RELAYER_REPO="git@github.com:powerloom/relayer-py.git"
+        RELAYER_DIR="./relayer-py"
+
+        if [ ! -d "$RELAYER_DIR" ]; then
+            print_color "$CYAN" "📦 Cloning relayer-py repository..."
+            if ! git clone "$RELAYER_REPO" "$RELAYER_DIR"; then
+                print_color "$RED" "❌ Failed to clone relayer-py repository"
+                print_color "$YELLOW" "Repository: $RELAYER_REPO"
+                exit 1
+            fi
+            print_color "$GREEN" "✅ Successfully cloned relayer-py"
+        else
+            print_color "$BLUE" "📁 relayer-py directory already exists"
+        fi
+
+        # Generate settings.json from environment variables
+        print_color "$CYAN" "🔧 Generating relayer-py settings.json from environment variables..."
+        if python3 ./test_relayer_config.py > /dev/null 2>&1; then
+            # Move generated settings to relayer-py directory
+            cp /tmp/test_relayer_settings.json "$RELAYER_DIR/settings/settings.json"
+            print_color "$GREEN" "✅ Generated relayer-py settings.json from environment"
+        else
+            print_color "$YELLOW" "⚠️  Warning: Could not generate settings.json, using existing config"
         fi
     fi
 

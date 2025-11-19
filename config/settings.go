@@ -102,11 +102,11 @@ type Settings struct {
 	ValidatorAddress          string // This validator's address for priority checking
 	EnableOnChainSubmission   bool   // Enable submission to ProtocolState contract
 
-	// VPA Dual Submission Configuration
-	VPARelayerEndpoint string // relayer-py service endpoint for VPA submissions
-	VPAEnabled         bool   // Enable VPA submissions (new contracts)
-	NewProtocolState   string // New ProtocolState contract address
-	NewDataMarket      string // New DataMarket contract address
+	// New Contract Submission Configuration
+	RelayerPyEndpoint string   // relayer-py service endpoint for new contract submissions
+	UseNewContracts   bool     // Enable submission to new VPA-enabled contracts
+	NewProtocolState string   // New ProtocolState contract address
+	NewDataMarket    string   // New DataMarket contract address
 
 	// Stream Configuration for Deterministic Aggregation
 	StreamConsumerGroup       string        // Consumer group name for aggregator
@@ -226,9 +226,9 @@ func LoadConfig() error {
 		ValidatorAddress:          getEnv("VALIDATOR_ADDRESS", ""),
 		EnableOnChainSubmission:   getBoolEnv("ENABLE_ONCHAIN_SUBMISSION", false),
 
-		// VPA Dual Submission Configuration
-		VPARelayerEndpoint: getEnv("VPA_RELAYER_ENDPOINT", ""),
-		VPAEnabled:         getBoolEnv("VPA_ENABLED", false),
+		// New Contract Submission Configuration
+		RelayerPyEndpoint: getEnv("RELAYER_PY_ENDPOINT", ""),
+		UseNewContracts:   getBoolEnv("USE_NEW_CONTRACTS", false),
 		NewProtocolState:   getEnv("NEW_PROTOCOL_STATE_CONTRACT", ""),
 		NewDataMarket:      getEnv("NEW_DATA_MARKET_CONTRACT", ""),
 

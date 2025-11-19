@@ -41,10 +41,10 @@ type Aggregator struct {
 	vpaClient *vpa.PriorityCachingClient // Enhanced caching client
 	protocolClient *protocol.ProtocolState
 
-	// VPA relayer integration
-	vpaRelayerEndpoint string              // relayer-py service endpoint
-	vpaEnabled         bool               // Enable VPA submissions
-	httpClient         *http.Client       // HTTP client for relayer communication
+	// relayer-py integration
+	relayerPyEndpoint string              // relayer-py service endpoint
+	useNewContracts   bool               // Enable new contract submissions
+	httpClient        *http.Client       // HTTP client for relayer communication
 
 	// Track aggregation state
 	epochBatches map[uint64]map[string]*consensus.FinalizedBatch // epochID -> validatorID -> batch
@@ -148,8 +148,8 @@ func NewAggregator(cfg *config.Settings) (*Aggregator, error) {
 		keyBuilder:        keyBuilder,
 		vpaClient:         vpaClient,
 		protocolClient:    protocolClient,
-		vpaRelayerEndpoint: cfg.VPARelayerEndpoint,
-		vpaEnabled:        cfg.VPAEnabled,
+		relayerPyEndpoint: cfg.RelayerPyEndpoint,
+		useNewContracts:   cfg.UseNewContracts,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -859,10 +859,10 @@ func (a *Aggregator) aggregateEpoch(epochIDStr string) {
 		"projects":         len(aggregatedBatch.ProjectVotes),
 	}).Info("Aggregator: Completed aggregation")
 
-	// Attempt on-chain submission if enabled
-	if a.config.EnableOnChainSubmission && (a.vpaClient != nil || a.protocolClient != nil) {
+	// Attempt new contract submission if enabled
+	if a.useNewContracts {
 		epochID, _ := strconv.ParseUint(epochIDStr, 10, 64)
-		go a.handlePrioritySubmission(epochID, &aggregatedBatch)
+		go a.handleNewContractSubmission(epochID, &aggregatedBatch)
 	}
 
 	// Add monitoring metrics for Level 2 aggregation
@@ -1307,30 +1307,24 @@ func extractValidatorIDs(keys []string) []string {
 	return validators
 }
 
-// handlePrioritySubmission implements VPA priority-driven dual submission logic
-func (a *Aggregator) handlePrioritySubmission(epochID uint64, aggregatedBatch *consensus.FinalizedBatch) {
+// handleNewContractSubmission implements new contract submission logic
+func (a *Aggregator) handleNewContractSubmission(epochID uint64, aggregatedBatch *consensus.FinalizedBatch) {
 	// Convert epochID to string for consistency
 	epochIDStr := strconv.FormatUint(epochID, 10)
 
 	log.WithFields(logrus.Fields{
 		"epoch":    epochIDStr,
 		"projects": len(aggregatedBatch.ProjectIds),
-	}).Info("🎯 Starting VPA priority-driven dual submission")
+	}).Info("🚀 Starting new contract submission")
 
-	// Get data market address (use first one for legacy contracts)
-	if len(a.config.DataMarketAddresses) == 0 {
-		log.Error("No data market addresses configured for submission")
+	// Get new data market address for submission
+	newDataMarket := a.config.NewDataMarket
+	if newDataMarket == "" {
+		log.WithField("epoch", epochIDStr).Error("No new data market address configured")
 		return
 	}
-	legacyDataMarket := a.config.DataMarketAddresses[0]
 
-	// Get new data market address for VPA contracts
-	vpaDataMarket := a.config.NewDataMarket
-	if vpaDataMarket == "" {
-		vpaDataMarket = legacyDataMarket // Fallback to legacy address
-	}
-
-	// Check if already submitted (global state for both submission paths)
+	// Check if already submitted
 	a.mu.Lock()
 	if a.submissionState[epochID] {
 		a.mu.Unlock()
@@ -1339,47 +1333,10 @@ func (a *Aggregator) handlePrioritySubmission(epochID uint64, aggregatedBatch *c
 	}
 	a.mu.Unlock()
 
-	// ALWAYS submit to legacy contracts (maintain existing behavior)
-	log.WithField("epoch", epochIDStr).Info("📤 Submitting to LEGACY contracts (existing behavior)")
-	if a.protocolClient != nil {
-		go a.submitBatchToContract(epochID, aggregatedBatch, legacyDataMarket)
-	} else {
-		log.WithField("epoch", epochIDStr).Warn("Protocol client not available for legacy submission")
-	}
-
-	// VPA submission logic - only submit if top priority validator
-	if !a.vpaEnabled || a.vpaClient == nil {
-		log.WithField("epoch", epochIDStr).Debug("VPA submission disabled or client not available")
-		return
-	}
-
-	log.WithField("epoch", epochIDStr).Info("🎯 Starting VPA priority check")
-
-	// Use cached priorities for fast top priority determination
-	isTopPriority, err := a.vpaClient.IsTopPriority(a.ctx, vpaDataMarket, epochID, a.config.SequencerID)
-	if err != nil {
-		log.WithError(err).Error("Failed to check if top priority validator")
-		return
-	}
-
-	if !isTopPriority {
-		log.WithFields(logrus.Fields{
-			"epoch": epochIDStr,
-			"validator": a.config.SequencerID,
-		}).Info("⏳ Not top priority validator - skipping VPA submission")
-		return
-	}
-
-	log.WithFields(logrus.Fields{
-		"epoch": epochIDStr,
-		"validator": a.config.SequencerID,
-		"data_market": vpaDataMarket,
-	}).Info("🚀 Top priority validator - submitting to VPA contracts")
-
-	// Submit to VPA contracts via relayer-py
-	if err := a.submitBatchViaVPA(epochID, aggregatedBatch, vpaDataMarket); err != nil {
-		log.WithError(err).Error("VPA submission failed")
-		// Don't return error - VPA submission failure shouldn't affect legacy submission
+	// Submit to new contracts via relayer-py
+	if err := a.submitBatchViaRelayer(epochID, aggregatedBatch, newDataMarket); err != nil {
+		log.WithError(err).Error("New contract submission failed")
+		// Don't return error - new contract submission failure shouldn't affect other processing
 	}
 }
 
@@ -1444,10 +1401,10 @@ func (a *Aggregator) submitBatchToContract(epochID uint64, aggregatedBatch *cons
 	}
 }
 
-// submitBatchViaVPA submits batch to VPA contracts via relayer-py service
-func (a *Aggregator) submitBatchViaVPA(epochID uint64, aggregatedBatch *consensus.FinalizedBatch, dataMarketAddr string) error {
-	if !a.vpaEnabled || a.vpaRelayerEndpoint == "" {
-		log.WithField("epoch", epochID).Debug("VPA submission disabled or endpoint not configured")
+// submitBatchViaRelayer submits batch to new contracts via relayer-py service
+func (a *Aggregator) submitBatchViaRelayer(epochID uint64, aggregatedBatch *consensus.FinalizedBatch, dataMarketAddr string) error {
+	if !a.useNewContracts || a.relayerPyEndpoint == "" {
+		log.WithField("epoch", epochID).Debug("New contract submission disabled or endpoint not configured")
 		return nil
 	}
 
@@ -1457,8 +1414,8 @@ func (a *Aggregator) submitBatchViaVPA(epochID uint64, aggregatedBatch *consensu
 		"epoch":      epochIDStr,
 		"projects":   len(aggregatedBatch.ProjectIds),
 		"data_market": dataMarketAddr,
-		"endpoint":    a.vpaRelayerEndpoint,
-	}).Info("🚀 Submitting batch via VPA relayer")
+		"endpoint":    a.relayerPyEndpoint,
+	}).Info("🚀 Submitting batch via relayer-py")
 
 	// Prepare payload for relayer-py service
 	payload := map[string]interface{}{
@@ -1475,14 +1432,14 @@ func (a *Aggregator) submitBatchViaVPA(epochID uint64, aggregatedBatch *consensu
 
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("failed to marshal VPA submission payload: %w", err)
+		return fmt.Errorf("failed to marshal relayer-py submission payload: %w", err)
 	}
 
 	// Submit to relayer-py service
-	endpoint := a.vpaRelayerEndpoint + "/submitSubmissionBatch"
+	endpoint := a.relayerPyEndpoint + "/submitSubmissionBatch"
 	resp, err := a.httpClient.Post(endpoint, "application/json", bytes.NewBuffer(payloadBytes))
 	if err != nil {
-		return fmt.Errorf("failed to submit batch to VPA relayer: %w", err)
+		return fmt.Errorf("failed to submit batch to relayer-py: %w", err)
 	}
 	defer resp.Body.Close()
 
