@@ -2,9 +2,8 @@
 .git
 .gitignore
 
-# Documentation
+# Documentation (exclude only README files)
 *.md
-docs/
 
 # Logs
 *.log
