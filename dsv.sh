@@ -119,6 +119,20 @@ start_services() {
             exit 1
         fi
 
+    # Check permissions if IPFS was enabled
+        if [ "$enable_ipfs" = true ] && ([ ! -r "$IPFS_DIR" ] || [ ! -w "$IPFS_DIR" ]); then
+            print_color "$RED" "❌ CRITICAL: IPFS data directory has incorrect permissions"
+            print_color "$YELLOW" "Directory: $IPFS_DIR"
+            print_color "$YELLOW" "Required: Read/write access for user 1000:1000"
+            print_color "$YELLOW" "Fix with: sudo chown -R 1000:1000 $IPFS_DIR && sudo chmod -R 755 $IPFS_DIR"
+            exit 1
+        fi
+
+        if [ "$enable_ipfs" = true ]; then
+            print_color "$GREEN" "✅ IPFS directory verified: $IPFS_DIR"
+        fi
+    fi
+
     # Check VPA configuration if --with-vpa flag is used
     if [ "$enable_vpa" = true ]; then
         if [ -z "$RELAYER_PY_ENDPOINT" ]; then
@@ -139,17 +153,29 @@ start_services() {
         RELAYER_REPO="git@github.com:powerloom/relayer-py.git"
         RELAYER_DIR="./relayer-py"
 
-        if [ ! -d "$RELAYER_DIR" ]; then
-            print_color "$CYAN" "📦 Cloning relayer-py repository to $RELAYER_DIR..."
-            if ! git clone "$RELAYER_REPO" "$RELAYER_DIR"; then
-                print_color "$RED" "❌ Failed to clone relayer-py repository"
-                print_color "$YELLOW" "Repository: $RELAYER_REPO"
-                print_color "$YELLOW" "Target directory: $RELAYER_DIR"
-                exit 1
-            fi
-            print_color "$GREEN" "✅ Successfully cloned relayer-py"
+        # Remove existing relayer-py directory if it exists
+        if [ -d "$RELAYER_DIR" ]; then
+            print_color "$YELLOW" "🗑️  Removing existing relayer-py directory..."
+            rm -rf "$RELAYER_DIR"
+        fi
+
+        # Clone relayer-py repository
+        print_color "$CYAN" "📦 Cloning relayer-py repository to $RELAYER_DIR..."
+        if ! git clone "$RELAYER_REPO" "$RELAYER_DIR"; then
+            print_color "$RED" "❌ Failed to clone relayer-py repository"
+            print_color "$YELLOW" "Repository: $RELAYER_REPO"
+            print_color "$YELLOW" "Target directory: $RELAYER_DIR"
+            exit 1
+        fi
+        print_color "$GREEN" "✅ Successfully cloned relayer-py"
+
+        # Switch to feat/tx-queue branch
+        print_color "$CYAN" "🔄 Switching to feat/tx-queue branch..."
+        if ! (cd "$RELAYER_DIR" && git checkout feat/tx-queue); then
+            print_color "$RED" "❌ Failed to switch to feat/tx-queue branch"
+            print_color "$YELLOW" "Continuing with default branch"
         else
-            print_color "$BLUE" "📁 relayer-py directory already exists at $RELAYER_DIR"
+            print_color "$GREEN" "✅ Switched to feat/tx-queue branch"
         fi
 
         # Check if relayer-py has settings.json, otherwise use defaults
@@ -159,18 +185,6 @@ start_services() {
         else
             print_color "$GREEN" "✅ relayer-py settings.json found"
         fi
-
-    # Check permissions if IPFS was enabled
-    if [ "$enable_ipfs" = true ] && ([ ! -r "$IPFS_DIR" ] || [ ! -w "$IPFS_DIR" ]); then
-        print_color "$RED" "❌ CRITICAL: IPFS data directory has incorrect permissions"
-        print_color "$YELLOW" "Directory: $IPFS_DIR"
-        print_color "$YELLOW" "Required: Read/write access for user 1000:1000"
-        print_color "$YELLOW" "Fix with: sudo chown -R 1000:1000 $IPFS_DIR && sudo chmod -R 755 $IPFS_DIR"
-        exit 1
-    fi
-
-    if [ "$enable_ipfs" = true ]; then
-        print_color "$GREEN" "✅ IPFS directory verified: $IPFS_DIR"
     fi
 
     print_color "$GREEN" "🚀 Starting Separated Architecture"
