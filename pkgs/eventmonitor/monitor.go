@@ -209,17 +209,8 @@ func NewEventMonitor(cfg *Config) (*EventMonitor, error) {
 	if cfg.VPAValidatorAddress != "" && cfg.ProtocolState != "" {
 		vpaEnabled = true
 
-		// For now, use direct VPA address if provided
-		if cfg.VPAContractAddress != "" {
-			vpaContractAddr = common.HexToAddress(cfg.VPAContractAddress)
-			log.Infof("✅ Using fallback VPA contract address: %s", cfg.VPAContractAddress)
-		} else {
-			vpaContractAddr = common.Address{}
-			log.Infof("📋 No direct VPA address provided - will fetch from NEW ProtocolState")
-		}
-
-		// If no direct VPA address, fetch from NEW ProtocolState contract
-		if vpaContractAddr == (common.Address{}) && cfg.NewProtocolStateContract != "" {
+		// Always fetch VPA address from NEW ProtocolState contract
+		if cfg.NewProtocolStateContract != "" {
 			log.Infof("🔍 Fetching VPA address from NEW ProtocolState contract...")
 
 			// Parse RPC URL from VPARPCURL (POWERLOOM_RPC_NODES can be comma-separated or JSON array)
