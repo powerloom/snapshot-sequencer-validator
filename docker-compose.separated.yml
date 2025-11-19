@@ -221,6 +221,27 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # RabbitMQ - Message queue for relayer-py
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: dsv-rabbitmq
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    ports:
+      - "5672:5672"    # AMQP port
+      - "15672:15672"  # Management UI (optional)
+    networks:
+      - sequencer-net
+    restart: unless-stopped
+    profiles:
+      - vpa
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
   # State Tracker - Background worker for data aggregation
   state-tracker:
     build:
@@ -252,13 +273,21 @@ services:
       dockerfile: Dockerfile
     container_name: dsv-relayer-py
     environment:
-      # Override protocol state address for new contracts
-      - PROTOCOL_STATE_ADDRESS=${NEW_PROTOCOL_STATE_CONTRACT}
+      # Core RPC Configuration
+      - POWERLOOM_RPC_NODES=${POWERLOOM_RPC_NODES}
+      - NEW_PROTOCOL_STATE_CONTRACT=${NEW_PROTOCOL_STATE_CONTRACT}
       # Multi-signer Configuration (comma-separated)
-      - RELAYER_SIGNER_ADDRESSES=${VPA_SIGNER_ADDRESSES}
-      - RELAYER_SIGNER_PRIVATE_KEYS=${VPA_SIGNER_PRIVATE_KEYS}
+      - VPA_SIGNER_ADDRESSES=${VPA_SIGNER_ADDRESSES}
+      - VPA_SIGNER_PRIVATE_KEYS=${VPA_SIGNER_PRIVATE_KEYS}
+      # Redis Configuration
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
     depends_on:
       redis:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
     networks:
       - sequencer-net
