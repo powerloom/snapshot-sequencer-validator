@@ -214,6 +214,7 @@ services:
       - NEW_DATA_MARKET_CONTRACT=${NEW_DATA_MARKET_CONTRACT}
       - USE_NEW_CONTRACTS=${USE_NEW_CONTRACTS}
       - VPA_VALIDATOR_ADDRESS=${VPA_VALIDATOR_ADDRESS}
+      - RELAYER_PY_ENDPOINT=${RELAYER_PY_ENDPOINT:-http://relayer-py:8080}
     depends_on:
       redis:
         condition: service_healthy

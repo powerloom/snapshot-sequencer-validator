@@ -1421,8 +1421,14 @@ func (a *Aggregator) submitBatchToContract(epochID uint64, aggregatedBatch *cons
 
 // submitBatchViaRelayer submits batch to new contracts via relayer-py service
 func (a *Aggregator) submitBatchViaRelayer(epochID uint64, aggregatedBatch *consensus.FinalizedBatch, dataMarketAddr string) error {
-	if !a.useNewContracts || a.relayerPyEndpoint == "" {
-		log.WithField("epoch", epochID).Debug("New contract submission disabled or endpoint not configured")
+	// Always check if we have VPA priority for this epoch
+	if !a.hasVPAPriority(epochID, dataMarketAddr) {
+		log.WithField("epoch", epochID).Debug("No VPA priority, skipping new contract submission")
+		return nil
+	}
+
+	if a.relayerPyEndpoint == "" {
+		log.WithField("epoch", epochID).Debug("Relayer endpoint not configured, skipping new contract submission")
 		return nil
 	}
 
@@ -1549,4 +1555,34 @@ func main() {
 	<-sigChan
 
 	aggregator.Stop()
+}
+
+// hasVPAPriority checks if this validator has VPA priority for the given epoch and data market
+func (a *Aggregator) hasVPAPriority(epochID uint64, dataMarketAddr string) bool {
+	if a.vpaClient == nil {
+		log.Debug("VPA client not initialized, cannot check priority")
+		return false
+	}
+
+	// Get our validator's priority
+	priority, err := a.vpaClient.GetMyPriority(a.ctx, dataMarketAddr, epochID)
+	if err != nil {
+		log.WithError(err).WithFields(logrus.Fields{
+			"epoch":      epochID,
+			"data_market": dataMarketAddr,
+		}).Debug("Failed to get VPA priority")
+		return false
+	}
+
+	// Check if we have a valid priority (1 = highest priority)
+	hasPriority := priority > 0
+
+	log.WithFields(logrus.Fields{
+		"epoch":      epochID,
+		"data_market": dataMarketAddr,
+		"priority":   priority,
+		"has_priority": hasPriority,
+	}).Debug("VPA priority check result")
+
+	return hasPriority
 }

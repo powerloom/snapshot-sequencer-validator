@@ -234,10 +234,6 @@ start_services() {
             echo "  • Monitor API (dashboard)"
         fi
         echo ""
-        if [ "$enable_ipfs" = true ]; then
-            print_color "$YELLOW" "Note: Make sure IPFS_HOST=ipfs:5001 in .env for DSV services to use local IPFS"
-            echo ""
-        fi
         if [ "$enable_monitoring" = true ]; then
             echo "View dashboard: http://localhost:${MONITOR_API_PORT:-9091}/swagger/index.html"
         fi
