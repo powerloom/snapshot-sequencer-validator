@@ -295,7 +295,9 @@ services:
       # Core RPC Configuration
       - POWERLOOM_RPC_NODES=${POWERLOOM_RPC_NODES}
       - NEW_PROTOCOL_STATE_CONTRACT=${NEW_PROTOCOL_STATE_CONTRACT}
-      - ANCHOR_CHAIN_ID=${ANCHOR_CHAIN_ID}
+      - ANCHOR_CHAIN_ID=${ANCHOR_CHAIN_ID:-11167}
+      # Minimum signer balance check (default: 0 to disable for devnet)
+      - MIN_SIGNER_BALANCE_ETH=${MIN_SIGNER_BALANCE_ETH:-0}
       # Multi-signer Configuration (comma-separated)
       - VPA_SIGNER_ADDRESSES=${VPA_SIGNER_ADDRESSES}
       - VPA_SIGNER_PRIVATE_KEYS=${VPA_SIGNER_PRIVATE_KEYS}
