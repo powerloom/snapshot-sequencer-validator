@@ -399,11 +399,13 @@ services:
         echo "Setting up data cleanup cron job..."
         mkdir -p /var/spool/cron/crontabs
 
-        cleanup_cmd="date && echo Starting IPFS cleanup process... && find /data/ipfs -type f -mtime +$${DATA_CLEANUP_DAYS} -name *.data -print -delete && echo Cleanup process completed."
+        # Cleanup command: Remove old .data files AND run IPFS garbage collection
+        # Garbage collection is critical to free inodes from unpinned blocks
+        cleanup_cmd="date && echo Starting IPFS cleanup process... && find /data/ipfs -type f -mtime +$${DATA_CLEANUP_DAYS} -name *.data -print -delete && echo Running IPFS garbage collection to free inodes... && ipfs repo gc && echo Cleanup process completed."
         echo "$${CLEANUP_SCHEDULE} $${cleanup_cmd} >> /proc/1/fd/1 2>&1" > /var/spool/cron/crontabs/root
         chmod 0644 /var/spool/cron/crontabs/root
 
-        echo "Cron job set up. Will clean files older than $${DATA_CLEANUP_DAYS} days every $${IPFS_CLEANUP_INTERVAL_HOURS:-72} hours ($${CLEANUP_SCHEDULE})"
+        echo "Cron job set up. Will clean files older than $${DATA_CLEANUP_DAYS} days and run garbage collection every $${IPFS_CLEANUP_INTERVAL_HOURS:-72} hours ($${CLEANUP_SCHEDULE})"
 
         # Initialize IPFS repository if not exists
         if [ ! -f /data/ipfs/config ]; then
@@ -428,6 +430,17 @@ services:
           # Optimize for performance
           ipfs config --json Experimental.FilestoreEnabled true
           echo "IPFS configuration completed"
+        else
+          # Repository exists - ensure StorageMax is set appropriately
+          # Update StorageMax to 200GB if it's not already set correctly
+          # This handles cases where existing repos have old StorageMax values
+          current_storage_max=$(ipfs config Datastore.StorageMax 2>/dev/null || echo "")
+          if [ -z "$current_storage_max" ] || [ "$current_storage_max" != "200GB" ]; then
+            echo "Updating StorageMax from '${current_storage_max:-not set}' to '200GB'..."
+            ipfs config Datastore.StorageMax "200GB" && echo "StorageMax updated successfully" || echo "Warning: Could not update StorageMax"
+          else
+            echo "StorageMax already set to 200GB"
+          fi
         fi
 
         echo "Starting cron daemon..."
