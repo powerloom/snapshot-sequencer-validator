@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
+	abiloader "github.com/powerloom/snapshot-sequencer-validator/pkgs/abi"
 )
 
 // ContractABI holds the parsed ABI and provides helper methods
@@ -99,12 +100,22 @@ func FetchVPAAddress(rpcURL, newProtocolStateContract string) (common.Address, e
 		return common.Address{}, fmt.Errorf("NEW ProtocolState contract address is required")
 	}
 
-	// Load NEW ProtocolState ABI
-	// Dockerfile copies ABI files to /root/abi/
-	abiPath := "/root/abi/PowerloomProtocolState.abi.json"
-	protocolStateABI, err := LoadContractABI(abiPath)
+	// Load NEW ProtocolState ABI using standardized path resolution
+	protocolStateABIParsed, err := abiloader.LoadABI("PowerloomProtocolState.abi.json")
 	if err != nil {
-		return common.Address{}, fmt.Errorf("failed to load NEW ProtocolState ABI from %s: %w", abiPath, err)
+		return common.Address{}, fmt.Errorf("failed to load NEW ProtocolState ABI: %w", err)
+	}
+
+	// Convert to ContractABI wrapper for compatibility with existing code
+	protocolStateABI := &ContractABI{
+		abi:         protocolStateABIParsed,
+		eventHashes: make(map[string]common.Hash),
+	}
+
+	// Pre-compute event hashes
+	for eventName, event := range protocolStateABIParsed.Events {
+		hash := crypto.Keccak256Hash([]byte(event.Sig))
+		protocolStateABI.eventHashes[eventName] = hash
 	}
 
 	// Create ethclient

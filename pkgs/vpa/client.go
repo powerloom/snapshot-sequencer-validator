@@ -13,6 +13,7 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
+	abiloader "github.com/powerloom/snapshot-sequencer-validator/pkgs/abi"
 	rediskeys "github.com/powerloom/snapshot-sequencer-validator/pkgs/redis"
 	"github.com/redis/go-redis/v9"
 	"github.com/sirupsen/logrus"
@@ -103,8 +104,8 @@ func NewValidatorPriorityAssigner(rpcURL string, contractAddr string, validatorA
 		return nil, fmt.Errorf("invalid validator address: %s", validatorAddr)
 	}
 
-	// Load the VPA ABI (simplified version for our needs)
-	vpaABI, err := abi.JSON(strings.NewReader(VPAABI))
+	// Load VPA ABI from file using standardized path resolution
+	vpaABI, err := abiloader.LoadABI("ValidatorPriorityAssigner.json")
 	if err != nil {
 		return nil, fmt.Errorf("failed to load VPA ABI: %w", err)
 	}
@@ -367,36 +368,6 @@ func (vpa *ValidatorPriorityAssigner) Close() {
 		vpa.client.Close()
 	}
 }
-
-// VPAABI contains the simplified ABI for the ValidatorPriorityAssigner contract
-const VPAABI = `[
-	{
-		"inputs": [
-			{"internalType": "address", "name": "dataMarket", "type": "address"},
-			{"internalType": "uint256", "name": "epochId", "type": "uint256"},
-			{"internalType": "address", "name": "validatorAddress", "type": "address"}
-		],
-		"name": "canValidatorSubmit",
-		"outputs": [
-			{"internalType": "bool", "name": "canSubmit", "type": "bool"}
-		],
-		"stateMutability": "view",
-		"type": "function"
-	},
-	{
-		"inputs": [
-			{"internalType": "address", "name": "dataMarket", "type": "address"},
-			{"internalType": "uint256", "name": "epochId", "type": "uint256"},
-			{"internalType": "uint256", "name": "validatorId", "type": "uint256"}
-		],
-		"name": "getHistoricalPriority",
-		"outputs": [
-			{"internalType": "uint256", "name": "", "type": "uint256"}
-		],
-		"stateMutability": "view",
-		"type": "function"
-	}
-]`
 
 // CacheEpochPriorities caches all validator priorities for an epoch
 func (pcc *PriorityCachingClient) CacheEpochPriorities(ctx context.Context, dataMarket string, epochID uint64) error {
