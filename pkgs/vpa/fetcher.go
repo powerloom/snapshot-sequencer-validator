@@ -16,9 +16,9 @@ import (
 
 // ContractABI holds the parsed ABI and provides helper methods
 type ContractABI struct {
-	abi           abi.ABI
-	rawJSON       json.RawMessage
-	eventHashes   map[string]common.Hash // event name -> keccak256 hash
+	abi         abi.ABI
+	rawJSON     json.RawMessage
+	eventHashes map[string]common.Hash // event name -> keccak256 hash
 }
 
 // LoadContractABI loads and parses a contract ABI from file
@@ -100,13 +100,12 @@ func FetchVPAAddress(rpcURL, newProtocolStateContract string) (common.Address, e
 	}
 
 	// Load NEW ProtocolState ABI
-	abiPath := "/app/abi/PowerloomProtocolState.abi.json"
-	fmt.Printf("🔍 DEBUG: Loading ABI from: %s\n", abiPath)
+	// Dockerfile copies ABI files to /root/abi/
+	abiPath := "/root/abi/PowerloomProtocolState.abi.json"
 	protocolStateABI, err := LoadContractABI(abiPath)
 	if err != nil {
-		return common.Address{}, fmt.Errorf("failed to load NEW ProtocolState ABI: %w", err)
+		return common.Address{}, fmt.Errorf("failed to load NEW ProtocolState ABI from %s: %w", abiPath, err)
 	}
-	fmt.Printf("🔍 DEBUG: Successfully loaded ABI\n")
 
 	// Create ethclient
 	fmt.Printf("🔍 DEBUG: Creating ethclient...\n")

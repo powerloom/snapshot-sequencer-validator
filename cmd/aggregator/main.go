@@ -19,7 +19,6 @@ import (
 	"github.com/powerloom/snapshot-sequencer-validator/config"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/consensus"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/ipfs"
-	"github.com/powerloom/snapshot-sequencer-validator/pkgs/protocol"
 	rediskeys "github.com/powerloom/snapshot-sequencer-validator/pkgs/redis"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/submissions"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/utils"
@@ -39,8 +38,7 @@ type Aggregator struct {
 	keyBuilder  *rediskeys.KeyBuilder
 
 	// Contract clients for on-chain integration
-	vpaClient      *vpa.PriorityCachingClient // Enhanced caching client
-	protocolClient *protocol.ProtocolState
+	vpaClient *vpa.PriorityCachingClient // Enhanced caching client for VPA priority checking
 
 	// relayer-py integration
 	relayerPyEndpoint string       // relayer-py service endpoint
@@ -96,13 +94,12 @@ func NewAggregator(cfg *config.Settings) (*Aggregator, error) {
 	}
 	keyBuilder := rediskeys.NewKeyBuilder(protocolState, dataMarket)
 
-	// Initialize contract clients if on-chain submission is enabled
+	// Initialize VPA client for priority checking (required for new contract submissions)
 	var vpaClient *vpa.PriorityCachingClient
-	var protocolClient *protocol.ProtocolState
 	var err error
 
 	if cfg.EnableOnChainSubmission {
-		log.Info("🔗 Initializing on-chain submission contracts")
+		log.Info("🔗 Initializing VPA client for priority checking")
 
 		// Fetch VPA address from NEW ProtocolState contract if not provided
 		vpaContractAddr := common.HexToAddress(cfg.VPAContractAddress)
@@ -136,23 +133,6 @@ func NewAggregator(cfg *config.Settings) (*Aggregator, error) {
 		} else {
 			log.Warn("⚠️  VPA contract address or validator address not available")
 		}
-
-		// Initialize ProtocolState client
-		if cfg.ProtocolStateContract != "" && len(cfg.DataMarketAddresses) > 0 {
-			// Use first RPC node for ProtocolState
-			rpcURL := cfg.RPCNodes[0]
-			// Note: In production, validator private key should be securely managed
-			validatorPrivateKey := cfg.ValidatorAddress // For now, use address as placeholder
-			protocolClient, err = protocol.NewProtocolState(
-				rpcURL, cfg.ProtocolStateContract, validatorPrivateKey, cfg.ChainID)
-			if err != nil {
-				cancel()
-				return nil, fmt.Errorf("failed to initialize ProtocolState client: %w", err)
-			}
-			log.Info("✅ ProtocolState client initialized")
-		} else {
-			log.Warn("⚠️  ProtocolState contract or data market not configured")
-		}
 	}
 
 	aggregator := &Aggregator{
@@ -163,7 +143,6 @@ func NewAggregator(cfg *config.Settings) (*Aggregator, error) {
 		config:            cfg,
 		keyBuilder:        keyBuilder,
 		vpaClient:         vpaClient,
-		protocolClient:    protocolClient,
 		relayerPyEndpoint: cfg.RelayerPyEndpoint,
 		useNewContracts:   cfg.UseNewContracts,
 		httpClient: &http.Client{
@@ -1363,66 +1342,7 @@ func (a *Aggregator) handleNewContractSubmission(epochID uint64, aggregatedBatch
 	}
 }
 
-// submitBatchToContract submits the aggregated batch to the ProtocolState contract
-func (a *Aggregator) submitBatchToContract(epochID uint64, aggregatedBatch *consensus.FinalizedBatch, dataMarketAddr string) {
-	epochIDStr := strconv.FormatUint(epochID, 10)
-
-	// Check if already submitted (double-check)
-	a.mu.Lock()
-	if a.submissionState[epochID] {
-		a.mu.Unlock()
-		log.WithField("epoch", epochIDStr).Info("Already submitted for this epoch")
-		return
-	}
-	a.mu.Unlock()
-
-	// Prepare batch submission
-	submission := &protocol.BatchSubmission{
-		EpochID:           epochID,
-		BatchCID:          aggregatedBatch.BatchIPFSCID,
-		ProjectIDs:        aggregatedBatch.ProjectIds,
-		SnapshotCIDs:      aggregatedBatch.SnapshotCids,
-		FinalizedCIDsRoot: aggregatedBatch.MerkleRoot,
-		GasLimit:          2000000, // 2M gas limit
-	}
-
-	log.WithFields(logrus.Fields{
-		"epoch":       epochIDStr,
-		"batch_cid":   submission.BatchCID,
-		"projects":    len(submission.ProjectIDs),
-		"data_market": dataMarketAddr,
-	}).Info("📤 Submitting batch to ProtocolState contract")
-
-	// Submit asynchronously
-	resultChan := a.protocolClient.SubmitBatchAsync(a.ctx, dataMarketAddr, submission)
-
-	// Wait for result
-	select {
-	case result := <-resultChan:
-		if result.Success {
-			a.mu.Lock()
-			a.submissionState[epochID] = true
-			a.mu.Unlock()
-
-			log.WithFields(logrus.Fields{
-				"epoch":        epochIDStr,
-				"tx_hash":      result.TxHash,
-				"block_number": result.BlockNumber,
-				"gas_used":     result.GasUsed,
-			}).Info("✅ Batch submission successful")
-		} else {
-			log.WithFields(logrus.Fields{
-				"epoch": epochIDStr,
-				"error": result.Error,
-			}).Error("❌ Batch submission failed")
-		}
-	case <-a.ctx.Done():
-		log.WithField("epoch", epochIDStr).Info("Submission cancelled due to shutdown")
-		return
-	case <-time.After(2 * time.Minute):
-		log.WithField("epoch", epochIDStr).Warn("⏰ Batch submission timeout")
-	}
-}
+// Legacy contract submission removed - DSV nodes only submit via relayer-py to new contracts
 
 // submitBatchViaRelayer submits batch to new contracts via relayer-py service
 func (a *Aggregator) submitBatchViaRelayer(epochID uint64, aggregatedBatch *consensus.FinalizedBatch, dataMarketAddr string) error {
@@ -1505,27 +1425,6 @@ func (a *Aggregator) submitBatchViaRelayer(epochID uint64, aggregatedBatch *cons
 	} else {
 		return fmt.Errorf("VPA batch submission failed: %s", response.Error)
 	}
-}
-
-// checkBatchAlreadySubmitted performs a simple check if batch was already submitted
-// This is a simplified version - in production you'd query the contract for submissions
-func (a *Aggregator) checkBatchAlreadySubmitted(epochID uint64) bool {
-	// Simple time-based check - if more than 30 seconds have passed since aggregation window
-	// assume someone else might have submitted
-	// In production, this should query the contract for epoch submission status
-
-	// Check our local submission state first
-	a.mu.Lock()
-	submitted := a.submissionState[epochID]
-	a.mu.Unlock()
-
-	if submitted {
-		return true
-	}
-
-	// For now, return false to allow submission
-	// In production, implement proper contract querying
-	return false
 }
 
 func main() {
