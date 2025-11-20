@@ -1173,19 +1173,11 @@ func (a *Aggregator) monitorFinalizedBatches() {
 				continue
 			}
 
-			// Count aggregated entries and get active epochs from timeline
+			// Count aggregated entries from timeline
 			finalizedCount := 0
-			keys := make([]string, 0)
 			for _, entry := range timelineEntries {
 				if strings.HasPrefix(entry.Member.(string), "aggregated:") {
 					finalizedCount++
-					epochID := strings.TrimPrefix(entry.Member.(string), "aggregated:")
-					// Check if the aggregated batch exists
-					aggregatedKey := a.keyBuilder.BatchAggregated(epochID)
-					exists, err := a.redisClient.Exists(a.ctx, aggregatedKey).Result()
-					if err == nil && exists > 0 {
-						keys = append(keys, aggregatedKey)
-					}
 				}
 			}
 
