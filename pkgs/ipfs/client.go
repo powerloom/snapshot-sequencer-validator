@@ -135,7 +135,7 @@ func (c *Client) StoreFinalizedBatch(ctx context.Context, batch interface{}) (st
 		return "", fmt.Errorf("failed to add to IPFS: %w", err)
 	}
 
-	log.Infof("Stored finalized batch in IPFS: %s", cidStr)
+	log.Debugf("IPFS upload successful: %s", cidStr)
 	return cidStr, nil
 }
 

@@ -616,8 +616,16 @@ func (a *Aggregator) aggregateWorkerParts(epochIDStr string, totalParts int) {
 	if a.ipfsClient != nil {
 		if cid, err := a.ipfsClient.StoreFinalizedBatch(a.ctx, finalizedBatch); err == nil {
 			finalizedBatch.BatchIPFSCID = cid
+			log.WithFields(logrus.Fields{
+				"epoch": epochID,
+				"level": 1,
+				"cid":   cid,
+			}).Info("✅ LEVEL 1: Stored finalized batch in IPFS")
 		} else {
-			log.WithError(err).Warn("Failed to store finalized batch in IPFS, continuing without CID")
+			log.WithFields(logrus.Fields{
+				"epoch": epochID,
+				"level": 1,
+			}).WithError(err).Warn("❌ LEVEL 1: Failed to store finalized batch in IPFS, continuing without CID")
 		}
 	}
 
@@ -858,9 +866,16 @@ func (a *Aggregator) aggregateEpoch(epochIDStr string) {
 	if a.ipfsClient != nil {
 		if cid, err := a.ipfsClient.StoreFinalizedBatch(a.ctx, &aggregatedBatch); err == nil {
 			aggregatedBatch.BatchIPFSCID = cid
-			log.WithField("cid", cid).Info("Stored aggregated batch in IPFS")
+			log.WithFields(logrus.Fields{
+				"epoch": epochIDStr,
+				"level": 2,
+				"cid":   cid,
+			}).Info("✅ LEVEL 2: Stored aggregated batch in IPFS")
 		} else {
-			log.WithError(err).Warn("Failed to store aggregated batch in IPFS, continuing without CID")
+			log.WithFields(logrus.Fields{
+				"epoch": epochIDStr,
+				"level": 2,
+			}).WithError(err).Warn("❌ LEVEL 2: Failed to store aggregated batch in IPFS, continuing without CID")
 		}
 	}
 
