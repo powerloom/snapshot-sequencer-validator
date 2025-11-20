@@ -1348,18 +1348,58 @@ func (a *Aggregator) handleNewContractSubmission(epochID uint64, aggregatedBatch
 // submitBatchViaRelayer submits batch to new contracts via relayer-py service
 // For DSV nodes, we typically send 1 aggregated batch per epoch
 func (a *Aggregator) submitBatchViaRelayer(epochID uint64, aggregatedBatch *consensus.FinalizedBatch, dataMarketAddr string) error {
-	// Always check if we have VPA priority for this epoch
-	if !a.hasVPAPriority(epochID, dataMarketAddr) {
-		log.WithField("epoch", epochID).Debug("No VPA priority, skipping new contract submission")
+	epochIDStr := strconv.FormatUint(epochID, 10)
+
+	// First check if we have VPA priority (this checks priority assignment, not timing)
+	if a.vpaClient == nil {
+		log.WithField("epoch", epochIDStr).Debug("VPA client not initialized, skipping new contract submission")
 		return nil
 	}
+
+	// Check if validator has priority for this epoch
+	priority, err := a.vpaClient.GetMyPriority(a.ctx, dataMarketAddr, epochID)
+	if err != nil {
+		log.WithError(err).WithField("epoch", epochIDStr).Debug("Failed to get VPA priority, skipping submission")
+		return nil
+	}
+
+	if priority == 0 {
+		log.WithField("epoch", epochIDStr).Debug("No VPA priority assigned, skipping new contract submission")
+		return nil
+	}
+
+	// Wait for submission window to open (this checks timing and waits if needed)
+	log.WithFields(logrus.Fields{
+		"epoch":    epochIDStr,
+		"priority": priority,
+	}).Info("⏳ Waiting for submission window to open...")
+
+	// Create a context with timeout for waiting (max 10 minutes to prevent indefinite blocking)
+	waitCtx, cancel := context.WithTimeout(a.ctx, 10*time.Minute)
+	defer cancel()
+
+	if err := a.vpaClient.WaitForSubmissionWindow(waitCtx, dataMarketAddr, epochID); err != nil {
+		if err == context.DeadlineExceeded {
+			log.WithField("epoch", epochIDStr).Warn("Timeout waiting for submission window, skipping submission")
+			return nil
+		}
+		if err == context.Canceled {
+			log.WithField("epoch", epochIDStr).Debug("Context canceled while waiting for submission window")
+			return nil
+		}
+		log.WithError(err).WithField("epoch", epochIDStr).Warn("Error waiting for submission window, skipping submission")
+		return nil
+	}
+
+	log.WithFields(logrus.Fields{
+		"epoch":    epochIDStr,
+		"priority": priority,
+	}).Info("✅ Submission window is open, proceeding with submission")
 
 	if a.relayerPyEndpoint == "" {
-		log.WithField("epoch", epochID).Debug("Relayer endpoint not configured, skipping new contract submission")
+		log.WithField("epoch", epochIDStr).Debug("Relayer endpoint not configured, skipping new contract submission")
 		return nil
 	}
-
-	epochIDStr := strconv.FormatUint(epochID, 10)
 
 	log.WithFields(logrus.Fields{
 		"epoch":       epochIDStr,
@@ -1527,33 +1567,34 @@ func main() {
 	aggregator.Stop()
 }
 
-// hasVPAPriority checks if this validator has VPA priority for the given epoch and data market
-// Uses PriorityCachingClient which checks Redis cache first, then falls back to contract call
+// hasVPAPriority checks if this validator has VPA priority AND the submission window is open
+// Uses CanValidatorSubmit which checks both priority assignment and submission window timing
 func (a *Aggregator) hasVPAPriority(epochID uint64, dataMarketAddr string) bool {
 	if a.vpaClient == nil {
 		log.Debug("VPA client not initialized, cannot check priority")
 		return false
 	}
 
-	// Get our validator's priority (cache-first via PriorityCachingClient)
-	priority, err := a.vpaClient.GetMyPriority(a.ctx, dataMarketAddr, epochID)
+	// Use CanValidatorSubmit which checks both:
+	// 1. If validator has priority for this epoch
+	// 2. If the submission window is currently open (timing check)
+	canSubmit, err := a.vpaClient.CanValidatorSubmit(a.ctx, dataMarketAddr, epochID)
 	if err != nil {
 		log.WithError(err).WithFields(logrus.Fields{
 			"epoch":       epochID,
 			"data_market": dataMarketAddr,
-		}).Debug("Failed to get VPA priority")
+		}).Debug("Failed to check VPA submission eligibility")
 		return false
 	}
 
-	// Check if we have a valid priority (1 = highest priority)
-	hasPriority := priority > 0
-
+	// CanValidatorSubmit returns true only if:
+	// - Validator has priority > 0 for this epoch
+	// - Current time is within the submission window for that priority
 	log.WithFields(logrus.Fields{
-		"epoch":        epochID,
-		"data_market":  dataMarketAddr,
-		"priority":     priority,
-		"has_priority": hasPriority,
-	}).Debug("VPA priority check result")
+		"epoch":       epochID,
+		"data_market": dataMarketAddr,
+		"can_submit":  canSubmit,
+	}).Debug("VPA submission eligibility check result")
 
-	return hasPriority
+	return canSubmit
 }
