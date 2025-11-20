@@ -205,6 +205,14 @@ services:
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - DEBUG_MODE=${DEBUG_MODE:-false}
       # Storage configuration for aggregated results
+      # IPFS_HOST determines connection method:
+      # - External IPFS (default): Set IPFS_HOST=/dns/hostname/tcp/5001 in .env
+      # - Local IPFS (--with-ipfs): Set IPFS_HOST=ipfs:5001 in .env (Docker service name)
+      # Note: Aggregator ALWAYS uses HTTP API - never local filesystem
+      # IPFS_PATH is ONLY set for the IPFS service container (see ipfs service below)
+      # Upload strategy:
+      # - External IPFS: Direct HTTP POST (in-memory streaming, no temp files)
+      # - Local IPFS: Unixfs().Add() via HTTP API (IPFS node handles storage)
       - IPFS_HOST=${IPFS_HOST:-localhost:5001}
       # Protocol/Market config
       - PROTOCOL_STATE_CONTRACT=${PROTOCOL_STATE_CONTRACT}
@@ -378,8 +386,8 @@ services:
     volumes:
       - ${IPFS_DATA_DIR:-/data/ipfs}:/data/ipfs
     ports:
-      - "127.0.0.1:${IPFS_API_PORT:-5001}:5001"    # IPFS API port (required for DSV)
-      - "127.0.0.1:${IPFS_SWARM_PORT:-4001}:4001"  # IPFS Swarm port for P2P communication
+      - "127.0.0.1:${IPFS_API_PORT:-5001}:5001"    # IPFS API port (required for DSV, local only)
+      - "0.0.0.0:${IPFS_SWARM_PORT:-4001}:4001"    # IPFS Swarm port for P2P communication (bind to all interfaces)
     environment:
       - IPFS_PROFILE=server
       - IPFS_PATH=/data/ipfs
