@@ -1390,13 +1390,17 @@ func (a *Aggregator) submitBatchViaRelayer(epochID uint64, aggregatedBatch *cons
 		authToken = "" // Explicitly empty for internal setups
 	}
 
+	// Convert MerkleRoot ([]byte) to hex string with 0x prefix for bytes32 compatibility
+	// The relayer expects this as a hex string, and web3.py will convert it to bytes32
+	finalizedCIDsRootHash := fmt.Sprintf("0x%x", aggregatedBatch.MerkleRoot)
+
 	payload := map[string]interface{}{
 		"dataMarketAddress":     dataMarketAddr,
 		"batchCID":              aggregatedBatch.BatchIPFSCID,
 		"epochID":               int(epochID),
 		"projectIDs":            aggregatedBatch.ProjectIds,
 		"snapshotCIDs":          aggregatedBatch.SnapshotCids,
-		"finalizedCIDsRootHash": fmt.Sprintf("%x", aggregatedBatch.MerkleRoot),
+		"finalizedCIDsRootHash": finalizedCIDsRootHash,
 		"authToken":             authToken,
 	}
 
