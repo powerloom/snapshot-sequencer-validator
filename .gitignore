@@ -19,12 +19,14 @@ cmd/vpa-relayer/vpa-relayer
 cmd/epoch-manager/epoch_generator
 cmd/monitor-api/monitor-api
 
-# Any file without extension in cmd directories
-cmd/*/[!.]*
-!cmd/*/
+# Any file without extension in cmd directories (but allow .go, .md, Dockerfile*)
+# First, explicitly allow source files and docs
 !cmd/*/*.go
 !cmd/*/*.md
 !cmd/*/Dockerfile*
+# Then ignore binaries (files without extension) in cmd directories
+cmd/*/[!.]*
+!cmd/*/
 
 # Specific binary names (catch-all)
 vpa-relayer

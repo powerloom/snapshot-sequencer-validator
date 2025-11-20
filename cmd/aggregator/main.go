@@ -1563,13 +1563,14 @@ func main() {
 }
 
 // hasVPAPriority checks if this validator has VPA priority for the given epoch and data market
+// Uses PriorityCachingClient which checks Redis cache first, then falls back to contract call
 func (a *Aggregator) hasVPAPriority(epochID uint64, dataMarketAddr string) bool {
 	if a.vpaClient == nil {
 		log.Debug("VPA client not initialized, cannot check priority")
 		return false
 	}
 
-	// Get our validator's priority
+	// Get our validator's priority (cache-first via PriorityCachingClient)
 	priority, err := a.vpaClient.GetMyPriority(a.ctx, dataMarketAddr, epochID)
 	if err != nil {
 		log.WithError(err).WithFields(logrus.Fields{
