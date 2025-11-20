@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/signal"
@@ -1345,6 +1346,7 @@ func (a *Aggregator) handleNewContractSubmission(epochID uint64, aggregatedBatch
 // Legacy contract submission removed - DSV nodes only submit via relayer-py to new contracts
 
 // submitBatchViaRelayer submits batch to new contracts via relayer-py service
+// For DSV nodes, we typically send 1 aggregated batch per epoch
 func (a *Aggregator) submitBatchViaRelayer(epochID uint64, aggregatedBatch *consensus.FinalizedBatch, dataMarketAddr string) error {
 	// Always check if we have VPA priority for this epoch
 	if !a.hasVPAPriority(epochID, dataMarketAddr) {
@@ -1366,18 +1368,42 @@ func (a *Aggregator) submitBatchViaRelayer(epochID uint64, aggregatedBatch *cons
 		"endpoint":    a.relayerPyEndpoint,
 	}).Info("🚀 Submitting batch via relayer-py")
 
-	// Prepare payload for relayer-py service
-	payload := map[string]interface{}{
-		"epoch_id":       epochID,
-		"batch_cid":      aggregatedBatch.BatchIPFSCID,
-		"project_ids":    aggregatedBatch.ProjectIds,
-		"snapshot_cids":  aggregatedBatch.SnapshotCids,
-		"merkle_root":    fmt.Sprintf("%x", aggregatedBatch.MerkleRoot),
-		"validator_id":   a.config.SequencerID,
-		"timestamp":      aggregatedBatch.Timestamp,
-		"data_market":    dataMarketAddr,
-		"protocol_state": a.config.NewProtocolState,
+	// Step 1: Send batch size first (required by relayer to track when to call endBatchSubmissions)
+	// For DSV nodes, we typically send 1 aggregated batch per epoch
+	batchSize := 1
+	if err := a.sendBatchSizeToRelayer(epochID, dataMarketAddr, batchSize); err != nil {
+		log.WithError(err).WithField("epoch", epochIDStr).Warn("Failed to send batch size to relayer, continuing with batch submission")
+		// Don't fail completely - relayer might still process batches without size info
+	} else {
+		log.WithFields(logrus.Fields{
+			"epoch":      epochIDStr,
+			"batch_size": batchSize,
+		}).Debug("✅ Sent batch size to relayer")
 	}
+
+	// Prepare payload for relayer-py service (must match BatchSubmissionRequest schema)
+	// Expected fields: dataMarketAddress, batchCID, epochID, projectIDs, snapshotCIDs, finalizedCIDsRootHash, authToken
+	// Note: For internal setups, relayer-py defaults to empty auth_token, so empty string is acceptable
+	// If APIAuthToken is not set, use empty string to match relayer's default
+	authToken := a.config.APIAuthToken
+	if authToken == "" {
+		authToken = "" // Explicitly empty for internal setups
+	}
+
+	payload := map[string]interface{}{
+		"dataMarketAddress":     dataMarketAddr,
+		"batchCID":              aggregatedBatch.BatchIPFSCID,
+		"epochID":               int(epochID),
+		"projectIDs":            aggregatedBatch.ProjectIds,
+		"snapshotCIDs":          aggregatedBatch.SnapshotCids,
+		"finalizedCIDsRootHash": fmt.Sprintf("%x", aggregatedBatch.MerkleRoot),
+		"authToken":             authToken,
+	}
+
+	log.WithFields(logrus.Fields{
+		"epoch":        epochIDStr,
+		"payload_keys": len(payload),
+	}).Debug("Prepared relayer-py payload")
 
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
@@ -1393,7 +1419,10 @@ func (a *Aggregator) submitBatchViaRelayer(epochID uint64, aggregatedBatch *cons
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("VPA relayer returned non-200 status: %d", resp.StatusCode)
+		// Read response body for error details
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		bodyStr := string(bodyBytes)
+		return fmt.Errorf("VPA relayer returned non-200 status: %d, response: %s", resp.StatusCode, bodyStr)
 	}
 
 	var response struct {
@@ -1425,6 +1454,39 @@ func (a *Aggregator) submitBatchViaRelayer(epochID uint64, aggregatedBatch *cons
 	} else {
 		return fmt.Errorf("VPA batch submission failed: %s", response.Error)
 	}
+}
+
+// sendBatchSizeToRelayer sends the batch size to relayer-py before submitting batches
+// This tells the relayer how many batches to expect, so it knows when to call endBatchSubmissions
+func (a *Aggregator) sendBatchSizeToRelayer(epochID uint64, dataMarketAddr string, batchSize int) error {
+	authToken := a.config.APIAuthToken // Defaults to "" if not set
+
+	payload := map[string]interface{}{
+		"dataMarketAddress": dataMarketAddr,
+		"batchSize":         batchSize,
+		"epochID":           int(epochID),
+		"authToken":         authToken,
+	}
+
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal batch size payload: %w", err)
+	}
+
+	endpoint := a.relayerPyEndpoint + "/submitBatchSize"
+	resp, err := a.httpClient.Post(endpoint, "application/json", bytes.NewBuffer(payloadBytes))
+	if err != nil {
+		return fmt.Errorf("failed to submit batch size to relayer-py: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		bodyStr := string(bodyBytes)
+		return fmt.Errorf("relayer returned non-200 status for batch size: %d, response: %s", resp.StatusCode, bodyStr)
+	}
+
+	return nil
 }
 
 func main() {
