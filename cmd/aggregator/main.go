@@ -20,8 +20,8 @@ import (
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/consensus"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/ipfs"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/protocol"
-	"github.com/powerloom/snapshot-sequencer-validator/pkgs/submissions"
 	rediskeys "github.com/powerloom/snapshot-sequencer-validator/pkgs/redis"
+	"github.com/powerloom/snapshot-sequencer-validator/pkgs/submissions"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/utils"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/vpa"
 	"github.com/redis/go-redis/v9"
@@ -39,13 +39,13 @@ type Aggregator struct {
 	keyBuilder  *rediskeys.KeyBuilder
 
 	// Contract clients for on-chain integration
-	vpaClient *vpa.PriorityCachingClient // Enhanced caching client
+	vpaClient      *vpa.PriorityCachingClient // Enhanced caching client
 	protocolClient *protocol.ProtocolState
 
 	// relayer-py integration
-	relayerPyEndpoint string              // relayer-py service endpoint
-	useNewContracts   bool               // Enable new contract submissions
-	httpClient        *http.Client       // HTTP client for relayer communication
+	relayerPyEndpoint string       // relayer-py service endpoint
+	useNewContracts   bool         // Enable new contract submissions
+	httpClient        *http.Client // HTTP client for relayer communication
 
 	// Track aggregation state
 	epochBatches map[uint64]map[string]*consensus.FinalizedBatch // epochID -> validatorID -> batch
@@ -56,8 +56,6 @@ type Aggregator struct {
 
 	mu sync.RWMutex
 }
-
-
 
 func NewAggregator(cfg *config.Settings) (*Aggregator, error) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -171,9 +169,9 @@ func NewAggregator(cfg *config.Settings) (*Aggregator, error) {
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
-		epochBatches:      make(map[uint64]map[string]*consensus.FinalizedBatch),
-		epochTimers:       make(map[uint64]*time.Timer),
-		submissionState:   make(map[uint64]bool),
+		epochBatches:    make(map[uint64]map[string]*consensus.FinalizedBatch),
+		epochTimers:     make(map[uint64]*time.Timer),
+		submissionState: make(map[uint64]bool),
 	}
 
 	// Initialize stream consumer (mandatory for deterministic aggregation)
@@ -192,9 +190,9 @@ func (a *Aggregator) initializeStreamConsumer() error {
 	consumerName := a.config.StreamConsumerName
 
 	log.WithFields(logrus.Fields{
-		"stream":     streamKey,
-		"group":      groupName,
-		"consumer":   consumerName,
+		"stream":   streamKey,
+		"group":    groupName,
+		"consumer": consumerName,
 	}).Info("Initializing Redis stream consumer")
 
 	// Ensure consumer group exists (create with stream if needed)
@@ -556,8 +554,8 @@ func (a *Aggregator) startAggregationWindow(epochIDStr string) {
 	// Start new aggregation window timer
 	timer := time.AfterFunc(a.config.AggregationWindowDuration, func() {
 		log.WithFields(logrus.Fields{
-			"epoch":   epochID,
-			"window":  a.config.AggregationWindowDuration,
+			"epoch":  epochID,
+			"window": a.config.AggregationWindowDuration,
 		}).Info("⏰ Aggregation window expired - finalizing Level 2 aggregation")
 
 		// Perform aggregation after window expires
@@ -571,8 +569,8 @@ func (a *Aggregator) startAggregationWindow(epochIDStr string) {
 
 	a.epochTimers[epochID] = timer
 	log.WithFields(logrus.Fields{
-		"epoch":   epochID,
-		"window":  a.config.AggregationWindowDuration,
+		"epoch":  epochID,
+		"window": a.config.AggregationWindowDuration,
 	}).Info("⏱️  Started Level 2 aggregation window - collecting validator batches")
 }
 
@@ -853,8 +851,8 @@ func (a *Aggregator) aggregateEpoch(epochIDStr string) {
 	}
 
 	log.WithFields(logrus.Fields{
-		"epoch": epochIDStr,
-		"local_batch": ourBatch != nil,
+		"epoch":            epochIDStr,
+		"local_batch":      ourBatch != nil,
 		"incoming_batches": len(incomingKeys),
 		"total_validators": totalValidators,
 	}).Info("Starting epoch aggregation")
@@ -950,7 +948,7 @@ func (a *Aggregator) aggregateEpoch(epochIDStr string) {
 		log.WithError(err).Warn("Failed to clean up source batches after aggregation")
 	} else {
 		log.WithFields(logrus.Fields{
-			"epoch": epochIDStr,
+			"epoch":        epochIDStr,
 			"keys_deleted": deleted,
 		}).Info("🗑️  Cleaned up source batches after successful aggregation")
 	}
@@ -1118,8 +1116,8 @@ func (a *Aggregator) createAggregatedBatch(ourBatch *consensus.FinalizedBatch, i
 
 	// Log aggregation summary
 	log.WithFields(logrus.Fields{
-		"epoch": aggregated.EpochId,
-		"validators": len(validatorViews),
+		"epoch":          aggregated.EpochId,
+		"validators":     len(validatorViews),
 		"total_projects": len(aggregated.ProjectVotes),
 		"consensus_cids": len(snapshotCIDs),
 	}).Info("📊 AGGREGATED FINALIZATION: Combined views from all validators")
@@ -1238,10 +1236,10 @@ func (a *Aggregator) monitorFinalizedBatches() {
 
 			if len(timelineEntries) > 0 {
 				log.WithFields(logrus.Fields{
-					"active_epochs": len(timelineEntries),
+					"active_epochs":     len(timelineEntries),
 					"finalized_batches": finalizedCount,
-					"new_queued": newBatchesFound,
-					"already_tracked": len(queuedEpochs) - newBatchesFound,
+					"new_queued":        newBatchesFound,
+					"already_tracked":   len(queuedEpochs) - newBatchesFound,
 				}).Debug("Monitor check completed")
 			}
 		}
@@ -1397,9 +1395,9 @@ func (a *Aggregator) submitBatchToContract(epochID uint64, aggregatedBatch *cons
 	}
 
 	log.WithFields(logrus.Fields{
-		"epoch":      epochIDStr,
-		"batch_cid":  submission.BatchCID,
-		"projects":   len(submission.ProjectIDs),
+		"epoch":       epochIDStr,
+		"batch_cid":   submission.BatchCID,
+		"projects":    len(submission.ProjectIDs),
 		"data_market": dataMarketAddr,
 	}).Info("📤 Submitting batch to ProtocolState contract")
 
@@ -1450,23 +1448,23 @@ func (a *Aggregator) submitBatchViaRelayer(epochID uint64, aggregatedBatch *cons
 	epochIDStr := strconv.FormatUint(epochID, 10)
 
 	log.WithFields(logrus.Fields{
-		"epoch":      epochIDStr,
-		"projects":   len(aggregatedBatch.ProjectIds),
+		"epoch":       epochIDStr,
+		"projects":    len(aggregatedBatch.ProjectIds),
 		"data_market": dataMarketAddr,
 		"endpoint":    a.relayerPyEndpoint,
 	}).Info("🚀 Submitting batch via relayer-py")
 
 	// Prepare payload for relayer-py service
 	payload := map[string]interface{}{
-		"epoch_id":         epochID,
-		"batch_cid":        aggregatedBatch.BatchIPFSCID,
-		"project_ids":      aggregatedBatch.ProjectIds,
-		"snapshot_cids":    aggregatedBatch.SnapshotCids,
-		"merkle_root":      fmt.Sprintf("%x", aggregatedBatch.MerkleRoot),
-		"validator_id":     a.config.SequencerID,
-		"timestamp":        aggregatedBatch.Timestamp,
-		"data_market":      dataMarketAddr,
-		"protocol_state":   a.config.NewProtocolState,
+		"epoch_id":       epochID,
+		"batch_cid":      aggregatedBatch.BatchIPFSCID,
+		"project_ids":    aggregatedBatch.ProjectIds,
+		"snapshot_cids":  aggregatedBatch.SnapshotCids,
+		"merkle_root":    fmt.Sprintf("%x", aggregatedBatch.MerkleRoot),
+		"validator_id":   a.config.SequencerID,
+		"timestamp":      aggregatedBatch.Timestamp,
+		"data_market":    dataMarketAddr,
+		"protocol_state": a.config.NewProtocolState,
 	}
 
 	payloadBytes, err := json.Marshal(payload)
@@ -1487,11 +1485,11 @@ func (a *Aggregator) submitBatchViaRelayer(epochID uint64, aggregatedBatch *cons
 	}
 
 	var response struct {
-		Success   bool   `json:"success"`
-		TxHash    string `json:"tx_hash"`
+		Success     bool   `json:"success"`
+		TxHash      string `json:"tx_hash"`
 		BlockNumber uint64 `json:"block_number"`
-		GasUsed   uint64 `json:"gas_used"`
-		Error     string `json:"error"`
+		GasUsed     uint64 `json:"gas_used"`
+		Error       string `json:"error"`
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
@@ -1583,7 +1581,7 @@ func (a *Aggregator) hasVPAPriority(epochID uint64, dataMarketAddr string) bool 
 	priority, err := a.vpaClient.GetMyPriority(a.ctx, dataMarketAddr, epochID)
 	if err != nil {
 		log.WithError(err).WithFields(logrus.Fields{
-			"epoch":      epochID,
+			"epoch":       epochID,
 			"data_market": dataMarketAddr,
 		}).Debug("Failed to get VPA priority")
 		return false
@@ -1593,9 +1591,9 @@ func (a *Aggregator) hasVPAPriority(epochID uint64, dataMarketAddr string) bool 
 	hasPriority := priority > 0
 
 	log.WithFields(logrus.Fields{
-		"epoch":      epochID,
-		"data_market": dataMarketAddr,
-		"priority":   priority,
+		"epoch":        epochID,
+		"data_market":  dataMarketAddr,
+		"priority":     priority,
 		"has_priority": hasPriority,
 	}).Debug("VPA priority check result")
 
