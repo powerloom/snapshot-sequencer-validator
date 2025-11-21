@@ -860,12 +860,15 @@ func (sw *StateWorker) aggregateCurrentEpochStatus(ctx context.Context) {
 		if status, ok := epochInfo["status"]; ok && status == "open" {
 			phase = "submission"
 
-			// Calculate time remaining
-			windowDuration := float64(20) // default 20 seconds
+			// Calculate time remaining - read from epoch info (set by EventMonitor from contract)
+			windowDuration := float64(60) // fallback default (60 seconds)
 			if durationStr, ok := epochInfo["duration"]; ok {
 				if d, err := strconv.ParseFloat(durationStr, 64); err == nil {
 					windowDuration = d
 				}
+			} else {
+				// If duration not found, log warning (should be set by EventMonitor)
+				log.WithField("epoch_id", currentEpochID).Debug("Window duration not found in epoch info, using fallback")
 			}
 
 			windowEndTime := currentEpochTimestamp + int64(windowDuration)
@@ -920,10 +923,10 @@ func (sw *StateWorker) aggregateCurrentEpochStatus(ctx context.Context) {
 		}
 	}
 
-	// Add default window duration if not set
+	// Add default window duration if not set (fallback - should be set by EventMonitor from contract)
 	if _, exists := currentEpochStatus["window_duration"]; !exists {
-		// Default to 20 seconds for 12-second epochs with overhead
-		currentEpochStatus["window_duration"] = 20.0
+		// Default to 60 seconds (fallback - actual value should come from contract via EventMonitor)
+		currentEpochStatus["window_duration"] = 60.0
 	}
 
 	statusJSON, _ := json.Marshal(currentEpochStatus)
@@ -1015,12 +1018,15 @@ func (sw *StateWorker) aggregateCurrentEpochStatusFromTimeline(ctx context.Conte
 		if status, ok := epochInfo["status"]; ok && status == "open" {
 			phase = "submission"
 
-			// Calculate time remaining
-			windowDuration := float64(20) // default 20 seconds
+			// Calculate time remaining - read from epoch info (set by EventMonitor from contract)
+			windowDuration := float64(60) // fallback default (60 seconds)
 			if durationStr, ok := epochInfo["duration"]; ok {
 				if d, err := strconv.ParseFloat(durationStr, 64); err == nil {
 					windowDuration = d
 				}
+			} else {
+				// If duration not found, log warning (should be set by EventMonitor)
+				log.WithField("epoch_id", currentEpochID).Debug("Window duration not found in epoch info, using fallback")
 			}
 
 			windowEndTime := currentEpochTimestamp + int64(windowDuration)
@@ -1075,10 +1081,10 @@ func (sw *StateWorker) aggregateCurrentEpochStatusFromTimeline(ctx context.Conte
 		}
 	}
 
-	// Add default window duration if not set
+	// Add default window duration if not set (fallback - should be set by EventMonitor from contract)
 	if _, exists := currentEpochStatus["window_duration"]; !exists {
-		// Default to 20 seconds for 12-second epochs with overhead
-		currentEpochStatus["window_duration"] = 20.0
+		// Default to 60 seconds (fallback - actual value should come from contract via EventMonitor)
+		currentEpochStatus["window_duration"] = 60.0
 	}
 
 	statusJSON, _ := json.Marshal(currentEpochStatus)

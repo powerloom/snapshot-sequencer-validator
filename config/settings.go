@@ -22,11 +22,11 @@ type Settings struct {
 	SequencerID string
 
 	// Ethereum RPC Configuration
-	RPCNodes                []string // Primary RPC nodes for load balancing
-	ArchiveRPCNodes         []string // Archive nodes for historical queries
-	ProtocolStateContract   string   // Protocol state contract address (manages identities)
+	RPCNodes                 []string // Primary RPC nodes for load balancing
+	ArchiveRPCNodes          []string // Archive nodes for historical queries
+	ProtocolStateContract    string   // Protocol state contract address (manages identities)
 	NewProtocolStateContract string   // NEW ProtocolState contract address (VPA-enabled)
-	ChainID                 int64
+	ChainID                  int64
 
 	// Data Market Configuration
 	DataMarketAddresses []string         // String addresses
@@ -54,10 +54,13 @@ type Settings struct {
 	GossipsubHeartbeat time.Duration
 	GossipsubParams    map[string]interface{} // Additional gossipsub parameters
 
-	// Submission Window Configuration
-	SubmissionWindowDuration time.Duration
-	MaxConcurrentWindows     int
-	WindowCleanupInterval    time.Duration
+	// Level 1 Finalization Delay Configuration
+	// Used when snapshot commit/reveal windows are disabled (both zero).
+	// When commit/reveal is enabled, Level 1 finalization triggers when snapshot reveal closes.
+	// When commit/reveal is disabled, Level 1 finalization triggers after this delay.
+	Level1FinalizationDelay time.Duration
+	MaxConcurrentWindows    int
+	WindowCleanupInterval   time.Duration
 
 	// Event Monitoring
 	EventPollInterval   time.Duration
@@ -85,11 +88,11 @@ type Settings struct {
 	DedupTTL            time.Duration
 
 	// Component Toggles
-	EnableListener        bool
-	EnableDequeuer        bool
-	EnableFinalizer       bool
-	EnableBatchAggregation bool  // P2P exchange of finalized batches for aggregation
-	EnableEventMonitor    bool
+	EnableListener         bool
+	EnableDequeuer         bool
+	EnableFinalizer        bool
+	EnableBatchAggregation bool // P2P exchange of finalized batches for aggregation
+	EnableEventMonitor     bool
 
 	// Finalizer Configuration
 	FinalizerWorkers      int
@@ -107,17 +110,17 @@ type Settings struct {
 	VPAValidatorAddress string // This validator's address for VPA client
 
 	// New Contract Submission Configuration
-	RelayerPyEndpoint string   // relayer-py service endpoint for new contract submissions
-	UseNewContracts   bool     // Enable submission to new VPA-enabled contracts
-	NewProtocolState string   // New ProtocolState contract address
-	NewDataMarket    string   // New DataMarket contract address
+	RelayerPyEndpoint string // relayer-py service endpoint for new contract submissions
+	UseNewContracts   bool   // Enable submission to new VPA-enabled contracts
+	NewProtocolState  string // New ProtocolState contract address
+	NewDataMarket     string // New DataMarket contract address
 
 	// Stream Configuration for Deterministic Aggregation
-	StreamConsumerGroup       string        // Consumer group name for aggregator
-	StreamConsumerName        string        // Consumer instance name
-	StreamReadBlock           time.Duration // Block timeout for stream reads
-	StreamBatchSize           int           // Batch size for stream reads
-	StreamIdleTimeout         time.Duration // Idle timeout for stream consumers
+	StreamConsumerGroup string        // Consumer group name for aggregator
+	StreamConsumerName  string        // Consumer instance name
+	StreamReadBlock     time.Duration // Block timeout for stream reads
+	StreamBatchSize     int           // Batch size for stream reads
+	StreamIdleTimeout   time.Duration // Idle timeout for stream consumers
 
 	// Slot Validation Configuration
 	EnableSlotValidation bool // Validate snapshotter addresses against protocol state cache (requires protocol-state-cacher)
@@ -131,11 +134,11 @@ type Settings struct {
 	APIAuthToken string
 
 	// Gossipsub Topic Configuration
-	GossipsubSnapshotSubmissionPrefix string   // Base prefix for snapshot submission topics
-	GossipsubFinalizedBatchPrefix     string   // Base prefix for finalized batch topics
-	GossipsubValidatorPresenceTopic   string   // Validator presence/heartbeat topic
-	GossipsubConsensusVotesTopic      string   // Consensus voting topic
-	GossipsubConsensusProposalsTopic  string   // Consensus proposals topic
+	GossipsubSnapshotSubmissionPrefix string // Base prefix for snapshot submission topics
+	GossipsubFinalizedBatchPrefix     string // Base prefix for finalized batch topics
+	GossipsubValidatorPresenceTopic   string // Validator presence/heartbeat topic
+	GossipsubConsensusVotesTopic      string // Consensus voting topic
+	GossipsubConsensusProposalsTopic  string // Consensus proposals topic
 
 	// Monitoring & Debugging
 	SlackWebhookURL string
@@ -183,10 +186,18 @@ func LoadConfig() error {
 		GossipsubHeartbeat: time.Duration(getEnvAsInt("GOSSIPSUB_HEARTBEAT_MS", 700)) * time.Millisecond,
 		GossipsubParams:    make(map[string]interface{}),
 
-		// Submission Window Configuration
-		SubmissionWindowDuration: time.Duration(getEnvAsInt("SUBMISSION_WINDOW_DURATION", 60)) * time.Second,
-		MaxConcurrentWindows:     getEnvAsInt("MAX_CONCURRENT_WINDOWS", 100),
-		WindowCleanupInterval:    5 * time.Minute,
+		// Level 1 Finalization Delay Configuration
+		// NOTE: This is used when snapshot commit/reveal windows are disabled (both zero).
+		// When commit/reveal is enabled, Level 1 finalization triggers when snapshot reveal closes.
+		// When commit/reveal is disabled, Level 1 finalization triggers after this delay.
+		// This delay must be BEFORE P1 window closes to allow time for:
+		//   - Level 1 local finalization to complete
+		//   - Level 2 network-wide aggregation to complete
+		//   - Priority 1 validator to commit on-chain during P1 window
+		// Renamed from SUBMISSION_WINDOW_DURATION for clarity.
+		Level1FinalizationDelay: time.Duration(getEnvAsInt("LEVEL1_FINALIZATION_DELAY_SECONDS", getEnvAsInt("SUBMISSION_WINDOW_DURATION", 60))) * time.Second,
+		MaxConcurrentWindows:    getEnvAsInt("MAX_CONCURRENT_WINDOWS", 100),
+		WindowCleanupInterval:   5 * time.Minute,
 
 		// Event Monitoring
 		EventPollInterval:   time.Duration(getEnvAsInt("EVENT_POLL_INTERVAL", 12)) * time.Second,
@@ -212,11 +223,11 @@ func LoadConfig() error {
 		DedupTTL:            time.Duration(getEnvAsInt("DEDUP_TTL_SECONDS", 7200)) * time.Second,
 
 		// Component Toggles
-		EnableListener:        getBoolEnv("ENABLE_LISTENER", true),
-		EnableDequeuer:        getBoolEnv("ENABLE_DEQUEUER", true),
-		EnableFinalizer:       getBoolEnv("ENABLE_FINALIZER", true),
+		EnableListener:         getBoolEnv("ENABLE_LISTENER", true),
+		EnableDequeuer:         getBoolEnv("ENABLE_DEQUEUER", true),
+		EnableFinalizer:        getBoolEnv("ENABLE_FINALIZER", true),
 		EnableBatchAggregation: getBoolEnv("ENABLE_BATCH_AGGREGATION", true),
-		EnableEventMonitor:    getBoolEnv("ENABLE_EVENT_MONITOR", false),
+		EnableEventMonitor:     getBoolEnv("ENABLE_EVENT_MONITOR", false),
 
 		// Finalizer Configuration
 		FinalizerWorkers:      getEnvAsInt("FINALIZER_WORKERS", 5),
@@ -236,13 +247,13 @@ func LoadConfig() error {
 		// New Contract Submission Configuration
 		RelayerPyEndpoint: getEnv("RELAYER_PY_ENDPOINT", ""),
 		UseNewContracts:   getBoolEnv("USE_NEW_CONTRACTS", false),
-		NewProtocolState:   getEnv("NEW_PROTOCOL_STATE_CONTRACT", ""),
-		NewDataMarket:      getEnv("NEW_DATA_MARKET_CONTRACT", ""),
+		NewProtocolState:  getEnv("NEW_PROTOCOL_STATE_CONTRACT", ""),
+		NewDataMarket:     getEnv("NEW_DATA_MARKET_CONTRACT", ""),
 
 		// Stream Configuration for Deterministic Aggregation
 		StreamConsumerGroup: getEnv("STREAM_CONSUMER_GROUP", "aggregator-group"),
 		StreamConsumerName:  getEnv("STREAM_CONSUMER_NAME", "aggregator-instance"),
-				StreamReadBlock:     time.Duration(getEnvAsInt("STREAM_READ_BLOCK_MS", 2000)) * time.Millisecond,
+		StreamReadBlock:     time.Duration(getEnvAsInt("STREAM_READ_BLOCK_MS", 2000)) * time.Millisecond,
 		StreamBatchSize:     getEnvAsInt("STREAM_BATCH_SIZE", 10),
 		StreamIdleTimeout:   time.Duration(getEnvAsInt("STREAM_IDLE_TIMEOUT_MS", 30000)) * time.Millisecond,
 
@@ -276,7 +287,7 @@ func LoadConfig() error {
 		IPFSAPI: getEnv("IPFS_HOST", ""),
 
 		// Contract Addresses
-		ProtocolStateContract:   getEnv("PROTOCOL_STATE_CONTRACT", ""),
+		ProtocolStateContract:    getEnv("PROTOCOL_STATE_CONTRACT", ""),
 		NewProtocolStateContract: getEnv("NEW_PROTOCOL_STATE_CONTRACT", ""),
 	}
 

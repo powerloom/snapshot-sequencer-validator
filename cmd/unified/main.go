@@ -13,7 +13,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/redis/go-redis/v9"
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
@@ -34,6 +33,7 @@ import (
 	rediskeys "github.com/powerloom/snapshot-sequencer-validator/pkgs/redis"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/submissions"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/workers"
+	"github.com/redis/go-redis/v9"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -117,10 +117,10 @@ type UnifiedSequencer struct {
 	p2pConsensus *consensus.P2PConsensus // P2P consensus handler
 
 	// Configuration
-	config          *config.Settings
-	sequencerID     string
+	config           *config.Settings
+	sequencerID      string
 	primaryComponent string
-	wg              sync.WaitGroup
+	wg               sync.WaitGroup
 }
 
 // parseEpochID parses epoch ID from various formats (string, scientific notation)
@@ -178,11 +178,21 @@ func main() {
 		log.Infof("🔧 MULTI-COMPONENT SEQUENCER STARTING")
 		log.Infof("========================================")
 		log.Infof("Components enabled:")
-		if enableListener { log.Infof("  - Listener: %v", enableListener) }
-		if enableDequeuer { log.Infof("  - Dequeuer: %v", enableDequeuer) }
-		if enableFinalizer { log.Infof("  - Finalizer: %v", enableFinalizer) }
-		if enableBatchAggregation { log.Infof("  - Batch Aggregation: %v", enableBatchAggregation) }
-		if enableEventMonitor { log.Infof("  - Event Monitor: %v", enableEventMonitor) }
+		if enableListener {
+			log.Infof("  - Listener: %v", enableListener)
+		}
+		if enableDequeuer {
+			log.Infof("  - Dequeuer: %v", enableDequeuer)
+		}
+		if enableFinalizer {
+			log.Infof("  - Finalizer: %v", enableFinalizer)
+		}
+		if enableBatchAggregation {
+			log.Infof("  - Batch Aggregation: %v", enableBatchAggregation)
+		}
+		if enableEventMonitor {
+			log.Infof("  - Event Monitor: %v", enableEventMonitor)
+		}
 	} else {
 		componentName := strings.ToUpper(strings.ReplaceAll(primaryComponent, "-", " "))
 		log.Infof("========================================")
@@ -481,7 +491,7 @@ func main() {
 			ContractAddress:       cfg.ProtocolStateContract,
 			ContractABIPath:       cfg.ContractABIPath,
 			RedisClient:           redisClient,
-			WindowDuration:        cfg.SubmissionWindowDuration, // Use configured duration
+			WindowDuration:        cfg.Level1FinalizationDelay, // Fallback delay when commit/reveal disabled
 			StartBlock:            cfg.EventStartBlock,
 			PollInterval:          cfg.EventPollInterval,
 			DataMarkets:           cfg.DataMarketAddresses,
@@ -489,11 +499,15 @@ func main() {
 			FinalizationBatchSize: cfg.FinalizationBatchSize,
 
 			// VPA Configuration
-			VPAContractAddress:        cfg.VPAContractAddress,
-			VPAValidatorAddress:       cfg.VPAValidatorAddress,
-			VPARPCURL:                 os.Getenv("POWERLOOM_RPC_NODES"),
-			ProtocolState:             cfg.ProtocolStateContract,
-			NewProtocolStateContract:  os.Getenv("NEW_PROTOCOL_STATE_CONTRACT"),
+			VPAContractAddress:       cfg.VPAContractAddress,
+			VPAValidatorAddress:      cfg.VPAValidatorAddress,
+			VPARPCURL:                os.Getenv("POWERLOOM_RPC_NODES"),
+			ProtocolState:            cfg.ProtocolStateContract,
+			NewProtocolStateContract: os.Getenv("NEW_PROTOCOL_STATE_CONTRACT"),
+
+			// Window Config Configuration
+			WindowConfigCacheTTL: 5 * time.Minute, // Default cache TTL
+			EstimatedMaxPriority: 10,              // Default safe upper bound for total window calculation
 		}
 
 		var err error
@@ -865,36 +879,36 @@ func (s *UnifiedSequencer) queueSubmissionFromP2P(data []byte, topic string, pee
 				// Pipeline for monitoring metrics
 				pipe := s.redisClient.Pipeline()
 
-			// 1. Add to timeline (sorted set, no TTL - pruned daily)
-			pipe.ZAdd(s.ctx, s.keyBuilder.MetricsSubmissionsTimeline(), redis.Z{
-				Score:  float64(timestamp),
-				Member: submissionID,
-			})
+				// 1. Add to timeline (sorted set, no TTL - pruned daily)
+				pipe.ZAdd(s.ctx, s.keyBuilder.MetricsSubmissionsTimeline(), redis.Z{
+					Score:  float64(timestamp),
+					Member: submissionID,
+				})
 
-			// 2. Store submission details with TTL (1 hour)
-			submissionData := map[string]interface{}{
-				"epoch_id":    epochID,
-				"project_id":  projectID,
-				"peer_id":     peerID[:16],
-				"timestamp":   timestamp,
-				"data_market": s.config.DataMarketAddresses[0],
-			}
-			jsonData, _ := json.Marshal(submissionData)
-			pipe.SetEx(s.ctx, fmt.Sprintf("metrics:submission:%s", submissionID), string(jsonData), time.Hour)
+				// 2. Store submission details with TTL (1 hour)
+				submissionData := map[string]interface{}{
+					"epoch_id":    epochID,
+					"project_id":  projectID,
+					"peer_id":     peerID[:16],
+					"timestamp":   timestamp,
+					"data_market": s.config.DataMarketAddresses[0],
+				}
+				jsonData, _ := json.Marshal(submissionData)
+				pipe.SetEx(s.ctx, fmt.Sprintf("metrics:submission:%s", submissionID), string(jsonData), time.Hour)
 
-			// 3. Update hourly counter
-			pipe.HIncrBy(s.ctx, fmt.Sprintf("metrics:hourly:%s:submissions", hour), "total", 1)
-			pipe.Expire(s.ctx, fmt.Sprintf("metrics:hourly:%s:submissions", hour), 2*time.Hour)
+				// 3. Update hourly counter
+				pipe.HIncrBy(s.ctx, fmt.Sprintf("metrics:hourly:%s:submissions", hour), "total", 1)
+				pipe.Expire(s.ctx, fmt.Sprintf("metrics:hourly:%s:submissions", hour), 2*time.Hour)
 
-			// 4. Add to submissions timeline
-			timestamp = time.Now().Unix()
-			pipe.ZAdd(s.ctx, s.keyBuilder.MetricsSubmissionsTimeline(), redis.Z{
-				Score:  float64(timestamp),
-				Member: fmt.Sprintf("received:%s:%d", submissionID, timestamp),
-			})
+				// 4. Add to submissions timeline
+				timestamp = time.Now().Unix()
+				pipe.ZAdd(s.ctx, s.keyBuilder.MetricsSubmissionsTimeline(), redis.Z{
+					Score:  float64(timestamp),
+					Member: fmt.Sprintf("received:%s:%d", submissionID, timestamp),
+				})
 
-			// 5. Publish state change event
-			pipe.Publish(s.ctx, "state:change", fmt.Sprintf("submission:received:%s", submissionID))
+				// 5. Publish state change event
+				pipe.Publish(s.ctx, "state:change", fmt.Sprintf("submission:received:%s", submissionID))
 
 				// Execute pipeline (ignore errors - monitoring is non-critical)
 				if _, err := pipe.Exec(s.ctx); err != nil {
@@ -1283,12 +1297,12 @@ func (s *UnifiedSequencer) processBatchPart(epochID uint64, batchID int, totalBa
 	// 2. Store part details with TTL
 	partMetricsKey := fmt.Sprintf("metrics:part:%s", partID)
 	partMetricsData := map[string]interface{}{
-		"epoch_id":       epochID,
-		"batch_id":       batchID,
-		"total_batches":  totalBatches,
-		"project_count":  len(projects),
-		"finalizer_id":   s.config.SequencerID,
-		"timestamp":      timestamp,
+		"epoch_id":      epochID,
+		"batch_id":      batchID,
+		"total_batches": totalBatches,
+		"project_count": len(projects),
+		"finalizer_id":  s.config.SequencerID,
+		"timestamp":     timestamp,
 	}
 	jsonData, _ := json.Marshal(partMetricsData)
 	pipe.SetEx(ctx, partMetricsKey, string(jsonData), time.Hour)

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
 	"os"
 	"os/signal"
@@ -16,8 +17,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/powerloom/snapshot-sequencer-validator/config"
+	abiloader "github.com/powerloom/snapshot-sequencer-validator/pkgs/abi"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/consensus"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/ipfs"
 	rediskeys "github.com/powerloom/snapshot-sequencer-validator/pkgs/redis"
@@ -40,6 +44,7 @@ type Aggregator struct {
 
 	// Contract clients for on-chain integration
 	vpaClient *vpa.PriorityCachingClient // Enhanced caching client for VPA priority checking
+	rpcClient *ethclient.Client          // Ethereum RPC client for on-chain checks
 
 	// relayer-py integration
 	relayerPyEndpoint string       // relayer-py service endpoint
@@ -136,6 +141,18 @@ func NewAggregator(cfg *config.Settings) (*Aggregator, error) {
 		}
 	}
 
+	// Initialize Ethereum RPC client for on-chain checks (used to verify if submissions already exist)
+	var rpcClient *ethclient.Client
+	if cfg.EnableOnChainSubmission && len(cfg.RPCNodes) > 0 {
+		client, err := ethclient.Dial(cfg.RPCNodes[0])
+		if err != nil {
+			log.Warnf("⚠️  Failed to initialize RPC client for on-chain checks: %v", err)
+		} else {
+			rpcClient = client
+			log.Info("✅ RPC client initialized for on-chain submission checks")
+		}
+	}
+
 	aggregator := &Aggregator{
 		ctx:               ctx,
 		cancel:            cancel,
@@ -144,6 +161,7 @@ func NewAggregator(cfg *config.Settings) (*Aggregator, error) {
 		config:            cfg,
 		keyBuilder:        keyBuilder,
 		vpaClient:         vpaClient,
+		rpcClient:         rpcClient,
 		relayerPyEndpoint: cfg.RelayerPyEndpoint,
 		useNewContracts:   cfg.UseNewContracts,
 		httpClient: &http.Client{
@@ -1337,6 +1355,7 @@ func (a *Aggregator) handleNewContractSubmission(epochID uint64, aggregatedBatch
 	a.mu.Unlock()
 
 	// Submit to new contracts via relayer-py
+	// submitBatchViaRelayer handles all VPA priority and timing checks internally
 	if err := a.submitBatchViaRelayer(epochID, aggregatedBatch, newDataMarket); err != nil {
 		log.WithError(err).Error("New contract submission failed")
 		// Don't return error - new contract submission failure shouldn't affect other processing
@@ -1394,7 +1413,27 @@ func (a *Aggregator) submitBatchViaRelayer(epochID uint64, aggregatedBatch *cons
 	log.WithFields(logrus.Fields{
 		"epoch":    epochIDStr,
 		"priority": priority,
-	}).Info("✅ Submission window is open, proceeding with submission")
+	}).Info("✅ Submission window is open, checking if submission already exists...")
+
+	// CRITICAL: If priority > 1, check if any lower priority validator already submitted
+	// Priority 2+ should only submit if Priority 1 (and all lower priorities) failed to submit
+	if priority > 1 {
+		hasSubmission, err := a.checkEpochHasSubmission(dataMarketAddr, epochID)
+		if err != nil {
+			log.WithError(err).WithField("epoch", epochIDStr).Warn("Failed to check if epoch has submission, proceeding anyway")
+		} else if hasSubmission {
+			log.WithFields(logrus.Fields{
+				"epoch":    epochIDStr,
+				"priority": priority,
+			}).Info("⏭️  Epoch already has a submission from a higher priority validator, skipping submission")
+			return nil
+		}
+	}
+
+	log.WithFields(logrus.Fields{
+		"epoch":    epochIDStr,
+		"priority": priority,
+	}).Info("✅ No existing submission found, proceeding with submission")
 
 	if a.relayerPyEndpoint == "" {
 		log.WithField("epoch", epochIDStr).Debug("Relayer endpoint not configured, skipping new contract submission")
@@ -1533,6 +1572,79 @@ func (a *Aggregator) sendBatchSizeToRelayer(epochID uint64, dataMarketAddr strin
 	return nil
 }
 
+// checkEpochHasSubmission checks if batch submissions have been completed for this epoch on-chain
+// by querying for BatchSubmissionsCompleted event logs from ProtocolState contract
+// Returns true if endBatchSubmissions was called (submissions completed), false otherwise
+// This is used to prevent Priority 2+ validators from submitting if Priority 1 already completed submissions
+func (a *Aggregator) checkEpochHasSubmission(dataMarketAddr string, epochID uint64) (bool, error) {
+	if a.rpcClient == nil || a.config.NewProtocolStateContract == "" {
+		// Can't check on-chain, rely on contract's duplicate prevention
+		log.WithFields(logrus.Fields{
+			"epoch":       epochID,
+			"data_market": dataMarketAddr,
+		}).Debug("Cannot check on-chain submission status (RPC client or ProtocolState not configured)")
+		return false, nil
+	}
+
+	// Load ProtocolState ABI to get event signature
+	protocolStateABI, err := abiloader.LoadABI("PowerloomProtocolState.abi.json")
+	if err != nil {
+		log.WithError(err).Debug("Failed to load ProtocolState ABI for submission check")
+		return false, nil // Allow submission attempt, contract will reject if duplicate
+	}
+
+	// Get the BatchSubmissionsCompleted event signature
+	// Event: BatchSubmissionsCompleted(address indexed dataMarketAddress, uint256 indexed epochId, uint256 timestamp)
+	event, found := protocolStateABI.Events["BatchSubmissionsCompleted"]
+	if !found {
+		log.Debug("BatchSubmissionsCompleted event not found in ABI")
+		return false, nil
+	}
+
+	// Calculate event signature hash (first topic)
+	eventSig := event.ID
+
+	// Prepare filter query
+	protocolStateAddr := common.HexToAddress(a.config.NewProtocolStateContract)
+	dataMarket := common.HexToAddress(dataMarketAddr)
+	epochIDBig := big.NewInt(int64(epochID))
+
+	// Topics:
+	// [0] = event signature (BatchSubmissionsCompleted)
+	// [1] = dataMarketAddress (indexed, left-padded to 32 bytes)
+	// [2] = epochId (indexed, as uint256)
+	// Addresses in topics are left-padded with zeros to 32 bytes
+	dataMarketHash := common.BytesToHash(dataMarket.Bytes())
+	epochIDHash := common.BigToHash(epochIDBig)
+
+	query := ethereum.FilterQuery{
+		Addresses: []common.Address{protocolStateAddr},
+		Topics: [][]common.Hash{
+			{eventSig},       // Event signature
+			{dataMarketHash}, // dataMarketAddress (left-padded to 32 bytes)
+			{epochIDHash},    // epochId (uint256)
+		},
+	}
+
+	// Query event logs
+	logs, err := a.rpcClient.FilterLogs(a.ctx, query)
+	if err != nil {
+		log.WithError(err).Debug("Failed to filter BatchSubmissionsCompleted logs")
+		return false, nil
+	}
+
+	hasSubmission := len(logs) > 0
+
+	log.WithFields(logrus.Fields{
+		"epoch":          epochID,
+		"data_market":    dataMarketAddr,
+		"event_logs":     len(logs),
+		"has_submission": hasSubmission,
+	}).Debug("Checked BatchSubmissionsCompleted event logs")
+
+	return hasSubmission, nil
+}
+
 func main() {
 	// Setup logging
 	log.SetFormatter(&logrus.TextFormatter{
@@ -1565,36 +1677,4 @@ func main() {
 	<-sigChan
 
 	aggregator.Stop()
-}
-
-// hasVPAPriority checks if this validator has VPA priority AND the submission window is open
-// Uses CanValidatorSubmit which checks both priority assignment and submission window timing
-func (a *Aggregator) hasVPAPriority(epochID uint64, dataMarketAddr string) bool {
-	if a.vpaClient == nil {
-		log.Debug("VPA client not initialized, cannot check priority")
-		return false
-	}
-
-	// Use CanValidatorSubmit which checks both:
-	// 1. If validator has priority for this epoch
-	// 2. If the submission window is currently open (timing check)
-	canSubmit, err := a.vpaClient.CanValidatorSubmit(a.ctx, dataMarketAddr, epochID)
-	if err != nil {
-		log.WithError(err).WithFields(logrus.Fields{
-			"epoch":       epochID,
-			"data_market": dataMarketAddr,
-		}).Debug("Failed to check VPA submission eligibility")
-		return false
-	}
-
-	// CanValidatorSubmit returns true only if:
-	// - Validator has priority > 0 for this epoch
-	// - Current time is within the submission window for that priority
-	log.WithFields(logrus.Fields{
-		"epoch":       epochID,
-		"data_market": dataMarketAddr,
-		"can_submit":  canSubmit,
-	}).Debug("VPA submission eligibility check result")
-
-	return canSubmit
 }
