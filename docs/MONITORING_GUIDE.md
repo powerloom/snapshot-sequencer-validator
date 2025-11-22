@@ -865,8 +865,8 @@ The Validator Priority Assigner (VPA) integration enables priority-based batch s
 # Check if skipped due to higher priority submission
 ./dsv.sh aggregator-logs | grep "⏭️.*Epoch already has a submission"
 
-# Check successful submissions
-./dsv.sh aggregator-logs | grep "✅ VPA batch submission successful"
+# Check successful submissions (queued to relayer)
+./dsv.sh aggregator-logs | grep "✅ VPA batch submission queued successfully"
 ```
 
 **Key Log Patterns:**
@@ -875,7 +875,8 @@ The Validator Priority Assigner (VPA) integration enables priority-based batch s
 - `⏭️ Epoch already has a submission from a higher priority validator, skipping submission` - Priority 2+ skipped (Priority 1 already submitted)
 - `✅ No existing submission found, proceeding with submission` - No duplicate found, proceeding
 - `🚀 Submitting batch via relayer-py` - Sending to relayer service
-- `✅ VPA batch submission successful` - On-chain submission confirmed
+- `✅ VPA batch submission queued successfully - relayer processing asynchronously` - Submission queued (relayer processes async)
+- `✅ Sent batch size to relayer` - Batch size notification sent
 
 ### Redis-Based Priority Tracking
 
@@ -922,8 +923,11 @@ docker exec redis redis-cli HGETALL "{protocol}:vpa:stats:{dataMarket}"
 # Count priority assignments by value
 ./dsv.sh aggregator-logs | grep "priority=" | grep -o "priority=[0-9]*" | sort | uniq -c
 
-# Check submission success rate
-./dsv.sh aggregator-logs | grep "✅ VPA batch submission successful" | wc -l
+# Check submission success rate (queued successfully)
+./dsv.sh aggregator-logs | grep "✅ VPA batch submission queued successfully" | wc -l
+
+# Verify actual on-chain transactions in relayer logs
+docker logs dsv-relayer-py --tail 100 | grep "Transaction.*submitted with hash" | wc -l
 ```
 
 **Priority Status Interpretation:**
@@ -1004,8 +1008,9 @@ EPOCH_ID=23847425
 2. `⏳ Waiting for submission window to open...` - Waiting for P1 window
 3. `✅ Submission window is open, checking if submission already exists...` - Window opened
 4. `✅ No existing submission found, proceeding with submission` - No duplicate
-5. `🚀 Submitting batch via relayer-py` - Sending to relayer
-6. `✅ VPA batch submission successful` - On-chain confirmed
+5. `✅ Sent batch size to relayer` - Batch size notification sent
+6. `🚀 Submitting batch via relayer-py` - Sending to relayer
+7. `✅ VPA batch submission queued successfully - relayer processing asynchronously` - Queued (check relayer logs for tx_hash)
 
 **Expected Flow (Priority 2+):**
 1. `priority=2` (or higher) - Priority assigned
@@ -1014,18 +1019,20 @@ EPOCH_ID=23847425
 4. Either:
    - `⏭️ Epoch already has a submission from a higher priority validator, skipping submission` - Priority 1 already submitted
    - `✅ No existing submission found, proceeding with submission` - Priority 1 failed, proceeding
-5. `🚀 Submitting batch via relayer-py` - Sending to relayer (if no duplicate)
-6. `✅ VPA batch submission successful` - On-chain confirmed
+5. `✅ Sent batch size to relayer` - Batch size notification sent
+6. `🚀 Submitting batch via relayer-py` - Sending to relayer (if no duplicate)
+7. `✅ VPA batch submission queued successfully - relayer processing asynchronously` - Queued (check relayer logs for tx_hash)
 
 ### VPA Health Indicators
 
 **Healthy VPA Integration:**
 - Regular priority assignments (check logs for `priority=` entries)
 - Priority distribution: Mix of Priority 0, 1, 2+ over time
-- Successful submissions when Priority 1 assigned
+- Successful submissions when Priority 1 assigned (check relayer logs for actual tx_hash)
 - Priority 2+ correctly skipping when Priority 1 submits
 - No timeout errors waiting for submission windows
-- Relayer service responding successfully
+- Relayer service responding successfully (200 OK responses)
+- Relayer logs show transactions being queued and processed
 
 **Warning Signs:**
 - No priority assignments for multiple epochs (check VPA client initialization)
@@ -1187,8 +1194,9 @@ echo "Success rate: $(( SUCCESS * 100 / TOTAL ))%"
 
 **Submission Outcomes:**
 
-- **Success**: `✅ VPA batch submission successful - on-chain confirmed`
-  - Redis: `{protocol}:vpa:submission:{market}:{epoch}` with `success: true`, `tx_hash`, `block_number`
+- **Success (Queued)**: `✅ VPA batch submission queued successfully - relayer processing asynchronously`
+  - Redis: `{protocol}:vpa:submission:{market}:{epoch}` with `success: true` (tx_hash may be empty, check relayer logs)
+  - Note: Relayer processes transactions asynchronously, check relayer logs for actual `tx_hash` and `block_number`
   
 - **Skipped (Priority 2+)**: `⏭️ Epoch already has a submission from a higher priority validator, skipping submission`
   - Redis: `{protocol}:vpa:submission:{market}:{epoch}` with `success: false` (no tx_hash)

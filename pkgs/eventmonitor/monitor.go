@@ -352,6 +352,14 @@ func NewEventMonitor(cfg *Config) (*EventMonitor, error) {
 		// Normalize address (lowercase)
 		newDataMarketSet[strings.ToLower(addr)] = true
 	}
+	if len(newDataMarketSet) > 0 {
+		log.WithFields(log.Fields{
+			"new_data_markets": cfg.NewDataMarketContracts,
+			"count":            len(newDataMarketSet),
+		}).Info("✅ Configured NEW data markets that support getSubmissionWindowConfig - will fetch window config from NEW ProtocolState contract")
+	} else {
+		log.Info("No NEW data markets configured - all data markets will use fallback window duration")
+	}
 
 	return &EventMonitor{
 		rpcHelper:    cfg.RPCHelper,
