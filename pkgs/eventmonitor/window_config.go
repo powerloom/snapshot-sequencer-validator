@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"strings"
 	"sync"
 	"time"
 
@@ -169,6 +170,11 @@ func (f *WindowConfigFetcher) FetchWindowConfig(ctx context.Context, dataMarketA
 func (f *WindowConfigFetcher) fetchFromContract(ctx context.Context, dataMarketAddr string) (*WindowConfig, error) {
 	dataMarket := common.HexToAddress(dataMarketAddr)
 
+	log.WithFields(log.Fields{
+		"protocol_state_contract": f.protocolStateAddr.Hex(),
+		"data_market":             dataMarketAddr,
+	}).Debug("Calling getDataMarketSubmissionWindowConfig on ProtocolState contract")
+
 	// Pack the function call: getDataMarketSubmissionWindowConfig(address)
 	packedData, err := f.protocolStateABI.Pack("getDataMarketSubmissionWindowConfig", dataMarket)
 	if err != nil {
@@ -183,7 +189,21 @@ func (f *WindowConfigFetcher) fetchFromContract(ctx context.Context, dataMarketA
 
 	result, err := f.rpcHelper.CallContract(ctx, callMsg, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to call getDataMarketSubmissionWindowConfig: %w", err)
+		// Check if error contains "execution reverted" - this usually means the data market contract
+		// doesn't have getSubmissionWindowConfig() method or the data market is not registered
+		errMsg := strings.ToLower(err.Error())
+		if strings.Contains(errMsg, "execution reverted") || strings.Contains(errMsg, "revert") {
+			log.WithError(err).WithFields(log.Fields{
+				"protocol_state_contract": f.protocolStateAddr.Hex(),
+				"data_market":             dataMarketAddr,
+			}).Warn("⚠️  Data market contract does not support getSubmissionWindowConfig() - likely a legacy data market")
+			return nil, fmt.Errorf("data market %s does not support getSubmissionWindowConfig (execution reverted): %w", dataMarketAddr, err)
+		}
+		log.WithError(err).WithFields(log.Fields{
+			"protocol_state_contract": f.protocolStateAddr.Hex(),
+			"data_market":             dataMarketAddr,
+		}).Error("❌ Failed to call getDataMarketSubmissionWindowConfig")
+		return nil, fmt.Errorf("failed to call getDataMarketSubmissionWindowConfig on contract %s: %w", f.protocolStateAddr.Hex(), err)
 	}
 
 	if len(result) == 0 {
@@ -248,3 +268,4 @@ func (f *WindowConfigFetcher) fetchFromContract(ctx context.Context, dataMarketA
 		PreSubmissionWindow:       preSubmissionWindow,
 	}, nil
 }
+

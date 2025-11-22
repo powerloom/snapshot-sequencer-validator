@@ -1378,14 +1378,32 @@ func (a *Aggregator) submitBatchViaRelayer(epochID uint64, aggregatedBatch *cons
 	// Check if validator has priority for this epoch
 	priority, err := a.vpaClient.GetMyPriority(a.ctx, dataMarketAddr, epochID)
 	if err != nil {
-		log.WithError(err).WithField("epoch", epochIDStr).Debug("Failed to get VPA priority, skipping submission")
+		log.WithError(err).WithFields(logrus.Fields{
+			"epoch":       epochIDStr,
+			"data_market": dataMarketAddr,
+		}).Warn("⚠️ Failed to get VPA priority, skipping submission")
+		// Store failed priority check for monitoring
+		a.storePriorityCheck(epochID, dataMarketAddr, 0, "priority_check_failed")
 		return nil
 	}
 
 	if priority == 0 {
-		log.WithField("epoch", epochIDStr).Debug("No VPA priority assigned, skipping new contract submission")
+		log.WithFields(logrus.Fields{
+			"epoch":       epochIDStr,
+			"data_market": dataMarketAddr,
+		}).Info("ℹ️  No VPA priority assigned (Priority 0), skipping new contract submission")
+		// Store priority check result for monitoring (priority 0 = no priority)
+		a.storePriorityCheck(epochID, dataMarketAddr, 0, "no_priority")
 		return nil
 	}
+
+	// Store priority assignment for monitoring
+	log.WithFields(logrus.Fields{
+		"epoch":       epochIDStr,
+		"priority":    priority,
+		"data_market": dataMarketAddr,
+	}).Info("🎯 VPA Priority assigned for epoch")
+	a.storePriorityCheck(epochID, dataMarketAddr, priority, "assigned")
 
 	// Wait for submission window to open (this checks timing and waits if needed)
 	log.WithFields(logrus.Fields{
@@ -1399,14 +1417,29 @@ func (a *Aggregator) submitBatchViaRelayer(epochID uint64, aggregatedBatch *cons
 
 	if err := a.vpaClient.WaitForSubmissionWindow(waitCtx, dataMarketAddr, epochID); err != nil {
 		if err == context.DeadlineExceeded {
-			log.WithField("epoch", epochIDStr).Warn("Timeout waiting for submission window, skipping submission")
+			log.WithFields(logrus.Fields{
+				"epoch":    epochIDStr,
+				"priority": priority,
+			}).Warn("⏰ Timeout waiting for submission window (10min), skipping submission")
+			// Store timeout for monitoring
+			a.storeSubmissionMetrics(epochID, dataMarketAddr, priority, false, "", 0)
+			a.storePriorityCheck(epochID, dataMarketAddr, priority, "window_timeout")
 			return nil
 		}
 		if err == context.Canceled {
-			log.WithField("epoch", epochIDStr).Debug("Context canceled while waiting for submission window")
+			log.WithFields(logrus.Fields{
+				"epoch":    epochIDStr,
+				"priority": priority,
+			}).Debug("Context canceled while waiting for submission window")
 			return nil
 		}
-		log.WithError(err).WithField("epoch", epochIDStr).Warn("Error waiting for submission window, skipping submission")
+		log.WithError(err).WithFields(logrus.Fields{
+			"epoch":    epochIDStr,
+			"priority": priority,
+		}).Warn("⚠️ Error waiting for submission window, skipping submission")
+		// Store error for monitoring
+		a.storeSubmissionMetrics(epochID, dataMarketAddr, priority, false, "", 0)
+		a.storePriorityCheck(epochID, dataMarketAddr, priority, "window_error")
 		return nil
 	}
 
@@ -1426,6 +1459,9 @@ func (a *Aggregator) submitBatchViaRelayer(epochID uint64, aggregatedBatch *cons
 				"epoch":    epochIDStr,
 				"priority": priority,
 			}).Info("⏭️  Epoch already has a submission from a higher priority validator, skipping submission")
+			// Store skipped submission reason
+			a.storeSubmissionMetrics(epochID, dataMarketAddr, priority, false, "", 0)
+			a.storePriorityCheck(epochID, dataMarketAddr, priority, "skipped_higher_priority_submitted")
 			return nil
 		}
 	}
@@ -1497,6 +1533,14 @@ func (a *Aggregator) submitBatchViaRelayer(epochID uint64, aggregatedBatch *cons
 	endpoint := a.relayerPyEndpoint + "/submitSubmissionBatch"
 	resp, err := a.httpClient.Post(endpoint, "application/json", bytes.NewBuffer(payloadBytes))
 	if err != nil {
+		log.WithError(err).WithFields(logrus.Fields{
+			"epoch":       epochIDStr,
+			"priority":    priority,
+			"endpoint":    endpoint,
+			"data_market": dataMarketAddr,
+		}).Error("❌ Failed to submit batch to relayer-py")
+		// Store failed submission attempt
+		a.storeSubmissionMetrics(epochID, dataMarketAddr, priority, false, "", 0)
 		return fmt.Errorf("failed to submit batch to relayer-py: %w", err)
 	}
 	defer resp.Body.Close()
@@ -1505,6 +1549,15 @@ func (a *Aggregator) submitBatchViaRelayer(epochID uint64, aggregatedBatch *cons
 		// Read response body for error details
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		bodyStr := string(bodyBytes)
+		log.WithFields(logrus.Fields{
+			"epoch":       epochIDStr,
+			"priority":    priority,
+			"status_code": resp.StatusCode,
+			"response":    bodyStr,
+			"data_market": dataMarketAddr,
+		}).Error("❌ VPA relayer returned non-200 status")
+		// Store failed submission attempt
+		a.storeSubmissionMetrics(epochID, dataMarketAddr, priority, false, "", 0)
 		return fmt.Errorf("VPA relayer returned non-200 status: %d, response: %s", resp.StatusCode, bodyStr)
 	}
 
@@ -1523,10 +1576,15 @@ func (a *Aggregator) submitBatchViaRelayer(epochID uint64, aggregatedBatch *cons
 	if response.Success {
 		log.WithFields(logrus.Fields{
 			"epoch":        epochIDStr,
+			"priority":     priority,
 			"tx_hash":      response.TxHash,
 			"block_number": response.BlockNumber,
 			"gas_used":     response.GasUsed,
-		}).Info("✅ VPA batch submission successful")
+			"data_market":  dataMarketAddr,
+		}).Info("✅ VPA batch submission successful - on-chain confirmed")
+
+		// Store submission metrics in Redis for monitoring
+		a.storeSubmissionMetrics(epochID, dataMarketAddr, priority, true, response.TxHash, response.BlockNumber)
 
 		// Mark as submitted for this epoch
 		a.mu.Lock()
@@ -1535,6 +1593,14 @@ func (a *Aggregator) submitBatchViaRelayer(epochID uint64, aggregatedBatch *cons
 
 		return nil
 	} else {
+		log.WithFields(logrus.Fields{
+			"epoch":       epochIDStr,
+			"priority":    priority,
+			"error":       response.Error,
+			"data_market": dataMarketAddr,
+		}).Error("❌ VPA batch submission failed via relayer")
+		// Store failed submission attempt
+		a.storeSubmissionMetrics(epochID, dataMarketAddr, priority, false, "", 0)
 		return fmt.Errorf("VPA batch submission failed: %s", response.Error)
 	}
 }
@@ -1643,6 +1709,95 @@ func (a *Aggregator) checkEpochHasSubmission(dataMarketAddr string, epochID uint
 	}).Debug("Checked BatchSubmissionsCompleted event logs")
 
 	return hasSubmission, nil
+}
+
+// storePriorityCheck stores priority assignment information in Redis for monitoring
+func (a *Aggregator) storePriorityCheck(epochID uint64, dataMarketAddr string, priority int, status string) {
+	if a.redisClient == nil {
+		return
+	}
+
+	epochIDStr := strconv.FormatUint(epochID, 10)
+	timestamp := time.Now().Unix()
+	protocol := a.keyBuilder.ProtocolState
+
+	// Store priority assignment per epoch
+	priorityKey := fmt.Sprintf("%s:vpa:priority:%s:%s", protocol, dataMarketAddr, epochIDStr)
+	priorityData := map[string]interface{}{
+		"epoch_id":    epochIDStr,
+		"priority":    priority,
+		"status":      status,
+		"timestamp":   timestamp,
+		"data_market": dataMarketAddr,
+		"validator":   a.config.VPAValidatorAddress,
+	}
+	jsonData, _ := json.Marshal(priorityData)
+	a.redisClient.SetEx(a.ctx, priorityKey, string(jsonData), 7*24*time.Hour) // Keep for 7 days
+
+	// Add to priority timeline for historical tracking
+	timelineKey := fmt.Sprintf("%s:vpa:priority:timeline", protocol)
+	a.redisClient.ZAdd(a.ctx, timelineKey, redis.Z{
+		Score:  float64(timestamp),
+		Member: fmt.Sprintf("%s:%s:%d:%s", dataMarketAddr, epochIDStr, priority, status),
+	})
+
+	// Update priority statistics
+	statsKey := fmt.Sprintf("%s:vpa:stats:%s", protocol, dataMarketAddr)
+	if priority > 0 {
+		a.redisClient.HIncrBy(a.ctx, statsKey, "total_priority_assignments", 1)
+		a.redisClient.HIncrBy(a.ctx, statsKey, fmt.Sprintf("priority_%d_count", priority), 1)
+	} else {
+		a.redisClient.HIncrBy(a.ctx, statsKey, "no_priority_count", 1)
+	}
+	a.redisClient.Expire(a.ctx, statsKey, 7*24*time.Hour)
+}
+
+// storeSubmissionMetrics stores submission attempt results in Redis for monitoring
+func (a *Aggregator) storeSubmissionMetrics(epochID uint64, dataMarketAddr string, priority int, success bool, txHash string, blockNumber uint64) {
+	if a.redisClient == nil {
+		return
+	}
+
+	epochIDStr := strconv.FormatUint(epochID, 10)
+	timestamp := time.Now().Unix()
+	protocol := a.keyBuilder.ProtocolState
+
+	// Store submission result per epoch
+	submissionKey := fmt.Sprintf("%s:vpa:submission:%s:%s", protocol, dataMarketAddr, epochIDStr)
+	submissionData := map[string]interface{}{
+		"epoch_id":     epochIDStr,
+		"priority":     priority,
+		"success":      success,
+		"tx_hash":      txHash,
+		"block_number": blockNumber,
+		"timestamp":    timestamp,
+		"data_market":  dataMarketAddr,
+		"validator":    a.config.VPAValidatorAddress,
+	}
+	jsonData, _ := json.Marshal(submissionData)
+	a.redisClient.SetEx(a.ctx, submissionKey, string(jsonData), 7*24*time.Hour) // Keep for 7 days
+
+	// Add to submission timeline
+	timelineKey := fmt.Sprintf("%s:vpa:submission:timeline", protocol)
+	status := "success"
+	if !success {
+		status = "failed"
+	}
+	a.redisClient.ZAdd(a.ctx, timelineKey, redis.Z{
+		Score:  float64(timestamp),
+		Member: fmt.Sprintf("%s:%s:%d:%s", dataMarketAddr, epochIDStr, priority, status),
+	})
+
+	// Update submission statistics
+	statsKey := fmt.Sprintf("%s:vpa:stats:%s", protocol, dataMarketAddr)
+	if success {
+		a.redisClient.HIncrBy(a.ctx, statsKey, "total_submissions_success", 1)
+		a.redisClient.HIncrBy(a.ctx, statsKey, fmt.Sprintf("priority_%d_submissions_success", priority), 1)
+	} else {
+		a.redisClient.HIncrBy(a.ctx, statsKey, "total_submissions_failed", 1)
+		a.redisClient.HIncrBy(a.ctx, statsKey, fmt.Sprintf("priority_%d_submissions_failed", priority), 1)
+	}
+	a.redisClient.Expire(a.ctx, statsKey, 7*24*time.Hour)
 }
 
 func main() {

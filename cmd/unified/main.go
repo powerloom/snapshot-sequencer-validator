@@ -508,6 +508,13 @@ func main() {
 			// Window Config Configuration
 			WindowConfigCacheTTL: 5 * time.Minute, // Default cache TTL
 			EstimatedMaxPriority: 10,              // Default safe upper bound for total window calculation
+			NewDataMarketContracts: func() []string {
+				newMarket := os.Getenv("NEW_DATA_MARKET_CONTRACT")
+				if newMarket != "" {
+					return []string{newMarket}
+				}
+				return []string{}
+			}(),
 		}
 
 		var err error
