@@ -375,19 +375,26 @@ func (vpa *ValidatorPriorityAssigner) WaitForSubmissionWindow(ctx context.Contex
 		"data_market": dataMarketAddr,
 	}).Info("⏳ Waiting for submission window to open...")
 
+	pollCount := 0
+	maxPollLogInterval := 10 // Log every 10 polls (20 seconds) to avoid spam
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
+			pollCount++
 			canSubmit, err := vpa.CanValidatorSubmit(ctx, dataMarketAddr, epochID)
 			if err != nil {
 				// Only log if it's not a "window closed" error (which is expected while waiting)
+				// And only log periodically to avoid spam
 				if !strings.Contains(err.Error(), "Submission window closed") && !strings.Contains(err.Error(), "execution reverted") {
-					logrus.WithError(err).WithFields(logrus.Fields{
-						"epoch":       epochID,
-						"data_market": dataMarketAddr,
-					}).Debug("Failed to check submission eligibility")
+					if pollCount%maxPollLogInterval == 0 {
+						logrus.WithError(err).WithFields(logrus.Fields{
+							"epoch":       epochID,
+							"data_market": dataMarketAddr,
+							"polls":       pollCount,
+						}).Debug("Failed to check submission eligibility")
+					}
 				}
 				continue
 			}
@@ -395,8 +402,18 @@ func (vpa *ValidatorPriorityAssigner) WaitForSubmissionWindow(ctx context.Contex
 				logrus.WithFields(logrus.Fields{
 					"epoch":       epochID,
 					"data_market": dataMarketAddr,
+					"polls":       pollCount,
 				}).Info("✅ Submission window is now open")
 				return nil
+			}
+			// Log progress every 10 polls (20 seconds) to show we're still waiting
+			if pollCount%maxPollLogInterval == 0 {
+				logrus.WithFields(logrus.Fields{
+					"epoch":       epochID,
+					"data_market": dataMarketAddr,
+					"polls":       pollCount,
+					"elapsed":     time.Duration(pollCount*2) * time.Second,
+				}).Debug("Still waiting for submission window to open...")
 			}
 		}
 	}

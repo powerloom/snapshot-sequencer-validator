@@ -1546,7 +1546,6 @@ func (a *Aggregator) submitBatchViaRelayer(epochID uint64, aggregatedBatch *cons
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		// Read response body for error details
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		bodyStr := string(bodyBytes)
 		log.WithFields(logrus.Fields{
@@ -1556,53 +1555,45 @@ func (a *Aggregator) submitBatchViaRelayer(epochID uint64, aggregatedBatch *cons
 			"response":    bodyStr,
 			"data_market": dataMarketAddr,
 		}).Error("❌ VPA relayer returned non-200 status")
-		// Store failed submission attempt
 		a.storeSubmissionMetrics(epochID, dataMarketAddr, priority, false, "", 0)
 		return fmt.Errorf("VPA relayer returned non-200 status: %d, response: %s", resp.StatusCode, bodyStr)
 	}
 
+	// Relayer-py returns exactly: {'message': 'Submitted Snapshot to relayer!'}
 	var response struct {
-		Success     bool   `json:"success"`
-		TxHash      string `json:"tx_hash"`
-		BlockNumber uint64 `json:"block_number"`
-		GasUsed     uint64 `json:"gas_used"`
-		Error       string `json:"error"`
+		Message string `json:"message"`
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		log.WithError(err).WithFields(logrus.Fields{
+			"epoch":       epochIDStr,
+			"priority":    priority,
+			"response":    string(bodyBytes),
+			"data_market": dataMarketAddr,
+		}).Error("❌ Failed to decode VPA relayer response")
+		a.storeSubmissionMetrics(epochID, dataMarketAddr, priority, false, "", 0)
 		return fmt.Errorf("failed to decode VPA relayer response: %w", err)
 	}
 
-	if response.Success {
-		log.WithFields(logrus.Fields{
-			"epoch":        epochIDStr,
-			"priority":     priority,
-			"tx_hash":      response.TxHash,
-			"block_number": response.BlockNumber,
-			"gas_used":     response.GasUsed,
-			"data_market":  dataMarketAddr,
-		}).Info("✅ VPA batch submission successful - on-chain confirmed")
+	// Success: relayer accepted the request (200 OK + message)
+	// Transaction details (tx_hash, block_number) come from relayer logs, not this response
+	log.WithFields(logrus.Fields{
+		"epoch":       epochIDStr,
+		"priority":    priority,
+		"message":     response.Message,
+		"data_market": dataMarketAddr,
+	}).Info("✅ VPA batch submission queued successfully - relayer processing asynchronously")
 
-		// Store submission metrics in Redis for monitoring
-		a.storeSubmissionMetrics(epochID, dataMarketAddr, priority, true, response.TxHash, response.BlockNumber)
+	// Store submission metrics (queued successfully, tx_hash will be empty since relayer processes async)
+	a.storeSubmissionMetrics(epochID, dataMarketAddr, priority, true, "", 0)
 
-		// Mark as submitted for this epoch
-		a.mu.Lock()
-		a.submissionState[epochID] = true
-		a.mu.Unlock()
+	// Mark as submitted for this epoch
+	a.mu.Lock()
+	a.submissionState[epochID] = true
+	a.mu.Unlock()
 
-		return nil
-	} else {
-		log.WithFields(logrus.Fields{
-			"epoch":       epochIDStr,
-			"priority":    priority,
-			"error":       response.Error,
-			"data_market": dataMarketAddr,
-		}).Error("❌ VPA batch submission failed via relayer")
-		// Store failed submission attempt
-		a.storeSubmissionMetrics(epochID, dataMarketAddr, priority, false, "", 0)
-		return fmt.Errorf("VPA batch submission failed: %s", response.Error)
-	}
+	return nil
 }
 
 // sendBatchSizeToRelayer sends the batch size to relayer-py before submitting batches
