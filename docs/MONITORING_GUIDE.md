@@ -817,219 +817,521 @@ For detailed information about entity ID formats, metadata, and how to interpret
 ## VPA Integration Monitoring
 
 ### Overview
-The Validator Priority Assigner (VPA) integration adds sophisticated priority-based batch submission capabilities to the sequencer. This section provides comprehensive monitoring guidance for VPA integration testing and production operations.
+The Validator Priority Assigner (VPA) integration enables priority-based batch submission to on-chain contracts. This section provides comprehensive monitoring guidance for understanding your node's priority assignments and submission status.
 
-### Priority Assignment Monitoring
+### Priority-Based Submission Logic
 
-Monitor VPA priority caching and assignment operations through the EventMonitor service:
+**Key Concept**: Priority 2+ validators only submit if Priority 1 (and all lower priorities) failed to submit within their windows. This prevents duplicate submissions.
 
+**Submission Flow:**
+1. **Priority Check**: Validator checks if they have priority > 0 for the epoch
+2. **Window Wait**: Validator waits for their submission window to open
+3. **Duplicate Check** (Priority 2+ only): Checks if higher priority validator already submitted
+4. **Submission**: If no duplicate found, submits via relayer-py
+
+### Monitoring Priority Assignments
+
+**Aggregator Logs - Priority Assignment:**
 ```bash
-# Monitor VPA priority assignment events
-./dsv.sh event-logs | grep -E "(🎯|Priorities|VPA|Priority)"
+# Check if your node has priority for recent epochs
+./dsv.sh aggregator-logs | grep -E "(priority|Priority)" | tail -20
 
-# Look for priority assignment log patterns
-./dsv.sh event-logs | grep "🎯 Priorities assigned for epoch"
+# Monitor priority assignment results
+./dsv.sh aggregator-logs | grep -E "No VPA priority|priority assigned"
 
-# Monitor VPA contract interaction events
-./dsv.sh event-logs | grep "VPA.*contract"
+# Check priority values (1, 2, 3, etc.)
+./dsv.sh aggregator-logs | grep "priority=" | tail -10
 ```
 
 **Key Log Patterns:**
-- `🎯 Priorities assigned for epoch X` - Successful priority assignment
-- `VPA priority cached for epoch X` - Priority caching confirmation
-- `🔄 New priority assignment request` - Priority assignment initiation
-- `✅ VPA priority assignment successful` - Completion confirmation
+- `No VPA priority assigned, skipping new contract submission` - Your node has priority 0 (no submission)
+- `priority=1` - Priority 1 (first to submit)
+- `priority=2` - Priority 2 (backup, only submits if Priority 1 fails)
+- `priority=3+` - Lower priority (only submits if all higher priorities fail)
 
-### Aggregator Relayer Integration Monitoring
+### Monitoring Submission Attempts
 
-Monitor the Aggregator's integration with the relayer service for contract submissions:
-
+**Aggregator Logs - Submission Flow:**
 ```bash
-# Monitor aggregator relayer integration logs
-./dsv.sh aggregator-logs | grep -E "(🚀|contract|relayer|submission)"
+# Track complete submission flow
+./dsv.sh aggregator-logs | grep -E "(⏳|✅|⏭️|🚀)" | tail -30
 
-# Track contract submission attempts
-./dsv.sh aggregator-logs | grep "🚀 Starting new contract submission"
+# Check if waiting for submission window
+./dsv.sh aggregator-logs | grep "⏳ Waiting for submission window"
 
-# Monitor relayer call success/failure
-./dsv.sh aggregator-logs | grep "🚀 Submitting batch via relayer-py"
+# Check if submission window opened
+./dsv.sh aggregator-logs | grep "✅ Submission window is open"
 
-# Check for successful batch submissions
+# Check if skipped due to higher priority submission
+./dsv.sh aggregator-logs | grep "⏭️.*Epoch already has a submission"
+
+# Check successful submissions
 ./dsv.sh aggregator-logs | grep "✅ VPA batch submission successful"
 ```
 
 **Key Log Patterns:**
-- `🚀 Starting new contract submission` - Initiation of contract submission
-- `🚀 Submitting batch via relayer-py` - Relayer service call
-- `✅ VPA batch submission successful` - Successful contract submission
-- `❌ Contract submission failed` - Failed submission attempt
-- `⏱️ Contract submission completed in Xms` - Performance metrics
+- `⏳ Waiting for submission window to open...` - Waiting for your priority window
+- `✅ Submission window is open, checking if submission already exists...` - Window opened, checking duplicates
+- `⏭️ Epoch already has a submission from a higher priority validator, skipping submission` - Priority 2+ skipped (Priority 1 already submitted)
+- `✅ No existing submission found, proceeding with submission` - No duplicate found, proceeding
+- `🚀 Submitting batch via relayer-py` - Sending to relayer service
+- `✅ VPA batch submission successful` - On-chain submission confirmed
 
-### Relayer-PY Service Monitoring
+### Redis-Based Priority Tracking
 
-Monitor the relayer-py service for HTTP endpoint availability and transaction submission:
+The aggregator stores priority and submission metrics in Redis for historical tracking:
 
+**Priority Assignment Tracking:**
 ```bash
+# Check priority for specific epoch
+docker exec redis redis-cli GET "{protocol}:vpa:priority:{dataMarket}:{epochID}"
+
+# View priority timeline (recent assignments)
+docker exec redis redis-cli ZREVRANGE "{protocol}:vpa:priority:timeline" 0 9
+
+# Check priority statistics
+docker exec redis redis-cli HGETALL "{protocol}:vpa:stats:{dataMarket}"
+```
+
+**Submission Tracking:**
+```bash
+# Check submission result for specific epoch
+docker exec redis redis-cli GET "{protocol}:vpa:submission:{dataMarket}:{epochID}"
+
+# View submission timeline (recent attempts)
+docker exec redis redis-cli ZREVRANGE "{protocol}:vpa:submission:timeline" 0 9
+
+# Check submission statistics
+docker exec redis redis-cli HGETALL "{protocol}:vpa:stats:{dataMarket}"
+```
+
+**Redis Key Structure:**
+- `{protocol}:vpa:priority:{dataMarket}:{epochID}` - Priority assignment per epoch (7-day TTL)
+- `{protocol}:vpa:submission:{dataMarket}:{epochID}` - Submission result per epoch (7-day TTL)
+- `{protocol}:vpa:priority:timeline` - Historical priority assignments (sorted set)
+- `{protocol}:vpa:submission:timeline` - Historical submission attempts (sorted set)
+- `{protocol}:vpa:stats:{dataMarket}` - Aggregated statistics (7-day TTL)
+
+### Understanding Your Node's Priority Status
+
+**Quick Status Check:**
+```bash
+# Check recent priority assignments
+./dsv.sh aggregator-logs | grep -E "priority=" | tail -10 | awk '{print $NF}'
+
+# Count priority assignments by value
+./dsv.sh aggregator-logs | grep "priority=" | grep -o "priority=[0-9]*" | sort | uniq -c
+
+# Check submission success rate
+./dsv.sh aggregator-logs | grep "✅ VPA batch submission successful" | wc -l
+```
+
+**Priority Status Interpretation:**
+- **Priority 0**: No priority assigned - your node will not submit for this epoch
+- **Priority 1**: Primary submitter - your node submits first (if window opens)
+- **Priority 2+**: Backup submitter - your node only submits if Priority 1 fails
+
+### Monitoring Submission Windows
+
+**Window Timing:**
+```bash
+# Check if waiting for window
+./dsv.sh aggregator-logs | grep "⏳ Waiting for submission window"
+
+# Check window timeout warnings
+./dsv.sh aggregator-logs | grep "Timeout waiting for submission window"
+
+# Check window opened successfully
+./dsv.sh aggregator-logs | grep "✅ Submission window is open"
+```
+
+**Window Status:**
+- Window opens based on: `epochReleaseTime + preSubmissionWindow + (priority-1) * pNSubmissionWindow`
+- Priority 1 window: `epochReleaseTime + preSubmissionWindow` to `epochReleaseTime + preSubmissionWindow + p1SubmissionWindow`
+- Priority 2+ windows: Sequential windows after Priority 1 closes
+
+### Monitoring Duplicate Submission Checks
+
+**Priority 2+ Behavior:**
+```bash
+# Check if duplicate check occurred
+./dsv.sh aggregator-logs | grep "checking if submission already exists"
+
+# Check if skipped due to existing submission
+./dsv.sh aggregator-logs | grep "⏭️.*Epoch already has a submission"
+
+# Check on-chain event log queries
+./dsv.sh aggregator-logs | grep "Checked BatchSubmissionsCompleted event logs"
+```
+
+**Duplicate Check Logic:**
+- Priority 1: No duplicate check (submits first)
+- Priority 2+: Queries `BatchSubmissionsCompleted` event logs
+- If event found: Skips submission (Priority 1 already completed)
+- If no event: Proceeds with submission
+
+### Relayer-PY Integration Monitoring
+
+**Relayer Service:**
+```bash
+# Monitor relayer endpoint calls
+./dsv.sh aggregator-logs | grep "🚀 Submitting batch via relayer-py"
+
+# Check relayer response
+./dsv.sh aggregator-logs | grep -E "VPA batch submission|relayer returned"
+
 # Monitor relayer-py service logs
-./dsv.sh relayer-logs | grep -E "(HTTP|transaction|submission|batch)"
-
-# Track HTTP endpoint availability
-./dsv.sh relayer-logs | grep "HTTP.*endpoint"
-
-# Monitor transaction submission status
-./dsv.sh relayer-logs | grep "transaction.*submitted"
-
-# Check for relayer errors
-./dsv.sh relayer-logs | grep "error\|failed"
+docker logs dsv-relayer-py --tail 50 | grep -E "(submitSubmissionBatch|submitBatchSize)"
 ```
 
-**Key Log Patterns:**
-- `HTTP endpoint ready` - Service availability confirmation
-- `Transaction submitted` - Successful transaction submission
-- `Batch submitted via relayer` - Batch submission confirmation
-- `Transaction failed` - Failed transaction attempt
+**Relayer Flow:**
+1. `submitBatchSize` - Informs relayer of expected batch count (typically 1 for DSV)
+2. `submitSubmissionBatch` - Submits the actual batch data
+3. Relayer processes and submits on-chain transaction
+4. Returns transaction hash and block number
 
-### End-to-End VPA Testing Workflow
+### End-to-End Submission Tracking
 
-Complete flow from epoch release to relayer submission:
-
+**Complete Flow Monitoring:**
 ```bash
-# 1. Monitor EventMonitor for epoch release
-./dsv.sh event-logs | grep -E "🚀|epoch.*released|priorities"
-
-# 2. Check aggregator processing
-./dsv.sh aggregator-logs | grep -E "epoch.*X|contract|relayer"
-
-# 3. Monitor relayer service
-./dsv.sh relayer-logs | grep -E "transaction|batch|submission"
-
-# 4. Verify contract submission
-./dsv.sh aggregator-logs | grep "✅.*VPA.*submission"
+# Track complete submission flow for specific epoch
+EPOCH_ID=23847425
+./dsv.sh aggregator-logs | grep "$EPOCH_ID" | grep -E "(priority|⏳|✅|⏭️|🚀)"
 ```
 
-**End-to-End Success Sequence:**
-1. `🚀 Released epoch: X` - Epoch released by EventMonitor
-2. `🎯 Priorities assigned for epoch X` - VPA priorities assigned
-3. `🚀 Starting new contract submission` - Contract submission initiated
-4. `🚀 Submitting batch via relayer-py` - Relayer service called
-5. `✅ VPA batch submission successful` - Final submission confirmation
+**Expected Flow (Priority 1):**
+1. `priority=1` - Priority assigned
+2. `⏳ Waiting for submission window to open...` - Waiting for P1 window
+3. `✅ Submission window is open, checking if submission already exists...` - Window opened
+4. `✅ No existing submission found, proceeding with submission` - No duplicate
+5. `🚀 Submitting batch via relayer-py` - Sending to relayer
+6. `✅ VPA batch submission successful` - On-chain confirmed
 
-### Real-Time VPA Monitoring Commands
-
-For comprehensive VPA testing, use these real-time monitoring commands:
-
-```bash
-# Live VPA monitoring dashboard
-./dsv.sh dashboard
-
-# Monitor all VPA-related logs in real-time
-./dsv.sh event-logs --follow | grep -E "(🎯|VPA|Priority)"
-
-# Monitor aggregator contract submissions
-./dsv.sh aggregator-logs --follow | grep -E "(🚀|contract|relayer)"
-
-# Monitor relayer service transactions
-./dsv.sh relayer-logs --follow | grep -E "(HTTP|transaction|batch)"
-
-# Combined VPA monitoring pipeline
-./dsv.sh pipeline-logs | grep -E "(VPA|contract|relayer|priority)"
-```
-
-### VPA-Specific Container Logs
-
-Individual component monitoring for VPA integration:
-
-```bash
-# EventMonitor container (VPA priority assignment)
-./dsv.sh event-logs [lines]
-
-# Aggregator container (relayer integration)
-./dsv.sh aggregator-logs [lines]
-
-# Relayer-PY container (transaction submission)
-./dsv.sh relayer-logs [lines]
-
-# Monitor specific VPA contract interactions
-docker exec <aggregator-container> grep -i "vpa" /app/main.go | head -5
-```
+**Expected Flow (Priority 2+):**
+1. `priority=2` (or higher) - Priority assigned
+2. `⏳ Waiting for submission window to open...` - Waiting for P2+ window
+3. `✅ Submission window is open, checking if submission already exists...` - Window opened
+4. Either:
+   - `⏭️ Epoch already has a submission from a higher priority validator, skipping submission` - Priority 1 already submitted
+   - `✅ No existing submission found, proceeding with submission` - Priority 1 failed, proceeding
+5. `🚀 Submitting batch via relayer-py` - Sending to relayer (if no duplicate)
+6. `✅ VPA batch submission successful` - On-chain confirmed
 
 ### VPA Health Indicators
 
 **Healthy VPA Integration:**
-- Regular priority assignment logs every epoch
-- Successful contract submission attempts
-- Relayer service availability (>99%)
-- End-to-end pipeline completion time < 30s
-- No relayer transaction failures in last 24h
+- Regular priority assignments (check logs for `priority=` entries)
+- Priority distribution: Mix of Priority 0, 1, 2+ over time
+- Successful submissions when Priority 1 assigned
+- Priority 2+ correctly skipping when Priority 1 submits
+- No timeout errors waiting for submission windows
+- Relayer service responding successfully
 
 **Warning Signs:**
-- Missing priority assignment logs
-- Frequent contract submission failures
-- Relayer service errors
-- Inconsistent VPA batch submissions
-- End-to-end processing time > 60s
+- No priority assignments for multiple epochs (check VPA client initialization)
+- All epochs showing Priority 0 (validator not registered in VPA)
+- Frequent "Timeout waiting for submission window" (window timing issues)
+- Priority 2+ submitting when Priority 1 already submitted (duplicate check failing)
+- Relayer service errors or non-200 responses
 
 **Critical Issues:**
-- No VPA activity for multiple epochs
+- VPA client not initialized (check `VPA_VALIDATOR_ADDRESS` configuration)
 - Consistent relayer transaction failures
-- Contract submission timeouts
-- VPA service connectivity issues
+- Submission window timeouts for all epochs
+- No priority assignments for extended periods
 
-### VPA Configuration Monitoring
+### Querying Priority History
 
-Verify VPA integration configuration:
-
+**Redis-Based Queries:**
 ```bash
-# Check VPA service configuration
-docker exec <event-monitor-container> printenv | grep -i vpa
+# Get priority for last 10 epochs
+docker exec redis redis-cli ZREVRANGE "{protocol}:vpa:priority:timeline" 0 9
 
-# Verify relayer service configuration
-docker exec <relayer-container> printenv | grep -i relayer
+# Get submission results for last 10 epochs
+docker exec redis redis-cli ZREVRANGE "{protocol}:vpa:submission:timeline" 0 9
 
-# Check VPA contract addresses
-docker exec <aggregator-container> grep -i "vpa.*address" /app/main.go
+# Check specific epoch priority
+EPOCH_ID=23847425
+docker exec redis redis-cli GET "{protocol}:vpa:priority:{dataMarket}:${EPOCH_ID}"
+
+# Check specific epoch submission
+docker exec redis redis-cli GET "{protocol}:vpa:submission:{dataMarket}:${EPOCH_ID}"
 ```
 
-### VPA Performance Metrics
-
-Monitor VPA integration performance:
-
+**Statistics Summary:**
 ```bash
-# Check VPA submission success rate
-./dsv.sh aggregator-logs | grep "✅ VPA" | wc -l
+# Get priority statistics
+docker exec redis redis-cli HGETALL "{protocol}:vpa:stats:{dataMarket}"
 
-# Monitor VPA processing times
-./dsv.sh aggregator-logs | grep "⏱️.*VPA" | head -5
-
-# Check relayer transaction delays
-./dsv.sh relayer-logs | grep "transaction.*delay" | head -5
+# Expected fields:
+# - total_priority_assignments: Total epochs with priority > 0
+# - priority_1_count: Number of Priority 1 assignments
+# - priority_2_count: Number of Priority 2 assignments
+# - no_priority_count: Number of Priority 0 epochs
+# - total_submissions_success: Successful submissions
+# - total_submissions_failed: Failed submission attempts
+# - priority_1_submissions_success: Priority 1 successful submissions
+# - priority_2_submissions_success: Priority 2 successful submissions
 ```
 
-### VPA Troubleshooting
+### VPA Configuration Verification
 
-**Common VPA Issues and Solutions:**
-
-| Issue | Monitoring Command | Solution |
-|-------|-------------------|----------|
-| No priority assignments | `./dsv.sh event-logs | grep "🎯"` | Check VPA contract connectivity |
-| Contract submission failures | `./dsv.sh aggregator-logs | grep "❌"` | Verify relayer service health |
-| Relayer service down | `./dsv.sh relayer-logs | grep "error"` | Restart relayer container |
-| Inconsistent batch submissions | `./dsv.sh aggregator-logs | grep "✅ VPA"` | Check VPA service consistency |
-
-### VPA Integration Testing Commands
-
-For comprehensive VPA integration testing:
-
+**Required Configuration:**
 ```bash
-# Test VPA priority assignment
-curl "http://localhost:9091/api/v1/epochs/timeline" | jq '.epochs[] | select(.status == "released")'
+# Check VPA client initialization
+./dsv.sh aggregator-logs | grep -E "(VPA client|VPA caching client initialized)"
 
-# Monitor VPA batch submissions
-curl "http://localhost:9091/api/v1/batches/finalized" | jq '.batches[] | select(.vpa_submitted == true)'
+# Verify VPA validator address
+docker exec <aggregator-container> printenv | grep VPA_VALIDATOR_ADDRESS
 
-# Check relayer service health
-curl "http://localhost:9091/api/v1/health" | jq '.services.relayer'
+# Check VPA contract address
+docker exec <aggregator-container> printenv | grep VPA_CONTRACT_ADDRESS
 
-# Test VPA pipeline end-to-end
-./scripts/test_vpa_integration.sh
+# Verify relayer endpoint
+docker exec <aggregator-container> printenv | grep RELAYER_PY_ENDPOINT
+```
+
+**Configuration Checklist:**
+- `VPA_VALIDATOR_ADDRESS` - Your validator's Ethereum address
+- `VPA_CONTRACT_ADDRESS` - VPA contract address (or auto-fetched from ProtocolState)
+- `NEW_PROTOCOL_STATE_CONTRACT` - ProtocolState contract address
+- `RELAYER_PY_ENDPOINT` - Relayer service endpoint (e.g., `http://relayer-py:8080`)
+- `ENABLE_ONCHAIN_SUBMISSION=true` - Enable VPA submissions
+
+### Troubleshooting Priority Issues
+
+**No Priority Assignments:**
+```bash
+# Check VPA client initialization
+./dsv.sh aggregator-logs | grep "VPA client not initialized"
+
+# Verify validator address is registered in ValidatorState contract
+# Check on-chain: ValidatorState.getNodeIdForValidator(validatorAddress)
+
+# Check VPA contract connectivity
+./dsv.sh aggregator-logs | grep "Failed to get VPA priority"
+```
+
+**Priority 2+ Submitting When Should Skip:**
+```bash
+# Check duplicate detection logs
+./dsv.sh aggregator-logs | grep "Checked BatchSubmissionsCompleted event logs"
+
+# Verify on-chain event query is working
+./dsv.sh aggregator-logs | grep "has_submission"
+
+# Check if RPC client is initialized
+./dsv.sh aggregator-logs | grep "RPC client initialized for on-chain submission checks"
+```
+
+**Submission Window Timeouts:**
+```bash
+# Check window wait logs
+./dsv.sh aggregator-logs | grep "Timeout waiting for submission window"
+
+# Verify epoch release timing
+./dsv.sh event-logs | grep "Epoch.*released"
+
+# Check if epoch-manager releases epochs to both contracts simultaneously
+```
+
+### Recommended Monitoring Queries
+
+**Daily Priority Summary:**
+```bash
+# Count priority assignments by value for today
+./dsv.sh aggregator-logs | grep "$(date +%Y-%m-%d)" | grep "priority=" | \
+  grep -o "priority=[0-9]*" | sort | uniq -c
+
+# Count successful submissions by priority
+./dsv.sh aggregator-logs | grep "$(date +%Y-%m-%d)" | \
+  grep "✅ VPA batch submission successful" | grep -o "priority=[0-9]*" | sort | uniq -c
+```
+
+**Submission Success Rate:**
+```bash
+# Calculate success rate
+TOTAL=$(./dsv.sh aggregator-logs | grep "🚀 Submitting batch via relayer-py" | wc -l)
+SUCCESS=$(./dsv.sh aggregator-logs | grep "✅ VPA batch submission successful" | wc -l)
+echo "Success rate: $(( SUCCESS * 100 / TOTAL ))%"
+```
+
+**Priority Distribution:**
+```bash
+# View priority distribution over last 100 epochs
+./dsv.sh aggregator-logs | grep "priority=" | tail -100 | \
+  grep -o "priority=[0-9]*" | cut -d= -f2 | sort -n | uniq -c
+```
+
+### Quick Reference: Understanding Your Node's Status
+
+**For each epoch, your node can be in one of these states:**
+
+1. **Priority 0 (No Priority)**
+   - Log: `ℹ️ No VPA priority assigned (Priority 0), skipping new contract submission`
+   - Meaning: Your validator was not assigned priority for this epoch
+   - Action: Normal - priority rotates across validators
+   - Redis: `{protocol}:vpa:priority:{market}:{epoch}` with `status: "no_priority"`
+
+2. **Priority 1 (Primary Submitter)**
+   - Log: `🎯 VPA Priority assigned for epoch` with `priority=1`
+   - Meaning: Your node is the primary submitter for this epoch
+   - Expected Flow: Wait for window → Submit → Success
+   - Redis: `{protocol}:vpa:priority:{market}:{epoch}` with `priority: 1`
+
+3. **Priority 2+ (Backup Submitter)**
+   - Log: `🎯 VPA Priority assigned for epoch` with `priority=2` (or higher)
+   - Meaning: Your node is a backup submitter
+   - Expected Flow: Wait for window → Check if Priority 1 submitted → Either skip or submit
+   - Redis: `{protocol}:vpa:priority:{market}:{epoch}` with `priority: 2+`
+
+**Submission Outcomes:**
+
+- **Success**: `✅ VPA batch submission successful - on-chain confirmed`
+  - Redis: `{protocol}:vpa:submission:{market}:{epoch}` with `success: true`, `tx_hash`, `block_number`
+  
+- **Skipped (Priority 2+)**: `⏭️ Epoch already has a submission from a higher priority validator, skipping submission`
+  - Redis: `{protocol}:vpa:submission:{market}:{epoch}` with `success: false` (no tx_hash)
+  - Redis: `{protocol}:vpa:priority:{market}:{epoch}` with `status: "skipped_higher_priority_submitted"`
+  
+- **Window Timeout**: `⏰ Timeout waiting for submission window (10min), skipping submission`
+  - Redis: `{protocol}:vpa:priority:{market}:{epoch}` with `status: "window_timeout"`
+  
+- **Relayer Error**: `❌ VPA relayer returned non-200 status` or `❌ Failed to submit batch to relayer-py`
+  - Redis: `{protocol}:vpa:submission:{market}:{epoch}` with `success: false`
+
+### Node Operator Checklist
+
+**Daily Monitoring:**
+```bash
+# 1. Check priority distribution (should see mix of 0, 1, 2+)
+./dsv.sh aggregator-logs | grep "priority=" | tail -50 | grep -o "priority=[0-9]*" | sort | uniq -c
+
+# 2. Check submission success rate
+SUCCESS=$(./dsv.sh aggregator-logs | grep "✅ VPA batch submission successful" | wc -l)
+ATTEMPTS=$(./dsv.sh aggregator-logs | grep "🚀 Submitting batch via relayer-py" | wc -l)
+echo "Success rate: $(( SUCCESS * 100 / ATTEMPTS ))%"
+
+# 3. Check for Priority 1 assignments
+./dsv.sh aggregator-logs | grep "priority=1" | wc -l
+
+# 4. Check for skipped submissions (Priority 2+)
+./dsv.sh aggregator-logs | grep "⏭️.*Epoch already has a submission" | wc -l
+
+# 5. Check for timeouts
+./dsv.sh aggregator-logs | grep "⏰ Timeout waiting for submission window" | wc -l
+```
+
+**Weekly Analysis:**
+```bash
+# Get priority statistics from Redis
+docker exec redis redis-cli HGETALL "{protocol}:vpa:stats:{dataMarket}"
+
+# View priority timeline for last week
+docker exec redis redis-cli ZREVRANGEBYSCORE "{protocol}:vpa:priority:timeline" \
+  $(date -d '7 days ago' +%s) +inf
+
+# View submission timeline for last week
+docker exec redis redis-cli ZREVRANGEBYSCORE "{protocol}:vpa:submission:timeline" \
+  $(date -d '7 days ago' +%s) +inf
+```
+
+### Additional Tracking Recommendations
+
+**What's Currently Tracked:**
+- ✅ Priority assignments per epoch (Redis: `{protocol}:vpa:priority:{market}:{epoch}`)
+- ✅ Submission attempts and results (Redis: `{protocol}:vpa:submission:{market}:{epoch}`)
+- ✅ Priority timeline (Redis sorted set)
+- ✅ Submission timeline (Redis sorted set)
+- ✅ Aggregated statistics (success/failure counts by priority)
+
+**Recommended Additional Tracking:**
+
+1. **Window Timing Metrics:**
+   - Track when submission windows open/close per priority
+   - Monitor average wait time for window opening
+   - Alert on frequent window timeouts
+
+2. **Priority Distribution Analysis:**
+   - Track priority assignment frequency over time
+   - Monitor if your node consistently gets Priority 0 (indicates registration issue)
+   - Track priority fairness (should be distributed over time)
+
+3. **Submission Success Rate by Priority:**
+   - Track success rate separately for Priority 1 vs Priority 2+
+   - Monitor if Priority 2+ submissions are frequently skipped (indicates healthy Priority 1)
+   - Track relayer response times by priority
+
+4. **Epoch-Level Summary:**
+   - Store complete epoch submission status (priority, window opened, submitted, skipped reason)
+   - Enable quick lookup: "Did I submit epoch X? What was my priority?"
+   - Track epochs where Priority 1 failed and Priority 2+ stepped in
+
+5. **On-Chain Verification:**
+   - Periodically verify on-chain that submissions actually occurred
+   - Cross-reference Redis tracking with on-chain `BatchSubmissionsCompleted` events
+   - Detect discrepancies between Redis tracking and on-chain state
+
+**Example Enhanced Queries:**
+```bash
+# Check your node's priority history for last 24 hours
+docker exec redis redis-cli ZREVRANGEBYSCORE "{protocol}:vpa:priority:timeline" \
+  $(date -d '24 hours ago' +%s) +inf
+
+# Find epochs where you had Priority 1 but didn't submit
+# (Compare priority timeline with submission timeline)
+
+# Check submission success rate by priority
+docker exec redis redis-cli HGETALL "{protocol}:vpa:stats:{dataMarket}" | \
+  grep -E "priority_[0-9]+_submissions"
+```
+
+### Additional Tracking Recommendations
+
+**What's Currently Tracked:**
+- ✅ Priority assignments per epoch (Redis: `{protocol}:vpa:priority:{market}:{epoch}`)
+- ✅ Submission attempts and results (Redis: `{protocol}:vpa:submission:{market}:{epoch}`)
+- ✅ Priority timeline (Redis sorted set)
+- ✅ Submission timeline (Redis sorted set)
+- ✅ Aggregated statistics (success/failure counts by priority)
+
+**Recommended Additional Tracking:**
+
+1. **Window Timing Metrics:**
+   - Track when submission windows open/close per priority
+   - Monitor average wait time for window opening
+   - Alert on frequent window timeouts
+
+2. **Priority Distribution Analysis:**
+   - Track priority assignment frequency over time
+   - Monitor if your node consistently gets Priority 0 (indicates registration issue)
+   - Track priority fairness (should be distributed over time)
+
+3. **Submission Success Rate by Priority:**
+   - Track success rate separately for Priority 1 vs Priority 2+
+   - Monitor if Priority 2+ submissions are frequently skipped (indicates healthy Priority 1)
+   - Track relayer response times by priority
+
+4. **Epoch-Level Summary:**
+   - Store complete epoch submission status (priority, window opened, submitted, skipped reason)
+   - Enable quick lookup: "Did I submit epoch X? What was my priority?"
+   - Track epochs where Priority 1 failed and Priority 2+ stepped in
+
+5. **On-Chain Verification:**
+   - Periodically verify on-chain that submissions actually occurred
+   - Cross-reference Redis tracking with on-chain `BatchSubmissionsCompleted` events
+   - Detect discrepancies between Redis tracking and on-chain state
+
+**Example Enhanced Queries:**
+```bash
+# Check your node's priority history for last 24 hours
+docker exec redis redis-cli ZREVRANGEBYSCORE "{protocol}:vpa:priority:timeline" \
+  $(date -d '24 hours ago' +%s) +inf
+
+# Find epochs where you had Priority 1 but didn't submit
+# (Compare priority timeline with submission timeline)
+
+# Check submission success rate by priority
+docker exec redis redis-cli HGETALL "{protocol}:vpa:stats:{dataMarket}" | \
+  grep -E "priority_[0-9]+_submissions"
 ```
