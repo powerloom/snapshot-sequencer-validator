@@ -34,9 +34,9 @@ type EventMonitor struct {
 	vpaEnabled      bool
 
 	// Window management
-	windowManager       *WindowManager
+	windowManager          *WindowManager
 	windowConfigFetcher    *WindowConfigFetcher // Fetches window config from contract
-	newDataMarketContracts map[string]bool     // Set of NEW data market addresses that support getSubmissionWindowConfig
+	newDataMarketContracts map[string]bool      // Set of NEW data market addresses that support getSubmissionWindowConfig
 
 	// Event tracking
 	lastProcessedBlock uint64
@@ -147,9 +147,9 @@ type Config struct {
 	NewProtocolStateContract string // NEW ProtocolState contract address for VPA integration and window config fetching
 
 	// Window Config Configuration
-	WindowConfigCacheTTL time.Duration // Cache TTL for window configs (default: 5 minutes)
-	EstimatedMaxPriority int           // Estimated max priority for total window calculation (default: 10)
-	NewDataMarketContracts []string    // List of NEW data market addresses that support getSubmissionWindowConfig
+	WindowConfigCacheTTL   time.Duration // Cache TTL for window configs (default: 5 minutes)
+	EstimatedMaxPriority   int           // Estimated max priority for total window calculation (default: 10)
+	NewDataMarketContracts []string      // List of NEW data market addresses that support getSubmissionWindowConfig
 }
 
 // NewEventMonitor creates a new event monitor
@@ -842,8 +842,14 @@ func (m *EventMonitor) handleEpochReleased(event *EpochReleasedEvent) {
 	}
 
 	if useFallback {
-		log.Warnf("⚠️  Using fallback window duration %v for epoch %s (consider configuring NEW_PROTOCOL_STATE_CONTRACT)",
-			windowDuration, event.EpochID.String())
+		// Only warn if window config fetcher is not initialized (missing NEW_PROTOCOL_STATE_CONTRACT)
+		// If it's initialized but failed for this specific data market, that's already logged above
+		if m.windowConfigFetcher == nil {
+			log.Warnf("⚠️  Using fallback window duration %v for epoch %s (NEW_PROTOCOL_STATE_CONTRACT not configured)",
+				windowDuration, event.EpochID.String())
+		}
+		// If window config fetcher exists but we're using fallback, it means this is a legacy data market
+		// This is expected and already logged above, so no need for additional warning
 	} else {
 		hasSnapshotCommitReveal := windowConfig != nil && (windowConfig.SnapshotCommitWindow.Uint64() > 0 ||
 			windowConfig.SnapshotRevealWindow.Uint64() > 0)

@@ -340,9 +340,40 @@ func (vpa *ValidatorPriorityAssigner) IsTopPriority(ctx context.Context, dataMar
 }
 
 // WaitForSubmissionWindow waits until the validator can submit
+// It first checks if the window is already open, and only starts polling if it's not yet open
 func (vpa *ValidatorPriorityAssigner) WaitForSubmissionWindow(ctx context.Context, dataMarketAddr string, epochID uint64) error {
-	ticker := time.NewTicker(1 * time.Second)
+	// First check: if window is already open, return immediately
+	canSubmit, err := vpa.CanValidatorSubmit(ctx, dataMarketAddr, epochID)
+	if err != nil {
+		// If check fails, check if it's because window is closed (expected) vs other error
+		if strings.Contains(err.Error(), "Submission window closed") || strings.Contains(err.Error(), "execution reverted") {
+			// Window is closed, start polling
+			logrus.WithFields(logrus.Fields{
+				"epoch":       epochID,
+				"data_market": dataMarketAddr,
+			}).Debug("Submission window not yet open, starting to poll...")
+		} else {
+			// Other error, return it
+			return fmt.Errorf("failed to check submission window status: %w", err)
+		}
+	} else if canSubmit {
+		// Window is already open, no need to wait
+		logrus.WithFields(logrus.Fields{
+			"epoch":       epochID,
+			"data_market": dataMarketAddr,
+		}).Info("✅ Submission window is already open")
+		return nil
+	}
+
+	// Window is not open yet, start polling
+	ticker := time.NewTicker(2 * time.Second) // Poll every 2 seconds instead of 1 to reduce RPC calls
 	defer ticker.Stop()
+
+	// Log first attempt
+	logrus.WithFields(logrus.Fields{
+		"epoch":       epochID,
+		"data_market": dataMarketAddr,
+	}).Info("⏳ Waiting for submission window to open...")
 
 	for {
 		select {
@@ -351,11 +382,20 @@ func (vpa *ValidatorPriorityAssigner) WaitForSubmissionWindow(ctx context.Contex
 		case <-ticker.C:
 			canSubmit, err := vpa.CanValidatorSubmit(ctx, dataMarketAddr, epochID)
 			if err != nil {
-				logrus.WithError(err).Debug("Failed to check submission eligibility")
+				// Only log if it's not a "window closed" error (which is expected while waiting)
+				if !strings.Contains(err.Error(), "Submission window closed") && !strings.Contains(err.Error(), "execution reverted") {
+					logrus.WithError(err).WithFields(logrus.Fields{
+						"epoch":       epochID,
+						"data_market": dataMarketAddr,
+					}).Debug("Failed to check submission eligibility")
+				}
 				continue
 			}
 			if canSubmit {
-				logrus.Info("✅ Submission window is open for this validator")
+				logrus.WithFields(logrus.Fields{
+					"epoch":       epochID,
+					"data_market": dataMarketAddr,
+				}).Info("✅ Submission window is now open")
 				return nil
 			}
 		}
