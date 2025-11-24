@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -1490,6 +1491,12 @@ func (m *MonitorAPI) VPATimeline(c *gin.Context) {
 					})
 				}
 			}
+			// Sort by epoch_id (descending - most recent first)
+			sort.Slice(priorityTimeline, func(i, j int) bool {
+				epochI, _ := strconv.Atoi(priorityTimeline[i]["epoch_id"].(string))
+				epochJ, _ := strconv.Atoi(priorityTimeline[j]["epoch_id"].(string))
+				return epochI > epochJ
+			})
 			result["priority_timeline"] = priorityTimeline
 		}
 	}
@@ -1512,6 +1519,12 @@ func (m *MonitorAPI) VPATimeline(c *gin.Context) {
 					})
 				}
 			}
+			// Sort by epoch_id (descending - most recent first)
+			sort.Slice(submissionTimeline, func(i, j int) bool {
+				epochI, _ := strconv.Atoi(submissionTimeline[i]["epoch_id"].(string))
+				epochJ, _ := strconv.Atoi(submissionTimeline[j]["epoch_id"].(string))
+				return epochI > epochJ
+			})
 			result["submission_timeline"] = submissionTimeline
 		}
 	}
@@ -1608,6 +1621,181 @@ func (m *MonitorAPI) VPAStats(c *gin.Context) {
 	})
 }
 
+// @Summary Get epoch lifecycle tracking
+// @Description Track complete lifecycle of an epoch from release to submission, showing all stages and timing
+// @Tags vpa
+// @Produce json
+// @Param epochID path string true "Epoch ID to track"
+// @Param protocol query string false "Protocol state identifier (defaults to configured protocol)"
+// @Param market query string false "Data market address (defaults to configured market)"
+// @Success 200 {object} map[string]interface{} "Epoch lifecycle with all stages and timing"
+// @Router /vpa/epoch/{epochID}/lifecycle [get]
+func (m *MonitorAPI) EpochLifecycle(c *gin.Context) {
+	epochID := c.Param("epochID")
+	protocol := c.Query("protocol")
+	market := c.Query("market")
+
+	// Use specified protocol/market or fall back to NEW_DATA_MARKET_CONTRACT
+	kb := m.keyBuilder
+	if protocol != "" || market != "" {
+		if protocol == "" {
+			protocol = m.keyBuilder.ProtocolState
+		}
+		if market == "" {
+			market = m.keyBuilder.DataMarket
+		}
+		kb = keys.NewKeyBuilder(protocol, market)
+	} else {
+		if m.newDataMarket != "" {
+			protocolToUse := m.keyBuilder.ProtocolState
+			if m.newProtocolState != "" {
+				protocolToUse = m.newProtocolState
+			}
+			kb = keys.NewKeyBuilder(protocolToUse, m.newDataMarket)
+		}
+	}
+
+	lifecycle := make(map[string]interface{})
+	lifecycle["epoch_id"] = epochID
+	lifecycle["stages"] = make(map[string]interface{})
+
+	// Check epoch release (from epoch info)
+	epochInfoKey := fmt.Sprintf("epoch:%s:%s:info", kb.DataMarket, epochID)
+	info, err := m.redis.HGetAll(m.ctx, epochInfoKey).Result()
+	if err == nil && len(info) > 0 {
+		if releasedAt, ok := info["released_at"]; ok {
+			ts, _ := strconv.ParseInt(releasedAt, 10, 64)
+			lifecycle["stages"].(map[string]interface{})["released"] = map[string]interface{}{
+				"timestamp": ts,
+				"status":    "completed",
+				"details":   info,
+			}
+		}
+	} else {
+		lifecycle["stages"].(map[string]interface{})["released"] = map[string]interface{}{
+			"status": "missing",
+		}
+	}
+
+	// Check finalized batch
+	finalizedKey := kb.FinalizedBatch(epochID)
+	finalizedData, err := m.redis.Get(m.ctx, finalizedKey).Result()
+	if err == nil {
+		var batch map[string]interface{}
+		if json.Unmarshal([]byte(finalizedData), &batch) == nil {
+			if timestamp, ok := batch["timestamp"].(float64); ok {
+				lifecycle["stages"].(map[string]interface{})["finalized"] = map[string]interface{}{
+					"timestamp": int64(timestamp),
+					"status":    "completed",
+					"details":   batch,
+				}
+			}
+		}
+	} else {
+		lifecycle["stages"].(map[string]interface{})["finalized"] = map[string]interface{}{
+			"status": "missing",
+		}
+	}
+
+	// Check aggregated batch
+	aggregatedKey := kb.BatchAggregated(epochID)
+	aggregatedData, err := m.redis.Get(m.ctx, aggregatedKey).Result()
+	if err == nil {
+		var batch map[string]interface{}
+		if json.Unmarshal([]byte(aggregatedData), &batch) == nil {
+			if timestamp, ok := batch["timestamp"].(float64); ok {
+				lifecycle["stages"].(map[string]interface{})["aggregated"] = map[string]interface{}{
+					"timestamp": int64(timestamp),
+					"status":    "completed",
+					"details":   batch,
+				}
+			}
+		}
+	} else {
+		lifecycle["stages"].(map[string]interface{})["aggregated"] = map[string]interface{}{
+			"status": "missing",
+		}
+	}
+
+	// Check VPA priority
+	priorityKey := kb.VPAPriorityAssignment(epochID)
+	priorityData, err := m.redis.Get(m.ctx, priorityKey).Result()
+	if err == nil {
+		var priority map[string]interface{}
+		if json.Unmarshal([]byte(priorityData), &priority) == nil {
+			if timestamp, ok := priority["timestamp"].(float64); ok {
+				lifecycle["stages"].(map[string]interface{})["vpa_priority"] = map[string]interface{}{
+					"timestamp": int64(timestamp),
+					"status":    priority["status"],
+					"details":   priority,
+				}
+			}
+		}
+	} else {
+		lifecycle["stages"].(map[string]interface{})["vpa_priority"] = map[string]interface{}{
+			"status": "missing",
+		}
+	}
+
+	// Check VPA submission
+	submissionKey := kb.VPASubmissionResult(epochID)
+	submissionData, err := m.redis.Get(m.ctx, submissionKey).Result()
+	if err == nil {
+		var submission map[string]interface{}
+		if json.Unmarshal([]byte(submissionData), &submission) == nil {
+			if timestamp, ok := submission["timestamp"].(float64); ok {
+				lifecycle["stages"].(map[string]interface{})["vpa_submission"] = map[string]interface{}{
+					"timestamp": int64(timestamp),
+					"status":    submission["success"],
+					"details":   submission,
+				}
+			}
+		}
+	} else {
+		lifecycle["stages"].(map[string]interface{})["vpa_submission"] = map[string]interface{}{
+			"status": "missing",
+		}
+	}
+
+	// Calculate timing between stages
+	stages := lifecycle["stages"].(map[string]interface{})
+	if released, ok := stages["released"].(map[string]interface{}); ok {
+		if releasedTS, ok := released["timestamp"].(int64); ok {
+			if finalized, ok := stages["finalized"].(map[string]interface{}); ok {
+				if finalizedTS, ok := finalized["timestamp"].(int64); ok {
+					lifecycle["timing"] = map[string]interface{}{
+						"released_to_finalized_seconds": finalizedTS - releasedTS,
+					}
+				}
+			}
+			if aggregated, ok := stages["aggregated"].(map[string]interface{}); ok {
+				if aggregatedTS, ok := aggregated["timestamp"].(int64); ok {
+					if timing, ok := lifecycle["timing"].(map[string]interface{}); ok {
+						timing["released_to_aggregated_seconds"] = aggregatedTS - releasedTS
+					} else {
+						lifecycle["timing"] = map[string]interface{}{
+							"released_to_aggregated_seconds": aggregatedTS - releasedTS,
+						}
+					}
+				}
+			}
+			if submission, ok := stages["vpa_submission"].(map[string]interface{}); ok {
+				if submissionTS, ok := submission["timestamp"].(int64); ok {
+					if timing, ok := lifecycle["timing"].(map[string]interface{}); ok {
+						timing["released_to_submission_seconds"] = submissionTS - releasedTS
+					} else {
+						lifecycle["timing"] = map[string]interface{}{
+							"released_to_submission_seconds": submissionTS - releasedTS,
+						}
+					}
+				}
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, lifecycle)
+}
+
 func main() {
 	// Configure logger
 	log.SetFormatter(&logrus.JSONFormatter{})
@@ -1695,6 +1883,7 @@ func main() {
 
 		// VPA endpoints
 		v1.GET("/vpa/epoch/:epochID", api.VPAEpochStatus)
+		v1.GET("/vpa/epoch/:epochID/lifecycle", api.EpochLifecycle)
 		v1.GET("/vpa/timeline", api.VPATimeline)
 		v1.GET("/vpa/stats", api.VPAStats)
 	}
