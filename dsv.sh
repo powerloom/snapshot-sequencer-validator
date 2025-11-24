@@ -195,23 +195,23 @@ start_services() {
         print_color "$YELLOW" "Warning: .env file not found. Using defaults."
     fi
 
-    # Build profiles argument
-    local profiles=""
+    # Build profiles argument array
+    local profile_args=()
     if [ "$enable_monitoring" = true ]; then
-        profiles="$profiles --profile monitoring"
+        profile_args+=(--profile monitoring)
     fi
     if [ "$enable_ipfs" = true ]; then
-        profiles="$profiles --profile ipfs"
+        profile_args+=(--profile ipfs)
     fi
     if [ "$enable_vpa" = true ]; then
-        profiles="$profiles --profile vpa"
+        profile_args+=(--profile vpa)
     fi
 
     # Start services with specified profiles
     print_color "$CYAN" "Starting services..."
-    if [ -n "$profiles" ]; then
-        print_color "$CYAN" "With profiles:$profiles"
-        $DOCKER_COMPOSE_CMD $compose_args $profiles up -d --build
+    if [ ${#profile_args[@]} -gt 0 ]; then
+        print_color "$CYAN" "With profiles: ${profile_args[*]}"
+        $DOCKER_COMPOSE_CMD $compose_args "${profile_args[@]}" up -d --build
     else
         print_color "$CYAN" "Without additional profiles"
         $DOCKER_COMPOSE_CMD $compose_args up -d --build
