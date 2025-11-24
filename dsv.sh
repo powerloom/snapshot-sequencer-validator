@@ -209,29 +209,13 @@ start_services() {
 
     # Start services with specified profiles
     print_color "$CYAN" "Starting services..."
-    
-    # Build complete command array - handle "docker compose" vs "docker-compose"
-    local cmd_array=()
-    if [[ "$DOCKER_COMPOSE_CMD" == *" "* ]]; then
-        # Multi-word command - split it
-        IFS=' ' read -ra cmd_parts <<< "$DOCKER_COMPOSE_CMD"
-        cmd_array=("${cmd_parts[@]}")
-    else
-        # Single word command
-        cmd_array=("$DOCKER_COMPOSE_CMD")
-    fi
-    cmd_array+=(-f docker-compose.separated.yml)
-    
     if [ ${#profile_args[@]} -gt 0 ]; then
         print_color "$CYAN" "With profiles: ${profile_args[*]}"
-        cmd_array+=("${profile_args[@]}")
+        $DOCKER_COMPOSE_CMD $compose_args "${profile_args[@]}" up -d --build
     else
         print_color "$CYAN" "Without additional profiles"
+        $DOCKER_COMPOSE_CMD $compose_args up -d --build
     fi
-    cmd_array+=(up -d --build)
-    
-    # Execute the command
-    "${cmd_array[@]}"
 
     if [ $? -eq 0 ]; then
         print_color "$GREEN" "✅ Services started successfully"
@@ -667,7 +651,8 @@ show_service_logs() {
 # Main command handler
 case "${1:-}" in
     start|up)
-        start_services "$2"
+        shift
+        start_services "$@"
         ;;
     stop|down)
         stop_services
@@ -675,7 +660,8 @@ case "${1:-}" in
     restart)
         stop_services
         sleep 2
-        start_services "$2"
+        shift
+        start_services "$@"
         ;;
     status|ps)
         show_status
