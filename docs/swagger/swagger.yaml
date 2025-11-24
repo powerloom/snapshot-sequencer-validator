@@ -15,21 +15,55 @@ definitions:
     type: object
   main.DashboardSummary:
     properties:
-      current_stats:
+      current_status:
         additionalProperties: true
-        description: From stats:current
+        description: Real-time status (epoch, queues)
         type: object
-      metrics:
+      participation_stats:
         additionalProperties: true
-        description: From dashboard:summary
+        description: 24h participation/inclusion metrics
         type: object
       recent_activity:
         additionalProperties: true
         description: 1m and 5m activity
         type: object
+      system_metrics:
+        additionalProperties: true
+        description: Rates, totals, current counts (includes VPA metrics)
+        type: object
       timestamp:
         type: string
       validator_id:
+        type: string
+      vpa_metrics:
+        additionalProperties: true
+        description: VPA-specific metrics (priority assignments, submissions)
+        type: object
+    type: object
+  main.EnhancedTimelineEvent:
+    properties:
+      entity_id:
+        type: string
+      metadata:
+        $ref: '#/definitions/main.TimelineEventMetadata'
+      time:
+        type: string
+      timestamp:
+        type: integer
+    type: object
+  main.EnhancedTimelineResponse:
+    properties:
+      count:
+        type: integer
+      events:
+        items:
+          $ref: '#/definitions/main.EnhancedTimelineEvent'
+        type: array
+      minutes:
+        type: integer
+      timestamp:
+        type: string
+      type:
         type: string
     type: object
   main.EpochInfo:
@@ -101,6 +135,59 @@ definitions:
         type: string
       status:
         description: '"empty", "healthy", "moderate", "high", "critical"'
+        type: string
+    type: object
+  main.TimelineEventMetadata:
+    properties:
+      data_market:
+        type: string
+      epoch_id:
+        type: string
+      event_type:
+        description: '"submission", "validation", "batch", "epoch"'
+        type: string
+      is_enhanced:
+        description: Whether entity ID uses new enhanced format
+        type: boolean
+      peer_id:
+        type: string
+      project_id:
+        type: string
+      slot_id:
+        type: string
+      submission_type:
+        description: '"snapshot", "validation"'
+        type: string
+      validator_id:
+        type: string
+    type: object
+  main.VPAEpochStatusResponse:
+    properties:
+      epoch_id:
+        type: string
+      status:
+        additionalProperties: true
+        description: Combined priority and submission status
+        type: object
+      timestamp:
+        type: string
+    type: object
+  main.VPAStatsResponse:
+    properties:
+      stats:
+        additionalProperties: true
+        description: Contains priority assignments, submissions, success rates, etc.
+        type: object
+      timestamp:
+        type: string
+    type: object
+  main.VPATimelineResponse:
+    properties:
+      timeline:
+        additionalProperties: true
+        description: Contains "priority_timeline" and/or "submission_timeline"
+        type: object
+      timestamp:
         type: string
     type: object
 info:
@@ -231,6 +318,15 @@ paths:
   /pipeline/overview:
     get:
       description: Get pipeline metrics from pre-aggregated data
+      parameters:
+      - description: Protocol state identifier
+        in: query
+        name: protocol
+        type: string
+      - description: Data market address
+        in: query
+        name: market
+        type: string
       produces:
       - application/json
       responses:
@@ -316,7 +412,7 @@ paths:
       - stats
   /timeline/recent:
     get:
-      description: Get recent events from timeline sorted sets
+      description: Get recent events from timeline sorted sets with enriched metadata
       parameters:
       - description: Event type (submission, validation, epoch, batch)
         in: query
@@ -326,15 +422,114 @@ paths:
         in: query
         name: minutes
         type: integer
+      - description: Include detailed metadata from Redis (default true)
+        in: query
+        name: include_metadata
+        type: boolean
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            additionalProperties: true
-            type: object
+            $ref: '#/definitions/main.EnhancedTimelineResponse'
       summary: Recent timeline
       tags:
       - timeline
+  /vpa/epoch/{epochID}:
+    get:
+      description: Get priority assignment and submission status for a specific epoch.
+        Returns combined priority and submission information including priority details
+        and submission details if available.
+      parameters:
+      - description: Epoch ID
+        in: path
+        name: epochID
+        required: true
+        type: string
+      - description: Protocol state identifier (defaults to configured protocol)
+        in: query
+        name: protocol
+        type: string
+      - description: Data market address (defaults to configured market)
+        in: query
+        name: market
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: VPA epoch status with priority and submission information
+          schema:
+            $ref: '#/definitions/main.VPAEpochStatusResponse'
+        "404":
+          description: Epoch not found
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal server error
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Get VPA status for specific epoch
+      tags:
+      - vpa
+  /vpa/stats:
+    get:
+      description: Get aggregated VPA statistics including total priority assignments,
+        submission counts (success/failed), success rates, and 24-hour activity counts.
+      parameters:
+      - description: Protocol state identifier (defaults to configured protocol)
+        in: query
+        name: protocol
+        type: string
+      - description: Data market address (defaults to configured market)
+        in: query
+        name: market
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Aggregated VPA statistics
+          schema:
+            $ref: '#/definitions/main.VPAStatsResponse'
+      summary: Get VPA statistics
+      tags:
+      - vpa
+  /vpa/timeline:
+    get:
+      description: Get priority assignment and submission timeline. Returns recent
+        priority assignments and/or submissions ordered by timestamp (most recent
+        first).
+      parameters:
+      - description: Protocol state identifier (defaults to configured protocol)
+        in: query
+        name: protocol
+        type: string
+      - description: Data market address (defaults to configured market)
+        in: query
+        name: market
+        type: string
+      - description: 'Timeline type: ''priority'', ''submission'', or ''both'' (default:
+          ''both'')'
+        in: query
+        name: type
+        type: string
+      - description: 'Number of entries to retrieve per timeline type (default: 50,
+          max: 1000)'
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: VPA timeline with priority and/or submission entries
+          schema:
+            $ref: '#/definitions/main.VPATimelineResponse'
+      summary: Get VPA timeline
+      tags:
+      - vpa
 swagger: "2.0"

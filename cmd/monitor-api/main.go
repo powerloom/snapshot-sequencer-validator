@@ -122,6 +122,33 @@ type EnhancedTimelineResponse struct {
 	Timestamp time.Time               `json:"timestamp"`
 }
 
+// VPAEpochStatusResponse represents VPA status for a specific epoch
+type VPAEpochStatusResponse struct {
+	EpochID   string                 `json:"epoch_id"`
+	Status    map[string]interface{} `json:"status"` // Combined priority and submission status
+	Timestamp time.Time              `json:"timestamp"`
+}
+
+// VPATimelineEntry represents a single timeline entry for priority or submission
+type VPATimelineEntry struct {
+	EpochID   string `json:"epoch_id"`
+	Priority  string `json:"priority"`
+	Status    string `json:"status"`
+	Timestamp int64  `json:"timestamp"`
+}
+
+// VPATimelineResponse represents the VPA timeline response
+type VPATimelineResponse struct {
+	Timeline  map[string]interface{} `json:"timeline"` // Contains "priority_timeline" and/or "submission_timeline"
+	Timestamp time.Time              `json:"timestamp"`
+}
+
+// VPAStatsResponse represents aggregated VPA statistics
+type VPAStatsResponse struct {
+	Stats     map[string]interface{} `json:"stats"` // Contains priority assignments, submissions, success rates, etc.
+	Timestamp time.Time              `json:"timestamp"`
+}
+
 func NewMonitorAPI(redisClient *redis.Client, protocol, market string) *MonitorAPI {
 	return &MonitorAPI{
 		redis:      redisClient,
@@ -1313,13 +1340,15 @@ func getEnv(key, defaultValue string) string {
 }
 
 // @Summary Get VPA status for specific epoch
-// @Description Get priority assignment and submission status for a specific epoch
+// @Description Get priority assignment and submission status for a specific epoch. Returns combined priority and submission information including priority details and submission details if available.
 // @Tags vpa
 // @Produce json
 // @Param epochID path string true "Epoch ID"
-// @Param protocol query string false "Protocol state identifier"
-// @Param market query string false "Data market address"
-// @Success 200 {object} map[string]interface{}
+// @Param protocol query string false "Protocol state identifier (defaults to configured protocol)"
+// @Param market query string false "Data market address (defaults to configured market)"
+// @Success 200 {object} VPAEpochStatusResponse "VPA epoch status with priority and submission information"
+// @Failure 404 {object} map[string]interface{} "Epoch not found"
+// @Failure 500 {object} map[string]interface{} "Internal server error"
 // @Router /vpa/epoch/{epochID} [get]
 func (m *MonitorAPI) VPAEpochStatus(c *gin.Context) {
 	epochID := c.Param("epochID")
@@ -1385,14 +1414,14 @@ func (m *MonitorAPI) VPAEpochStatus(c *gin.Context) {
 }
 
 // @Summary Get VPA timeline
-// @Description Get priority assignment and submission timeline
+// @Description Get priority assignment and submission timeline. Returns recent priority assignments and/or submissions ordered by timestamp (most recent first).
 // @Tags vpa
 // @Produce json
-// @Param protocol query string false "Protocol state identifier"
-// @Param market query string false "Data market address"
-// @Param type query string false "Timeline type: priority, submission, or both (default both)"
-// @Param limit query int false "Number of entries to retrieve (default 50)"
-// @Success 200 {object} map[string]interface{}
+// @Param protocol query string false "Protocol state identifier (defaults to configured protocol)"
+// @Param market query string false "Data market address (defaults to configured market)"
+// @Param type query string false "Timeline type: 'priority', 'submission', or 'both' (default: 'both')"
+// @Param limit query int false "Number of entries to retrieve per timeline type (default: 50, max: 1000)"
+// @Success 200 {object} VPATimelineResponse "VPA timeline with priority and/or submission entries"
 // @Router /vpa/timeline [get]
 func (m *MonitorAPI) VPATimeline(c *gin.Context) {
 	protocol := c.Query("protocol")
@@ -1470,12 +1499,12 @@ func (m *MonitorAPI) VPATimeline(c *gin.Context) {
 }
 
 // @Summary Get VPA statistics
-// @Description Get aggregated VPA statistics (priority assignments, submissions, success rates)
+// @Description Get aggregated VPA statistics including total priority assignments, submission counts (success/failed), success rates, and 24-hour activity counts.
 // @Tags vpa
 // @Produce json
-// @Param protocol query string false "Protocol state identifier"
-// @Param market query string false "Data market address"
-// @Success 200 {object} map[string]interface{}
+// @Param protocol query string false "Protocol state identifier (defaults to configured protocol)"
+// @Param market query string false "Data market address (defaults to configured market)"
+// @Success 200 {object} VPAStatsResponse "Aggregated VPA statistics"
 // @Router /vpa/stats [get]
 func (m *MonitorAPI) VPAStats(c *gin.Context) {
 	protocol := c.Query("protocol")

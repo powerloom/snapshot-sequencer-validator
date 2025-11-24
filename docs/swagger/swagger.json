@@ -200,6 +200,20 @@
                     "pipeline"
                 ],
                 "summary": "Pipeline overview (legacy support)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -324,7 +338,7 @@
         },
         "/timeline/recent": {
             "get": {
-                "description": "Get recent events from timeline sorted sets",
+                "description": "Get recent events from timeline sorted sets with enriched metadata",
                 "produces": [
                     "application/json"
                 ],
@@ -344,14 +358,154 @@
                         "description": "Minutes to look back (default 5)",
                         "name": "minutes",
                         "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Include detailed metadata from Redis (default true)",
+                        "name": "include_metadata",
+                        "in": "query"
                     }
                 ],
                 "responses": {
                     "200": {
                         "description": "OK",
                         "schema": {
+                            "$ref": "#/definitions/main.EnhancedTimelineResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/vpa/epoch/{epochID}": {
+            "get": {
+                "description": "Get priority assignment and submission status for a specific epoch. Returns combined priority and submission information including priority details and submission details if available.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "vpa"
+                ],
+                "summary": "Get VPA status for specific epoch",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Epoch ID",
+                        "name": "epochID",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier (defaults to configured protocol)",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address (defaults to configured market)",
+                        "name": "market",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "VPA epoch status with priority and submission information",
+                        "schema": {
+                            "$ref": "#/definitions/main.VPAEpochStatusResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Epoch not found",
+                        "schema": {
                             "type": "object",
                             "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/vpa/stats": {
+            "get": {
+                "description": "Get aggregated VPA statistics including total priority assignments, submission counts (success/failed), success rates, and 24-hour activity counts.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "vpa"
+                ],
+                "summary": "Get VPA statistics",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier (defaults to configured protocol)",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address (defaults to configured market)",
+                        "name": "market",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Aggregated VPA statistics",
+                        "schema": {
+                            "$ref": "#/definitions/main.VPAStatsResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/vpa/timeline": {
+            "get": {
+                "description": "Get priority assignment and submission timeline. Returns recent priority assignments and/or submissions ordered by timestamp (most recent first).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "vpa"
+                ],
+                "summary": "Get VPA timeline",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier (defaults to configured protocol)",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address (defaults to configured market)",
+                        "name": "market",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Timeline type: 'priority', 'submission', or 'both' (default: 'both')",
+                        "name": "type",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Number of entries to retrieve per timeline type (default: 50, max: 1000)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "VPA timeline with priority and/or submission entries",
+                        "schema": {
+                            "$ref": "#/definitions/main.VPATimelineResponse"
                         }
                     }
                 }
@@ -381,13 +535,13 @@
         "main.DashboardSummary": {
             "type": "object",
             "properties": {
-                "current_stats": {
-                    "description": "From stats:current",
+                "current_status": {
+                    "description": "Real-time status (epoch, queues)",
                     "type": "object",
                     "additionalProperties": true
                 },
-                "metrics": {
-                    "description": "From dashboard:summary",
+                "participation_stats": {
+                    "description": "24h participation/inclusion metrics",
                     "type": "object",
                     "additionalProperties": true
                 },
@@ -396,10 +550,60 @@
                     "type": "object",
                     "additionalProperties": true
                 },
+                "system_metrics": {
+                    "description": "Rates, totals, current counts (includes VPA metrics)",
+                    "type": "object",
+                    "additionalProperties": true
+                },
                 "timestamp": {
                     "type": "string"
                 },
                 "validator_id": {
+                    "type": "string"
+                },
+                "vpa_metrics": {
+                    "description": "VPA-specific metrics (priority assignments, submissions)",
+                    "type": "object",
+                    "additionalProperties": true
+                }
+            }
+        },
+        "main.EnhancedTimelineEvent": {
+            "type": "object",
+            "properties": {
+                "entity_id": {
+                    "type": "string"
+                },
+                "metadata": {
+                    "$ref": "#/definitions/main.TimelineEventMetadata"
+                },
+                "time": {
+                    "type": "string"
+                },
+                "timestamp": {
+                    "type": "integer"
+                }
+            }
+        },
+        "main.EnhancedTimelineResponse": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "events": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/main.EnhancedTimelineEvent"
+                    }
+                },
+                "minutes": {
+                    "type": "integer"
+                },
+                "timestamp": {
+                    "type": "string"
+                },
+                "type": {
                     "type": "string"
                 }
             }
@@ -504,6 +708,83 @@
                 },
                 "status": {
                     "description": "\"empty\", \"healthy\", \"moderate\", \"high\", \"critical\"",
+                    "type": "string"
+                }
+            }
+        },
+        "main.TimelineEventMetadata": {
+            "type": "object",
+            "properties": {
+                "data_market": {
+                    "type": "string"
+                },
+                "epoch_id": {
+                    "type": "string"
+                },
+                "event_type": {
+                    "description": "\"submission\", \"validation\", \"batch\", \"epoch\"",
+                    "type": "string"
+                },
+                "is_enhanced": {
+                    "description": "Whether entity ID uses new enhanced format",
+                    "type": "boolean"
+                },
+                "peer_id": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "slot_id": {
+                    "type": "string"
+                },
+                "submission_type": {
+                    "description": "\"snapshot\", \"validation\"",
+                    "type": "string"
+                },
+                "validator_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "main.VPAEpochStatusResponse": {
+            "type": "object",
+            "properties": {
+                "epoch_id": {
+                    "type": "string"
+                },
+                "status": {
+                    "description": "Combined priority and submission status",
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "timestamp": {
+                    "type": "string"
+                }
+            }
+        },
+        "main.VPAStatsResponse": {
+            "type": "object",
+            "properties": {
+                "stats": {
+                    "description": "Contains priority assignments, submissions, success rates, etc.",
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "timestamp": {
+                    "type": "string"
+                }
+            }
+        },
+        "main.VPATimelineResponse": {
+            "type": "object",
+            "properties": {
+                "timeline": {
+                    "description": "Contains \"priority_timeline\" and/or \"submission_timeline\"",
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "timestamp": {
                     "type": "string"
                 }
             }

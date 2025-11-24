@@ -81,6 +81,15 @@ lint:
 	@echo "Running linter..."
 	@golangci-lint run
 
+# Generate Swagger documentation
+swagger:
+	@echo "Generating Swagger documentation..."
+	@swag init -g cmd/monitor-api/main.go -o docs/swagger
+	@echo "Fixing generated docs.go (removing unsupported fields)..."
+	@sed -i '' '/LeftDelim:/d' docs/swagger/docs.go || sed -i '/LeftDelim:/d' docs/swagger/docs.go
+	@sed -i '' '/RightDelim:/d' docs/swagger/docs.go || sed -i '/RightDelim:/d' docs/swagger/docs.go
+	@echo "Swagger documentation generated successfully"
+
 # Display help
 help:
 	@echo "Available targets:"
@@ -97,4 +106,5 @@ help:
 	@echo "  make deps          - Install/update dependencies"
 	@echo "  make fmt           - Format code"
 	@echo "  make lint          - Run linter"
+	@echo "  make swagger       - Generate Swagger documentation"
 	@echo "  make help          - Show this help"
