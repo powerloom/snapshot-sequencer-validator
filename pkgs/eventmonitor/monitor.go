@@ -731,9 +731,23 @@ func (m *EventMonitor) handleEpochReleased(event *EpochReleasedEvent) {
 		if !m.newDataMarketContracts[dataMarketLower] {
 			log.WithFields(log.Fields{
 				"data_market": dataMarketAddr,
-			}).Debug("Skipping window config fetch - legacy data market (does not support getSubmissionWindowConfig)")
-			windowDuration = m.windowDuration
-			useFallback = true
+			}).Debug("Legacy data market - fetching snapshotSubmissionWindow from legacy ProtocolState contract")
+			// For legacy contracts, query snapshotSubmissionWindow() function
+			legacyWindow, err := m.fetchLegacySubmissionWindow(dataMarketAddr)
+			if err != nil {
+				log.WithError(err).WithFields(log.Fields{
+					"data_market": dataMarketAddr,
+				}).Warn("⚠️  Failed to fetch snapshotSubmissionWindow from legacy contract, using fallback duration")
+				windowDuration = m.windowDuration
+				useFallback = true
+			} else {
+				windowDuration = time.Duration(legacyWindow.Uint64()) * time.Second
+				log.WithFields(log.Fields{
+					"data_market":      dataMarketAddr,
+					"window_duration": windowDuration,
+					"source":          "legacy_contract_snapshotSubmissionWindow",
+				}).Info("✅ Using snapshotSubmissionWindow from legacy ProtocolState contract")
+			}
 		} else {
 			log.WithFields(log.Fields{
 				"data_market": dataMarketAddr,
@@ -777,9 +791,25 @@ func (m *EventMonitor) handleEpochReleased(event *EpochReleasedEvent) {
 			}
 		}
 	} else {
-		windowDuration = m.windowDuration
-		useFallback = true
-		log.WithField("data_market", dataMarketAddr).Debug("Using fallback window duration (window config fetcher not initialized)")
+		// Window config fetcher not initialized - try to query legacy contract directly
+		log.WithFields(log.Fields{
+			"data_market": dataMarketAddr,
+		}).Debug("Window config fetcher not initialized - fetching snapshotSubmissionWindow from legacy ProtocolState contract")
+		legacyWindow, err := m.fetchLegacySubmissionWindow(dataMarketAddr)
+		if err != nil {
+			log.WithError(err).WithFields(log.Fields{
+				"data_market": dataMarketAddr,
+			}).Warn("⚠️  Failed to fetch snapshotSubmissionWindow from legacy contract, using fallback duration")
+			windowDuration = m.windowDuration
+			useFallback = true
+		} else {
+			windowDuration = time.Duration(legacyWindow.Uint64()) * time.Second
+			log.WithFields(log.Fields{
+				"data_market":      dataMarketAddr,
+				"window_duration": windowDuration,
+				"source":          "legacy_contract_snapshotSubmissionWindow",
+			}).Info("✅ Using snapshotSubmissionWindow from legacy ProtocolState contract")
+		}
 	}
 
 	// Skip old epochs whose windows would have already expired
@@ -833,10 +863,12 @@ func (m *EventMonitor) handleEpochReleased(event *EpochReleasedEvent) {
 		log.Errorf("Failed to store epoch info: %v", err)
 	}
 
-	// Start submission window - this window closes when Level 1 finalization should begin
-	// Duration varies:
-	//   - If snapshot commit/reveal enabled: snapshotCommitWindow + snapshotRevealWindow (snapshot reveal closes)
-	//   - If snapshot commit/reveal disabled: preSubmissionWindow + p1SubmissionWindow (P1 window closes)
+	// Start submission window - this window is for collecting snapshot CIDs from snapshotter nodes
+	// Window closes when Level 1 finalization should begin
+	// Duration varies by contract type:
+	//   - Legacy contracts: Queries snapshotSubmissionWindow(dataMarket) function (typically 20 seconds)
+	//   - New contracts with snapshot commit/reveal enabled: snapshotCommitWindow + snapshotRevealWindow (snapshot reveal closes)
+	//   - New contracts without snapshot commit/reveal: preSubmissionWindow + p1SubmissionWindow (P1 window closes)
 	// When window closes, triggerFinalization() is called to begin Level 1 local finalization
 	// Note: Validator vote commit/reveal is a separate workflow and doesn't affect this timing
 	if err := m.windowManager.StartSubmissionWindow(
@@ -1016,7 +1048,8 @@ func (wm *WindowManager) closeWindow(dataMarket string, epochID *big.Int) {
 }
 
 func (wm *WindowManager) triggerFinalization(dataMarket string, epochID *big.Int, _ uint64) {
-	// First, collect all submissions for this epoch from Redis
+	// Submission window has closed - collect all snapshot CIDs that were submitted during the window
+	// These snapshot CIDs will be aggregated into a finalized batch during Level 1 aggregation
 	submissions := wm.collectEpochSubmissions(dataMarket, epochID)
 
 	// Split submissions into smaller batches for parallel processing
@@ -1247,6 +1280,38 @@ func (wm *WindowManager) getKeyBuilder(dataMarket string) *rediskeys.KeyBuilder 
 	kb := rediskeys.NewKeyBuilder(wm.protocolState, dataMarket)
 	wm.keyBuilders[dataMarket] = kb
 	return kb
+}
+
+// fetchLegacySubmissionWindow queries the legacy ProtocolState contract's snapshotSubmissionWindow function
+func (m *EventMonitor) fetchLegacySubmissionWindow(dataMarketAddr string) (*big.Int, error) {
+	if m.contractABI == nil {
+		return nil, fmt.Errorf("contract ABI not loaded")
+	}
+
+	// Pack the function call: snapshotSubmissionWindow(address dataMarket)
+	dataMarket := common.HexToAddress(dataMarketAddr)
+	packedData, err := m.contractABI.GetABI().Pack("snapshotSubmissionWindow", dataMarket)
+	if err != nil {
+		return nil, fmt.Errorf("failed to pack snapshotSubmissionWindow call: %w", err)
+	}
+
+	// Call the contract
+	result, err := m.rpcHelper.CallContract(m.ctx, ethereum.CallMsg{
+		To:   &m.contractAddr,
+		Data: packedData,
+	}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call snapshotSubmissionWindow: %w", err)
+	}
+
+	// Unpack the result (returns uint256)
+	var windowSeconds *big.Int
+	err = m.contractABI.GetABI().UnpackIntoInterface(&windowSeconds, "snapshotSubmissionWindow", result)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unpack snapshotSubmissionWindow result: %w", err)
+	}
+
+	return windowSeconds, nil
 }
 
 func (wm *WindowManager) IsWindowOpen(dataMarket string, epochID *big.Int) bool {
