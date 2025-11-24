@@ -1177,104 +1177,6 @@ func (a *Aggregator) createAggregatedBatch(ourBatch *consensus.FinalizedBatch, i
 	return aggregated
 }
 
-func (a *Aggregator) monitorFinalizedBatches() {
-	// Watch for new finalized batches from our finalizer
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
-
-	queuedEpochs := make(map[string]bool)
-	lastCleanup := time.Now()
-
-	for {
-		select {
-		case <-a.ctx.Done():
-			return
-		case <-ticker.C:
-			// Periodic cleanup of queued tracking (every 5 minutes)
-			if time.Since(lastCleanup) > 5*time.Minute {
-				queuedEpochs = make(map[string]bool)
-				lastCleanup = time.Now()
-				log.Debug("Reset queued epochs tracking")
-			}
-
-			// Check for finalized batches using timeline entries (matches monitoring API)
-			// Get recent local finalized entries from timeline (Level 1 batches ready for Level 2 aggregation)
-			timelineKey := a.keyBuilder.MetricsBatchesTimeline()
-			timelineEntries, err := a.redisClient.ZRevRangeByScoreWithScores(a.ctx, timelineKey, &redis.ZRangeBy{
-				Min:   strconv.FormatInt(time.Now().Unix()-3600, 10), // Last hour
-				Max:   "+inf",
-				Count: 1000,
-			}).Result()
-			if err != nil {
-				log.WithError(err).Debug("Failed to get timeline entries")
-				continue
-			}
-
-			// Count local finalized entries from timeline (Level 1 batches ready for Level 2 aggregation)
-			finalizedCount := 0
-			for _, entry := range timelineEntries {
-				if strings.HasPrefix(entry.Member.(string), "local:") {
-					finalizedCount++
-				}
-			}
-
-			newBatchesFound := 0
-			// Process each recent local finalized batch from timeline (Level 1 → needs Level 2 aggregation)
-			for _, entry := range timelineEntries {
-				if !strings.HasPrefix(entry.Member.(string), "local:") {
-					continue
-				}
-
-				epochID := strings.TrimPrefix(entry.Member.(string), "local:")
-
-				// Skip if already queued this session
-				if queuedEpochs[epochID] {
-					continue
-				}
-
-				// Check if we've already processed this epoch - namespaced
-				aggregatedKey := a.keyBuilder.BatchAggregated(epochID)
-				exists, err := a.redisClient.Exists(a.ctx, aggregatedKey).Result()
-				if err != nil {
-					log.WithError(err).Warn("Failed to check aggregated status")
-					continue
-				}
-				if exists > 0 {
-					// Already aggregated, mark as queued to avoid re-checking
-					queuedEpochs[epochID] = true
-					continue
-				}
-
-				// Check if finalized batch exists for this epoch
-				finalizedKey := a.keyBuilder.FinalizedBatch(epochID)
-				exists, err = a.redisClient.Exists(a.ctx, finalizedKey).Result()
-				if err != nil || exists == 0 {
-					continue // No finalized batch yet
-				}
-
-				// Add to aggregation queue - namespaced
-				aggQueue := a.keyBuilder.AggregationQueue()
-				if err := a.redisClient.LPush(a.ctx, aggQueue, epochID).Err(); err != nil {
-					log.WithError(err).Error("Failed to queue epoch for aggregation")
-				} else {
-					queuedEpochs[epochID] = true
-					newBatchesFound++
-					log.WithField("epoch", epochID).Info("Aggregator: Queued NEW epoch for aggregation")
-				}
-			}
-
-			if len(timelineEntries) > 0 {
-				log.WithFields(logrus.Fields{
-					"active_epochs":     len(timelineEntries),
-					"finalized_batches": finalizedCount,
-					"new_queued":        newBatchesFound,
-					"already_tracked":   len(queuedEpochs) - newBatchesFound,
-				}).Debug("Monitor check completed")
-			}
-		}
-	}
-}
-
 func (a *Aggregator) reportMetrics() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -1748,10 +1650,12 @@ func (a *Aggregator) storePriorityCheck(epochID uint64, dataMarketAddr string, p
 
 	epochIDStr := strconv.FormatUint(epochID, 10)
 	timestamp := time.Now().Unix()
-	protocol := a.keyBuilder.ProtocolState
+
+	// Create KeyBuilder for this data market (namespaced)
+	kb := rediskeys.NewKeyBuilder(a.keyBuilder.ProtocolState, dataMarketAddr)
 
 	// Store priority assignment per epoch
-	priorityKey := fmt.Sprintf("%s:vpa:priority:%s:%s", protocol, dataMarketAddr, epochIDStr)
+	priorityKey := kb.VPAPriorityAssignment(epochIDStr)
 	priorityData := map[string]interface{}{
 		"epoch_id":    epochIDStr,
 		"priority":    priority,
@@ -1763,15 +1667,15 @@ func (a *Aggregator) storePriorityCheck(epochID uint64, dataMarketAddr string, p
 	jsonData, _ := json.Marshal(priorityData)
 	a.redisClient.SetEx(a.ctx, priorityKey, string(jsonData), 7*24*time.Hour) // Keep for 7 days
 
-	// Add to priority timeline for historical tracking
-	timelineKey := fmt.Sprintf("%s:vpa:priority:timeline", protocol)
+	// Add to priority timeline for historical tracking (namespaced by protocol:market)
+	timelineKey := kb.VPAPriorityTimeline()
 	a.redisClient.ZAdd(a.ctx, timelineKey, redis.Z{
 		Score:  float64(timestamp),
-		Member: fmt.Sprintf("%s:%s:%d:%s", dataMarketAddr, epochIDStr, priority, status),
+		Member: fmt.Sprintf("%s:%d:%s", epochIDStr, priority, status),
 	})
 
-	// Update priority statistics
-	statsKey := fmt.Sprintf("%s:vpa:stats:%s", protocol, dataMarketAddr)
+	// Update priority statistics (namespaced by protocol:market)
+	statsKey := kb.VPAStats()
 	if priority > 0 {
 		a.redisClient.HIncrBy(a.ctx, statsKey, "total_priority_assignments", 1)
 		a.redisClient.HIncrBy(a.ctx, statsKey, fmt.Sprintf("priority_%d_count", priority), 1)
@@ -1779,6 +1683,19 @@ func (a *Aggregator) storePriorityCheck(epochID uint64, dataMarketAddr string, p
 		a.redisClient.HIncrBy(a.ctx, statsKey, "no_priority_count", 1)
 	}
 	a.redisClient.Expire(a.ctx, statsKey, 7*24*time.Hour)
+
+	// Store combined epoch status (priority + submission status)
+	epochStatusKey := kb.VPAEpochStatus(epochIDStr)
+	epochStatusData := map[string]interface{}{
+		"epoch_id":        epochIDStr,
+		"priority":        priority,
+		"priority_status": status,
+		"timestamp":       timestamp,
+		"data_market":     dataMarketAddr,
+		"validator":       a.config.VPAValidatorAddress,
+	}
+	statusJsonData, _ := json.Marshal(epochStatusData)
+	a.redisClient.SetEx(a.ctx, epochStatusKey, string(statusJsonData), 7*24*time.Hour)
 }
 
 // storeSubmissionMetrics stores submission attempt results in Redis for monitoring
@@ -1789,10 +1706,12 @@ func (a *Aggregator) storeSubmissionMetrics(epochID uint64, dataMarketAddr strin
 
 	epochIDStr := strconv.FormatUint(epochID, 10)
 	timestamp := time.Now().Unix()
-	protocol := a.keyBuilder.ProtocolState
+
+	// Create KeyBuilder for this data market (namespaced)
+	kb := rediskeys.NewKeyBuilder(a.keyBuilder.ProtocolState, dataMarketAddr)
 
 	// Store submission result per epoch
-	submissionKey := fmt.Sprintf("%s:vpa:submission:%s:%s", protocol, dataMarketAddr, epochIDStr)
+	submissionKey := kb.VPASubmissionResult(epochIDStr)
 	submissionData := map[string]interface{}{
 		"epoch_id":     epochIDStr,
 		"priority":     priority,
@@ -1806,19 +1725,19 @@ func (a *Aggregator) storeSubmissionMetrics(epochID uint64, dataMarketAddr strin
 	jsonData, _ := json.Marshal(submissionData)
 	a.redisClient.SetEx(a.ctx, submissionKey, string(jsonData), 7*24*time.Hour) // Keep for 7 days
 
-	// Add to submission timeline
-	timelineKey := fmt.Sprintf("%s:vpa:submission:timeline", protocol)
+	// Add to submission timeline (namespaced by protocol:market)
+	timelineKey := kb.VPASubmissionTimeline()
 	status := "success"
 	if !success {
 		status = "failed"
 	}
 	a.redisClient.ZAdd(a.ctx, timelineKey, redis.Z{
 		Score:  float64(timestamp),
-		Member: fmt.Sprintf("%s:%s:%d:%s", dataMarketAddr, epochIDStr, priority, status),
+		Member: fmt.Sprintf("%s:%d:%s", epochIDStr, priority, status),
 	})
 
-	// Update submission statistics
-	statsKey := fmt.Sprintf("%s:vpa:stats:%s", protocol, dataMarketAddr)
+	// Update submission statistics (namespaced by protocol:market)
+	statsKey := kb.VPAStats()
 	if success {
 		a.redisClient.HIncrBy(a.ctx, statsKey, "total_submissions_success", 1)
 		a.redisClient.HIncrBy(a.ctx, statsKey, fmt.Sprintf("priority_%d_submissions_success", priority), 1)
@@ -1827,6 +1746,27 @@ func (a *Aggregator) storeSubmissionMetrics(epochID uint64, dataMarketAddr strin
 		a.redisClient.HIncrBy(a.ctx, statsKey, fmt.Sprintf("priority_%d_submissions_failed", priority), 1)
 	}
 	a.redisClient.Expire(a.ctx, statsKey, 7*24*time.Hour)
+
+	// Update combined epoch status (priority + submission status)
+	epochStatusKey := kb.VPAEpochStatus(epochIDStr)
+	// Read existing status if available
+	var epochStatusData map[string]interface{}
+	existingStatus, err := a.redisClient.Get(a.ctx, epochStatusKey).Result()
+	if err == nil && existingStatus != "" {
+		json.Unmarshal([]byte(existingStatus), &epochStatusData)
+	} else {
+		epochStatusData = make(map[string]interface{})
+		epochStatusData["epoch_id"] = epochIDStr
+		epochStatusData["data_market"] = dataMarketAddr
+		epochStatusData["validator"] = a.config.VPAValidatorAddress
+	}
+	// Update submission fields
+	epochStatusData["submission_success"] = success
+	epochStatusData["submission_tx_hash"] = txHash
+	epochStatusData["submission_block_number"] = blockNumber
+	epochStatusData["submission_timestamp"] = timestamp
+	statusJsonData, _ := json.Marshal(epochStatusData)
+	a.redisClient.SetEx(a.ctx, epochStatusKey, string(statusJsonData), 7*24*time.Hour)
 }
 
 func main() {

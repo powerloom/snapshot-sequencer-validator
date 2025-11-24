@@ -133,6 +133,44 @@ func (kb *KeyBuilder) VPASubmissionQueue() string {
 	return fmt.Sprintf("%s:%s:vpa:submission:queue", kb.ProtocolState, kb.DataMarket)
 }
 
+// VPA Monitoring Keys
+
+// VPAPriorityAssignment returns the key for priority assignment per epoch
+// Format: {protocol}:{market}:vpa:priority:{epochID}
+func (kb *KeyBuilder) VPAPriorityAssignment(epochID string) string {
+	return fmt.Sprintf("%s:%s:vpa:priority:%s", kb.ProtocolState, kb.DataMarket, epochID)
+}
+
+// VPASubmissionResult returns the key for submission result per epoch
+// Format: {protocol}:{market}:vpa:submission:{epochID}
+func (kb *KeyBuilder) VPASubmissionResult(epochID string) string {
+	return fmt.Sprintf("%s:%s:vpa:submission:%s", kb.ProtocolState, kb.DataMarket, epochID)
+}
+
+// VPAPriorityTimeline returns the key for priority assignment timeline (namespaced by protocol:market)
+// Format: {protocol}:{market}:vpa:priority:timeline
+func (kb *KeyBuilder) VPAPriorityTimeline() string {
+	return fmt.Sprintf("%s:%s:vpa:priority:timeline", kb.ProtocolState, kb.DataMarket)
+}
+
+// VPASubmissionTimeline returns the key for submission timeline (namespaced by protocol:market)
+// Format: {protocol}:{market}:vpa:submission:timeline
+func (kb *KeyBuilder) VPASubmissionTimeline() string {
+	return fmt.Sprintf("%s:%s:vpa:submission:timeline", kb.ProtocolState, kb.DataMarket)
+}
+
+// VPAStats returns the key for VPA statistics per market
+// Format: {protocol}:{market}:vpa:stats
+func (kb *KeyBuilder) VPAStats() string {
+	return fmt.Sprintf("%s:%s:vpa:stats", kb.ProtocolState, kb.DataMarket)
+}
+
+// VPAEpochStatus returns the key for per-epoch VPA status (priority + submission combined)
+// Format: {protocol}:{market}:vpa:epoch:{epochID}:status
+func (kb *KeyBuilder) VPAEpochStatus(epochID string) string {
+	return fmt.Sprintf("%s:%s:vpa:epoch:%s:status", kb.ProtocolState, kb.DataMarket, epochID)
+}
+
 // Aggregator Keys
 
 // BatchAggregated returns the key for network-wide consensus batch

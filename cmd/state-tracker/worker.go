@@ -8,12 +8,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
-	"github.com/redis/go-redis/v9"
 	redislib "github.com/powerloom/snapshot-sequencer-validator/pkgs/redis"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/utils"
+	"github.com/redis/go-redis/v9"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
 )
@@ -25,12 +24,12 @@ type StateWorker struct {
 	keyBuilder *redislib.KeyBuilder
 
 	// In-memory counters for current metrics
-	mu              sync.RWMutex
-	submissions     int64
-	validations     int64
-	epochs          int64
-	batches         int64
-	lastReset       time.Time
+	mu          sync.RWMutex
+	submissions int64
+	validations int64
+	epochs      int64
+	batches     int64
+	lastReset   time.Time
 
 	// Control
 	shutdown chan struct{}
@@ -127,36 +126,6 @@ func (sw *StateWorker) processSimpleStateChange(eventType string, action string)
 	default:
 		log.WithField("type", eventType).Debug("Unknown event type received")
 	}
-}
-
-// processStateChange updates in-memory counters based on state change (legacy)
-func (sw *StateWorker) processStateChange(event *StateChangeEvent) {
-	sw.mu.Lock()
-	defer sw.mu.Unlock()
-
-	switch event.Type {
-	case "submission":
-		atomic.AddInt64(&sw.submissions, 1)
-		stateChangesProcessed.WithLabelValues("submission").Inc()
-
-	case "validation":
-		atomic.AddInt64(&sw.validations, 1)
-		stateChangesProcessed.WithLabelValues("validation").Inc()
-
-	case "epoch":
-		atomic.AddInt64(&sw.epochs, 1)
-		stateChangesProcessed.WithLabelValues("epoch").Inc()
-
-	case "batch":
-		atomic.AddInt64(&sw.batches, 1)
-		stateChangesProcessed.WithLabelValues("batch").Inc()
-	}
-
-
-	log.WithFields(logrus.Fields{
-		"type":      event.Type,
-		"entity_id": event.EntityID,
-	}).Debug("Processed state change")
 }
 
 // StartMetricsAggregator aggregates metrics every 30 seconds
@@ -356,6 +325,13 @@ func (sw *StateWorker) aggregateCurrentMetrics(ctx context.Context) {
 	}
 	summary["submissions_5m"] = recentSubmissions5m
 
+	// Aggregate VPA metrics (priority assignments and submissions)
+	vpaMetrics := sw.aggregateVPAMetrics(ctx)
+	// Add VPA metrics to summary (safe to range over nil map)
+	for k, v := range vpaMetrics {
+		summary[k] = v
+	}
+
 	// Store summary with TTL
 	summaryJSON, _ := json.Marshal(summary)
 	sw.redis.Set(ctx, sw.keyBuilder.DashboardSummary(), summaryJSON, 60*time.Second)
@@ -369,11 +345,11 @@ func (sw *StateWorker) aggregateCurrentMetrics(ctx context.Context) {
 	log.WithFields(logrus.Fields{
 		"submissions_total": totalSubmissions,
 		"queue_submissions": submissionQueueCount,
-		"epochs":           sw.epochs,
-		"batches":          sw.batches,
-		"validators":       activeCount,
-		"epochs_1m":        recentEpochs,
-		"batches_1m":       recentBatchesCount,
+		"epochs":            sw.epochs,
+		"batches":           sw.batches,
+		"validators":        activeCount,
+		"epochs_1m":         recentEpochs,
+		"batches_1m":        recentBatchesCount,
 	}).Debug("Updated dashboard summary")
 
 	// Aggregate participation metrics
@@ -381,6 +357,93 @@ func (sw *StateWorker) aggregateCurrentMetrics(ctx context.Context) {
 
 	// Aggregate current epoch status
 	sw.aggregateCurrentEpochStatus(ctx)
+
+	// Aggregate VPA metrics separately (for dedicated VPA endpoints)
+	sw.aggregateVPAMetricsForAPI(ctx)
+}
+
+// aggregateVPAMetrics aggregates VPA metrics for dashboard summary
+func (sw *StateWorker) aggregateVPAMetrics(ctx context.Context) map[string]interface{} {
+	vpaMetrics := make(map[string]interface{})
+
+	// Get VPA stats from Redis
+	statsKey := sw.keyBuilder.VPAStats()
+	stats, err := sw.redis.HGetAll(ctx, statsKey).Result()
+	if err != nil {
+		log.WithError(err).Debug("Failed to get VPA stats")
+		return nil
+	}
+
+	// Parse stats and add to metrics
+	if len(stats) > 0 {
+		// Priority assignment counts
+		if totalAssignments, ok := stats["total_priority_assignments"]; ok {
+			if val, err := strconv.ParseInt(totalAssignments, 10, 64); err == nil {
+				vpaMetrics["vpa_priority_assignments_total"] = val
+			}
+		}
+		if noPriority, ok := stats["no_priority_count"]; ok {
+			if val, err := strconv.ParseInt(noPriority, 10, 64); err == nil {
+				vpaMetrics["vpa_no_priority_count"] = val
+			}
+		}
+
+		// Submission counts
+		if success, ok := stats["total_submissions_success"]; ok {
+			if val, err := strconv.ParseInt(success, 10, 64); err == nil {
+				vpaMetrics["vpa_submissions_success"] = val
+			}
+		}
+		if failed, ok := stats["total_submissions_failed"]; ok {
+			if val, err := strconv.ParseInt(failed, 10, 64); err == nil {
+				vpaMetrics["vpa_submissions_failed"] = val
+			}
+		}
+
+		// Calculate success rate
+		if success, ok := vpaMetrics["vpa_submissions_success"].(int64); ok {
+			if failed, ok := vpaMetrics["vpa_submissions_failed"].(int64); ok {
+				total := success + failed
+				if total > 0 {
+					vpaMetrics["vpa_submission_success_rate"] = float64(success) / float64(total) * 100
+				}
+			}
+		}
+	}
+
+	// Count recent priority assignments from timeline (last 24 hours)
+	nowTS := time.Now().Unix()
+	twentyFourHoursAgo := nowTS - (24 * 3600)
+	priorityTimelineKey := sw.keyBuilder.VPAPriorityTimeline()
+	recentPriorities, err := sw.redis.ZCount(ctx, priorityTimelineKey,
+		strconv.FormatInt(twentyFourHoursAgo, 10),
+		strconv.FormatInt(nowTS, 10)).Result()
+	if err == nil {
+		vpaMetrics["vpa_priority_assignments_24h"] = recentPriorities
+	}
+
+	// Count recent submissions from timeline (last 24 hours)
+	submissionTimelineKey := sw.keyBuilder.VPASubmissionTimeline()
+	recentSubmissions, err := sw.redis.ZCount(ctx, submissionTimelineKey,
+		strconv.FormatInt(twentyFourHoursAgo, 10),
+		strconv.FormatInt(nowTS, 10)).Result()
+	if err == nil {
+		vpaMetrics["vpa_submissions_24h"] = recentSubmissions
+	}
+
+	return vpaMetrics
+}
+
+// aggregateVPAMetricsForAPI aggregates VPA metrics for dedicated API endpoints
+func (sw *StateWorker) aggregateVPAMetricsForAPI(ctx context.Context) {
+	// This function prepares detailed VPA metrics for /vpa/stats endpoint
+	// The detailed stats are already stored in Redis by aggregator, so we just ensure TTL
+	statsKey := sw.keyBuilder.VPAStats()
+	exists, _ := sw.redis.Exists(ctx, statsKey).Result()
+	if exists > 0 {
+		// Refresh TTL to keep stats available
+		sw.redis.Expire(ctx, statsKey, 7*24*time.Hour)
+	}
 }
 
 // StartHourlyStatsWorker prepares hourly statistics every 5 minutes
@@ -621,13 +684,13 @@ func (sw *StateWorker) aggregateDailyStats(ctx context.Context) {
 	}
 
 	dailyStats := map[string]interface{}{
-		"period_start":     dayAgo.Format(time.RFC3339),
-		"period_end":       now.Format(time.RFC3339),
-		"epochs_total":     epochs,
-		"batches_total":    batches,
+		"period_start":      dayAgo.Format(time.RFC3339),
+		"period_end":        now.Format(time.RFC3339),
+		"epochs_total":      epochs,
+		"batches_total":     batches,
 		"submissions_total": submissionCount,
-		"hourly_breakdown": hourlyBreakdown,
-		"updated_at":       time.Now().Unix(),
+		"hourly_breakdown":  hourlyBreakdown,
+		"updated_at":        time.Now().Unix(),
 	}
 
 	// Store daily stats
@@ -804,13 +867,13 @@ func (sw *StateWorker) aggregateParticipationMetrics(ctx context.Context) {
 
 	// Store participation metrics
 	participationMetrics := map[string]interface{}{
-		"epochs_participated_24h":  level1Batches,
-		"epochs_total_24h":         epochsTotal,
-		"participation_rate":       participationRate,
-		"level1_batches_24h":       level1Batches,
-		"level2_inclusions_24h":    level2Inclusions,
-		"inclusion_rate":           inclusionRate,
-		"timestamp":                now,
+		"epochs_participated_24h": level1Batches,
+		"epochs_total_24h":        epochsTotal,
+		"participation_rate":      participationRate,
+		"level1_batches_24h":      level1Batches,
+		"level2_inclusions_24h":   level2Inclusions,
+		"inclusion_rate":          inclusionRate,
+		"timestamp":               now,
 	}
 
 	metricsJSON, _ := json.Marshal(participationMetrics)

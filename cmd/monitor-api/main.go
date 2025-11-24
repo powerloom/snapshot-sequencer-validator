@@ -38,10 +38,11 @@ type MonitorAPI struct {
 // DashboardSummary provides overall system health and metrics
 type DashboardSummary struct {
 	ValidatorID        string                 `json:"validator_id"`
-	SystemMetrics      map[string]interface{} `json:"system_metrics"`      // Rates, totals, current counts
-	ParticipationStats map[string]interface{} `json:"participation_stats"` // 24h participation/inclusion metrics
-	CurrentStatus      map[string]interface{} `json:"current_status"`      // Real-time status (epoch, queues)
-	RecentActivity     map[string]interface{} `json:"recent_activity"`     // 1m and 5m activity
+	SystemMetrics      map[string]interface{} `json:"system_metrics"`        // Rates, totals, current counts (includes VPA metrics)
+	ParticipationStats map[string]interface{} `json:"participation_stats"`   // 24h participation/inclusion metrics
+	CurrentStatus      map[string]interface{} `json:"current_status"`        // Real-time status (epoch, queues)
+	RecentActivity     map[string]interface{} `json:"recent_activity"`       // 1m and 5m activity
+	VPAMetrics         map[string]interface{} `json:"vpa_metrics,omitempty"` // VPA-specific metrics (priority assignments, submissions)
 	Timestamp          time.Time              `json:"timestamp"`
 }
 
@@ -53,17 +54,17 @@ type HourlyStats struct {
 
 // DailyStats provides 24-hour aggregated statistics
 type DailyStats struct {
-	Summary          map[string]interface{} `json:"summary"`
-	HourlyBreakdown  []map[string]interface{} `json:"hourly_breakdown"`
-	Timestamp        time.Time                `json:"timestamp"`
+	Summary         map[string]interface{}   `json:"summary"`
+	HourlyBreakdown []map[string]interface{} `json:"hourly_breakdown"`
+	Timestamp       time.Time                `json:"timestamp"`
 }
 
 // FinalizedBatch represents a Level 1 or Level 2 batch
 type FinalizedBatch struct {
 	EpochID        string   `json:"epoch_id"`
-	Level          int      `json:"level"` // 1 for local, 2 for aggregated
-	ValidatorID    string   `json:"validator_id,omitempty"` // Level 1 only
-	ValidatorIDs   []string `json:"validator_ids,omitempty"` // Level 2 only
+	Level          int      `json:"level"`                     // 1 for local, 2 for aggregated
+	ValidatorID    string   `json:"validator_id,omitempty"`    // Level 1 only
+	ValidatorIDs   []string `json:"validator_ids,omitempty"`   // Level 2 only
 	ValidatorCount int      `json:"validator_count,omitempty"` // Level 2 only
 	ProjectCount   int      `json:"project_count"`
 	IPFSCid        string   `json:"ipfs_cid,omitempty"`
@@ -74,14 +75,14 @@ type FinalizedBatch struct {
 
 // EpochInfo represents epoch timeline information
 type EpochInfo struct {
-	EpochID        string `json:"epoch_id"`
-	Status         string `json:"status"` // "open", "closed"
-	Phase          string `json:"phase"` // "submission", "finalization", "aggregation", "complete"
-	StartTime      int64  `json:"start_time"`
-	Duration       int    `json:"duration"`
-	DataMarket     string `json:"data_market,omitempty"`
-	Level1Batch    bool   `json:"level1_batch_exists"`
-	Level2Batch    bool   `json:"level2_batch_exists"`
+	EpochID     string `json:"epoch_id"`
+	Status      string `json:"status"` // "open", "closed"
+	Phase       string `json:"phase"`  // "submission", "finalization", "aggregation", "complete"
+	StartTime   int64  `json:"start_time"`
+	Duration    int    `json:"duration"`
+	DataMarket  string `json:"data_market,omitempty"`
+	Level1Batch bool   `json:"level1_batch_exists"`
+	Level2Batch bool   `json:"level2_batch_exists"`
 }
 
 // QueueStatus represents queue depth and status
@@ -106,9 +107,9 @@ type TimelineEventMetadata struct {
 
 // EnhancedTimelineEvent represents a timeline event with enriched metadata
 type EnhancedTimelineEvent struct {
-	EntityID string                `json:"entity_id"`
-	Timestamp int64                `json:"timestamp"`
-	Time      string                `json:"time"`
+	EntityID  string                 `json:"entity_id"`
+	Timestamp int64                  `json:"timestamp"`
+	Time      string                 `json:"time"`
 	Metadata  *TimelineEventMetadata `json:"metadata,omitempty"`
 }
 
@@ -224,6 +225,29 @@ func (m *MonitorAPI) DashboardSummary(c *gin.Context) {
 		systemMetrics["submissions_queue"] = summary["submissions_queue"]
 		systemMetrics["measurement_duration"] = summary["measurement_duration"]
 		systemMetrics["updated_at"] = summary["updated_at"]
+
+		// VPA metrics (if available from state-tracker)
+		if vpaPriority, ok := summary["vpa_priority_assignments_total"]; ok {
+			systemMetrics["vpa_priority_assignments_total"] = vpaPriority
+		}
+		if vpaNoPriority, ok := summary["vpa_no_priority_count"]; ok {
+			systemMetrics["vpa_no_priority_count"] = vpaNoPriority
+		}
+		if vpaSuccess, ok := summary["vpa_submissions_success"]; ok {
+			systemMetrics["vpa_submissions_success"] = vpaSuccess
+		}
+		if vpaFailed, ok := summary["vpa_submissions_failed"]; ok {
+			systemMetrics["vpa_submissions_failed"] = vpaFailed
+		}
+		if vpaSuccessRate, ok := summary["vpa_submission_success_rate"]; ok {
+			systemMetrics["vpa_submission_success_rate"] = vpaSuccessRate
+		}
+		if vpaPriorities24h, ok := summary["vpa_priority_assignments_24h"]; ok {
+			systemMetrics["vpa_priority_assignments_24h"] = vpaPriorities24h
+		}
+		if vpaSubmissions24h, ok := summary["vpa_submissions_24h"]; ok {
+			systemMetrics["vpa_submissions_24h"] = vpaSubmissions24h
+		}
 	}
 
 	// Current Status: real-time status (epoch, phase, queues)
@@ -251,24 +275,51 @@ func (m *MonitorAPI) DashboardSummary(c *gin.Context) {
 		recentActivity["batches_5m"] = summary["batches_5m"]
 	}
 
+	// Extract VPA metrics from summary for dedicated VPA section
+	vpaMetrics := make(map[string]interface{})
+	if summary != nil {
+		if vpaPriority, ok := summary["vpa_priority_assignments_total"]; ok {
+			vpaMetrics["priority_assignments_total"] = vpaPriority
+		}
+		if vpaNoPriority, ok := summary["vpa_no_priority_count"]; ok {
+			vpaMetrics["no_priority_count"] = vpaNoPriority
+		}
+		if vpaSuccess, ok := summary["vpa_submissions_success"]; ok {
+			vpaMetrics["submissions_success"] = vpaSuccess
+		}
+		if vpaFailed, ok := summary["vpa_submissions_failed"]; ok {
+			vpaMetrics["submissions_failed"] = vpaFailed
+		}
+		if vpaSuccessRate, ok := summary["vpa_submission_success_rate"]; ok {
+			vpaMetrics["submission_success_rate"] = vpaSuccessRate
+		}
+		if vpaPriorities24h, ok := summary["vpa_priority_assignments_24h"]; ok {
+			vpaMetrics["priority_assignments_24h"] = vpaPriorities24h
+		}
+		if vpaSubmissions24h, ok := summary["vpa_submissions_24h"]; ok {
+			vpaMetrics["submissions_24h"] = vpaSubmissions24h
+		}
+	}
+
 	response := DashboardSummary{
 		ValidatorID:        getEnv("SEQUENCER_ID", "validator1"),
 		SystemMetrics:      systemMetrics,
 		ParticipationStats: participation,
 		CurrentStatus:      currentStatus,
 		RecentActivity:     recentActivity,
+		VPAMetrics:         vpaMetrics,
 		Timestamp:          time.Now(),
 	}
 
 	// Fallback: ensure participation stats exist if not provided by state-tracker
 	if response.ParticipationStats == nil {
 		response.ParticipationStats = map[string]interface{}{
-			"participation_rate":     0,
-			"inclusion_rate":         0,
-			"level1_batches_24h":     0,
-			"level2_inclusions_24h":  0,
+			"participation_rate":      0,
+			"inclusion_rate":          0,
+			"level1_batches_24h":      0,
+			"level2_inclusions_24h":   0,
 			"epochs_participated_24h": 0,
-			"epochs_total_24h":       0,
+			"epochs_total_24h":        0,
 		}
 	}
 
@@ -542,7 +593,7 @@ func (m *MonitorAPI) RecentTimeline(c *gin.Context) {
 		timestamp := int64(event.Score)
 
 		enhancedEvent := EnhancedTimelineEvent{
-			EntityID: entityID,
+			EntityID:  entityID,
 			Timestamp: timestamp,
 			Time:      time.Unix(timestamp, 0).Format(time.RFC3339),
 		}
@@ -625,10 +676,10 @@ func (m *MonitorAPI) Health(c *gin.Context) {
 	dataFresh := summaryJSON != ""
 
 	c.JSON(http.StatusOK, gin.H{
-		"status":      "healthy",
-		"redis":       "connected",
-		"data_fresh":  dataFresh,
-		"timestamp":   time.Now(),
+		"status":     "healthy",
+		"redis":      "connected",
+		"data_fresh": dataFresh,
+		"timestamp":  time.Now(),
 	})
 }
 
@@ -1089,8 +1140,6 @@ func (m *MonitorAPI) QueuesStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, queues)
 }
 
-
-
 // Helper function to get stream consumer group lag
 func getStreamLag(redisClient *redis.Client, ctx context.Context, streamKey, groupName string) (int64, error) {
 	// Get stream info to find last delivered ID
@@ -1263,6 +1312,240 @@ func getEnv(key, defaultValue string) string {
 	return defaultValue
 }
 
+// @Summary Get VPA status for specific epoch
+// @Description Get priority assignment and submission status for a specific epoch
+// @Tags vpa
+// @Produce json
+// @Param epochID path string true "Epoch ID"
+// @Param protocol query string false "Protocol state identifier"
+// @Param market query string false "Data market address"
+// @Success 200 {object} map[string]interface{}
+// @Router /vpa/epoch/{epochID} [get]
+func (m *MonitorAPI) VPAEpochStatus(c *gin.Context) {
+	epochID := c.Param("epochID")
+	protocol := c.Query("protocol")
+	market := c.Query("market")
+
+	// Use specified protocol/market or fall back to default
+	kb := m.keyBuilder
+	if protocol != "" || market != "" {
+		if protocol == "" {
+			protocol = m.keyBuilder.ProtocolState
+		}
+		if market == "" {
+			market = m.keyBuilder.DataMarket
+		}
+		kb = keys.NewKeyBuilder(protocol, market)
+	}
+
+	// Get combined epoch status
+	statusKey := kb.VPAEpochStatus(epochID)
+	statusJSON, err := m.redis.Get(m.ctx, statusKey).Result()
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error":     "epoch not found",
+			"epoch_id":  epochID,
+			"timestamp": time.Now(),
+		})
+		return
+	}
+
+	var status map[string]interface{}
+	if err := json.Unmarshal([]byte(statusJSON), &status); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "failed to parse status data",
+		})
+		return
+	}
+
+	// Also try to get individual priority and submission records for completeness
+	priorityKey := kb.VPAPriorityAssignment(epochID)
+	priorityJSON, _ := m.redis.Get(m.ctx, priorityKey).Result()
+	if priorityJSON != "" {
+		var priorityData map[string]interface{}
+		if err := json.Unmarshal([]byte(priorityJSON), &priorityData); err == nil {
+			status["priority_details"] = priorityData
+		}
+	}
+
+	submissionKey := kb.VPASubmissionResult(epochID)
+	submissionJSON, _ := m.redis.Get(m.ctx, submissionKey).Result()
+	if submissionJSON != "" {
+		var submissionData map[string]interface{}
+		if err := json.Unmarshal([]byte(submissionJSON), &submissionData); err == nil {
+			status["submission_details"] = submissionData
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"epoch_id":  epochID,
+		"status":    status,
+		"timestamp": time.Now(),
+	})
+}
+
+// @Summary Get VPA timeline
+// @Description Get priority assignment and submission timeline
+// @Tags vpa
+// @Produce json
+// @Param protocol query string false "Protocol state identifier"
+// @Param market query string false "Data market address"
+// @Param type query string false "Timeline type: priority, submission, or both (default both)"
+// @Param limit query int false "Number of entries to retrieve (default 50)"
+// @Success 200 {object} map[string]interface{}
+// @Router /vpa/timeline [get]
+func (m *MonitorAPI) VPATimeline(c *gin.Context) {
+	protocol := c.Query("protocol")
+	market := c.Query("market")
+	timelineType := c.DefaultQuery("type", "both")
+	limitStr := c.DefaultQuery("limit", "50")
+
+	// Use specified protocol/market or fall back to default
+	kb := m.keyBuilder
+	if protocol != "" || market != "" {
+		if protocol == "" {
+			protocol = m.keyBuilder.ProtocolState
+		}
+		if market == "" {
+			market = m.keyBuilder.DataMarket
+		}
+		kb = keys.NewKeyBuilder(protocol, market)
+	}
+
+	limit, _ := strconv.Atoi(limitStr)
+	if limit <= 0 || limit > 1000 {
+		limit = 50
+	}
+
+	result := make(map[string]interface{})
+
+	// Get priority timeline
+	if timelineType == "both" || timelineType == "priority" {
+		priorityTimelineKey := kb.VPAPriorityTimeline()
+		priorityEntries, err := m.redis.ZRevRangeWithScores(m.ctx, priorityTimelineKey, 0, int64(limit-1)).Result()
+		if err == nil {
+			priorityTimeline := make([]map[string]interface{}, 0)
+			for _, entry := range priorityEntries {
+				// Parse member: "{epochID}:{priority}:{status}"
+				parts := strings.Split(entry.Member.(string), ":")
+				if len(parts) >= 3 {
+					priorityTimeline = append(priorityTimeline, map[string]interface{}{
+						"epoch_id":  parts[0],
+						"priority":  parts[1],
+						"status":    strings.Join(parts[2:], ":"),
+						"timestamp": int64(entry.Score),
+					})
+				}
+			}
+			result["priority_timeline"] = priorityTimeline
+		}
+	}
+
+	// Get submission timeline
+	if timelineType == "both" || timelineType == "submission" {
+		submissionTimelineKey := kb.VPASubmissionTimeline()
+		submissionEntries, err := m.redis.ZRevRangeWithScores(m.ctx, submissionTimelineKey, 0, int64(limit-1)).Result()
+		if err == nil {
+			submissionTimeline := make([]map[string]interface{}, 0)
+			for _, entry := range submissionEntries {
+				// Parse member: "{epochID}:{priority}:{status}"
+				parts := strings.Split(entry.Member.(string), ":")
+				if len(parts) >= 3 {
+					submissionTimeline = append(submissionTimeline, map[string]interface{}{
+						"epoch_id":  parts[0],
+						"priority":  parts[1],
+						"status":    strings.Join(parts[2:], ":"),
+						"timestamp": int64(entry.Score),
+					})
+				}
+			}
+			result["submission_timeline"] = submissionTimeline
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"timeline":  result,
+		"timestamp": time.Now(),
+	})
+}
+
+// @Summary Get VPA statistics
+// @Description Get aggregated VPA statistics (priority assignments, submissions, success rates)
+// @Tags vpa
+// @Produce json
+// @Param protocol query string false "Protocol state identifier"
+// @Param market query string false "Data market address"
+// @Success 200 {object} map[string]interface{}
+// @Router /vpa/stats [get]
+func (m *MonitorAPI) VPAStats(c *gin.Context) {
+	protocol := c.Query("protocol")
+	market := c.Query("market")
+
+	// Use specified protocol/market or fall back to default
+	kb := m.keyBuilder
+	if protocol != "" || market != "" {
+		if protocol == "" {
+			protocol = m.keyBuilder.ProtocolState
+		}
+		if market == "" {
+			market = m.keyBuilder.DataMarket
+		}
+		kb = keys.NewKeyBuilder(protocol, market)
+	}
+
+	// Get stats from Redis hash
+	statsKey := kb.VPAStats()
+	stats, err := m.redis.HGetAll(m.ctx, statsKey).Result()
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"stats":     make(map[string]interface{}),
+			"timestamp": time.Now(),
+		})
+		return
+	}
+
+	// Parse stats and calculate rates
+	result := make(map[string]interface{})
+	for k, v := range stats {
+		if val, err := strconv.ParseInt(v, 10, 64); err == nil {
+			result[k] = val
+		} else {
+			result[k] = v
+		}
+	}
+
+	// Calculate success rate if we have success/failed counts
+	if success, ok := result["total_submissions_success"].(int64); ok {
+		if failed, ok := result["total_submissions_failed"].(int64); ok {
+			total := success + failed
+			if total > 0 {
+				result["submission_success_rate"] = float64(success) / float64(total) * 100
+			}
+		}
+	}
+
+	// Count recent activity (last 24 hours)
+	nowTS := time.Now().Unix()
+	twentyFourHoursAgo := nowTS - (24 * 3600)
+
+	priorityTimelineKey := kb.VPAPriorityTimeline()
+	recentPriorities, _ := m.redis.ZCount(m.ctx, priorityTimelineKey,
+		strconv.FormatInt(twentyFourHoursAgo, 10),
+		strconv.FormatInt(nowTS, 10)).Result()
+	result["priority_assignments_24h"] = recentPriorities
+
+	submissionTimelineKey := kb.VPASubmissionTimeline()
+	recentSubmissions, _ := m.redis.ZCount(m.ctx, submissionTimelineKey,
+		strconv.FormatInt(twentyFourHoursAgo, 10),
+		strconv.FormatInt(nowTS, 10)).Result()
+	result["submissions_24h"] = recentSubmissions
+
+	c.JSON(http.StatusOK, gin.H{
+		"stats":     result,
+		"timestamp": time.Now(),
+	})
+}
+
 func main() {
 	// Configure logger
 	log.SetFormatter(&logrus.JSONFormatter{})
@@ -1347,6 +1630,11 @@ func main() {
 
 		// Legacy compatibility endpoint
 		v1.GET("/pipeline/overview", api.PipelineOverview)
+
+		// VPA endpoints
+		v1.GET("/vpa/epoch/:epochID", api.VPAEpochStatus)
+		v1.GET("/vpa/timeline", api.VPATimeline)
+		v1.GET("/vpa/stats", api.VPAStats)
 	}
 
 	// Swagger documentation

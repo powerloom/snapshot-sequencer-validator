@@ -829,9 +829,165 @@ The Validator Priority Assigner (VPA) integration enables priority-based batch s
 3. **Duplicate Check** (Priority 2+ only): Checks if higher priority validator already submitted
 4. **Submission**: If no duplicate found, submits via relayer-py
 
-### Monitoring Priority Assignments
+### Monitor API Endpoints
 
-**Aggregator Logs - Priority Assignment:**
+The Monitor API provides dedicated endpoints for VPA monitoring, eliminating the need for log grepping:
+
+#### GET /api/v1/vpa/epoch/{epochID}
+
+Get priority assignment and submission status for a specific epoch.
+
+**Example:**
+```bash
+# Get VPA status for epoch 23847425
+curl "http://localhost:9091/api/v1/vpa/epoch/23847425?protocol=0x3B5A0FB70ef68B5dd677C7d614dFB89961f97401&market=0xb6c1392944a335b72b9e34f9D4b8c0050cdb511f"
+```
+
+**Response:**
+```json
+{
+  "epoch_id": "23847425",
+  "status": {
+    "epoch_id": "23847425",
+    "priority": 1,
+    "priority_status": "assigned",
+    "submission_success": true,
+    "submission_tx_hash": "",
+    "submission_timestamp": 1763798276,
+    "data_market": "0xb6c1392944a335b72b9e34f9D4b8c0050cdb511f",
+    "validator": "0x164446B87AbbC0C1A389bD9bAF7F5aE813Cf6aB8",
+    "priority_details": {
+      "epoch_id": "23847425",
+      "priority": 1,
+      "status": "assigned",
+      "timestamp": 1763798270
+    },
+    "submission_details": {
+      "epoch_id": "23847425",
+      "priority": 1,
+      "success": true,
+      "tx_hash": "",
+      "timestamp": 1763798276
+    }
+  },
+  "timestamp": "2025-11-22T08:00:00Z"
+}
+```
+
+#### GET /api/v1/vpa/timeline
+
+Get priority assignment and submission timeline.
+
+**Query Parameters:**
+- `type`: `priority`, `submission`, or `both` (default: `both`)
+- `limit`: Number of entries (default: 50, max: 1000)
+- `protocol`: Protocol state identifier (optional)
+- `market`: Data market address (optional)
+
+**Example:**
+```bash
+# Get last 20 priority assignments
+curl "http://localhost:9091/api/v1/vpa/timeline?type=priority&limit=20"
+
+# Get last 50 submissions
+curl "http://localhost:9091/api/v1/vpa/timeline?type=submission&limit=50"
+
+# Get both timelines
+curl "http://localhost:9091/api/v1/vpa/timeline?limit=100"
+```
+
+**Response:**
+```json
+{
+  "timeline": {
+    "priority_timeline": [
+      {
+        "epoch_id": "23847425",
+        "priority": "1",
+        "status": "assigned",
+        "timestamp": 1763798270
+      }
+    ],
+    "submission_timeline": [
+      {
+        "epoch_id": "23847425",
+        "priority": "1",
+        "status": "success",
+        "timestamp": 1763798276
+      }
+    ]
+  },
+  "timestamp": "2025-11-22T08:00:00Z"
+}
+```
+
+#### GET /api/v1/vpa/stats
+
+Get aggregated VPA statistics (priority assignments, submissions, success rates).
+
+**Example:**
+```bash
+curl "http://localhost:9091/api/v1/vpa/stats?protocol=0x3B5A0FB70ef68B5dd677C7d614dFB89961f97401&market=0xb6c1392944a335b72b9e34f9D4b8c0050cdb511f"
+```
+
+**Response:**
+```json
+{
+  "stats": {
+    "total_priority_assignments": 150,
+    "priority_1_count": 50,
+    "priority_2_count": 50,
+    "priority_3_count": 50,
+    "no_priority_count": 10,
+    "total_submissions_success": 140,
+    "total_submissions_failed": 10,
+    "priority_1_submissions_success": 48,
+    "priority_2_submissions_success": 47,
+    "priority_3_submissions_success": 45,
+    "submission_success_rate": 93.33,
+    "priority_assignments_24h": 25,
+    "submissions_24h": 23
+  },
+  "timestamp": "2025-11-22T08:00:00Z"
+}
+```
+
+#### Dashboard Summary (includes VPA metrics)
+
+The `/api/v1/dashboard/summary` endpoint now includes VPA metrics in the `vpa_metrics` section:
+
+**Example:**
+```bash
+curl "http://localhost:9091/api/v1/dashboard/summary"
+```
+
+**Response includes:**
+```json
+{
+  "system_metrics": {
+    "vpa_priority_assignments_total": 150,
+    "vpa_submissions_success": 140,
+    "vpa_submissions_failed": 10,
+    "vpa_submission_success_rate": 93.33,
+    "vpa_priority_assignments_24h": 25,
+    "vpa_submissions_24h": 23
+  },
+  "vpa_metrics": {
+    "priority_assignments_total": 150,
+    "submissions_success": 140,
+    "submissions_failed": 10,
+    "submission_success_rate": 93.33,
+    "priority_assignments_24h": 25,
+    "submissions_24h": 23
+  }
+}
+```
+
+### Log-Based Monitoring (Fallback)
+
+If Monitor API is unavailable, you can still use log grepping as a fallback:
+
+**Priority Assignment:**
 ```bash
 # Check if your node has priority for recent epochs
 ./dsv.sh aggregator-logs | grep -E "(priority|Priority)" | tail -20
@@ -843,15 +999,7 @@ The Validator Priority Assigner (VPA) integration enables priority-based batch s
 ./dsv.sh aggregator-logs | grep "priority=" | tail -10
 ```
 
-**Key Log Patterns:**
-- `No VPA priority assigned, skipping new contract submission` - Your node has priority 0 (no submission)
-- `priority=1` - Priority 1 (first to submit)
-- `priority=2` - Priority 2 (backup, only submits if Priority 1 fails)
-- `priority=3+` - Lower priority (only submits if all higher priorities fail)
-
-### Monitoring Submission Attempts
-
-**Aggregator Logs - Submission Flow:**
+**Submission Flow:**
 ```bash
 # Track complete submission flow
 ./dsv.sh aggregator-logs | grep -E "(⏳|✅|⏭️|🚀)" | tail -30
@@ -870,6 +1018,10 @@ The Validator Priority Assigner (VPA) integration enables priority-based batch s
 ```
 
 **Key Log Patterns:**
+- `No VPA priority assigned, skipping new contract submission` - Your node has priority 0 (no submission)
+- `priority=1` - Priority 1 (first to submit)
+- `priority=2` - Priority 2 (backup, only submits if Priority 1 fails)
+- `priority=3+` - Lower priority (only submits if all higher priorities fail)
 - `⏳ Waiting for submission window to open...` - Waiting for your priority window
 - `✅ Submission window is open, checking if submission already exists...` - Window opened, checking duplicates
 - `⏭️ Epoch already has a submission from a higher priority validator, skipping submission` - Priority 2+ skipped (Priority 1 already submitted)
@@ -878,37 +1030,18 @@ The Validator Priority Assigner (VPA) integration enables priority-based batch s
 - `✅ VPA batch submission queued successfully - relayer processing asynchronously` - Submission queued (relayer processes async)
 - `✅ Sent batch size to relayer` - Batch size notification sent
 
-### Redis-Based Priority Tracking
+### Redis Key Structure (For Direct Access)
 
-The aggregator stores priority and submission metrics in Redis for historical tracking:
+**Note**: Direct Redis access is not recommended. Use Monitor API endpoints instead.
 
-**Priority Assignment Tracking:**
-```bash
-# Check priority for specific epoch
-docker exec redis redis-cli GET "{protocol}:vpa:priority:{dataMarket}:{epochID}"
+The aggregator stores priority and submission metrics in Redis with namespaced keys:
 
-# View priority timeline (recent assignments)
-docker exec redis redis-cli ZREVRANGE "{protocol}:vpa:priority:timeline" 0 9
-
-# Check priority statistics
-docker exec redis redis-cli HGETALL "{protocol}:vpa:stats:{dataMarket}"
-```
-
-**Submission Tracking:**
-```bash
-# Check submission result for specific epoch
-docker exec redis redis-cli GET "{protocol}:vpa:submission:{dataMarket}:{epochID}"
-
-# View submission timeline (recent attempts)
-docker exec redis redis-cli ZREVRANGE "{protocol}:vpa:submission:timeline" 0 9
-
-# Check submission statistics
-docker exec redis redis-cli HGETALL "{protocol}:vpa:stats:{dataMarket}"
-```
-
-**Redis Key Structure:**
-- `{protocol}:vpa:priority:{dataMarket}:{epochID}` - Priority assignment per epoch (7-day TTL)
-- `{protocol}:vpa:submission:{dataMarket}:{epochID}` - Submission result per epoch (7-day TTL)
+- `{protocol}:{market}:vpa:priority:{epochID}` - Priority assignment per epoch (7-day TTL)
+- `{protocol}:{market}:vpa:submission:{epochID}` - Submission result per epoch (7-day TTL)
+- `{protocol}:{market}:vpa:epoch:{epochID}:status` - Combined epoch status (priority + submission)
+- `{protocol}:{market}:vpa:priority:timeline` - Priority assignment timeline (ZSET)
+- `{protocol}:{market}:vpa:submission:timeline` - Submission timeline (ZSET)
+- `{protocol}:{market}:vpa:stats` - Statistics hash (7-day TTL)
 - `{protocol}:vpa:priority:timeline` - Historical priority assignments (sorted set)
 - `{protocol}:vpa:submission:timeline` - Historical submission attempts (sorted set)
 - `{protocol}:vpa:stats:{dataMarket}` - Aggregated statistics (7-day TTL)
