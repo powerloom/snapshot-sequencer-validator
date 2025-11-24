@@ -1651,8 +1651,17 @@ func (a *Aggregator) storePriorityCheck(epochID uint64, dataMarketAddr string, p
 	epochIDStr := strconv.FormatUint(epochID, 10)
 	timestamp := time.Now().Unix()
 
+	// Use NEW protocol state contract for VPA data if this is the new data market
+	// VPA data should be namespaced by new protocol:new market, not legacy protocol:new market
+	protocolState := a.keyBuilder.ProtocolState
+	if a.config.NewDataMarket != "" && strings.EqualFold(dataMarketAddr, a.config.NewDataMarket) {
+		if a.config.NewProtocolState != "" {
+			protocolState = a.config.NewProtocolState
+		}
+	}
+
 	// Create KeyBuilder for this data market (namespaced)
-	kb := rediskeys.NewKeyBuilder(a.keyBuilder.ProtocolState, dataMarketAddr)
+	kb := rediskeys.NewKeyBuilder(protocolState, dataMarketAddr)
 
 	// Store priority assignment per epoch
 	priorityKey := kb.VPAPriorityAssignment(epochIDStr)
@@ -1707,8 +1716,17 @@ func (a *Aggregator) storeSubmissionMetrics(epochID uint64, dataMarketAddr strin
 	epochIDStr := strconv.FormatUint(epochID, 10)
 	timestamp := time.Now().Unix()
 
+	// Use NEW protocol state contract for VPA data if this is the new data market
+	// VPA data should be namespaced by new protocol:new market, not legacy protocol:new market
+	protocolState := a.keyBuilder.ProtocolState
+	if a.config.NewDataMarket != "" && strings.EqualFold(dataMarketAddr, a.config.NewDataMarket) {
+		if a.config.NewProtocolState != "" {
+			protocolState = a.config.NewProtocolState
+		}
+	}
+
 	// Create KeyBuilder for this data market (namespaced)
-	kb := rediskeys.NewKeyBuilder(a.keyBuilder.ProtocolState, dataMarketAddr)
+	kb := rediskeys.NewKeyBuilder(protocolState, dataMarketAddr)
 
 	// Store submission result per epoch
 	submissionKey := kb.VPASubmissionResult(epochIDStr)
