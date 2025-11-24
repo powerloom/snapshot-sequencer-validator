@@ -723,6 +723,7 @@ func (m *EventMonitor) handleEpochReleased(event *EpochReleasedEvent) {
 	var windowDuration time.Duration
 	var windowConfig *WindowConfig
 	var useFallback bool
+	var isLegacyContract bool // Track if we're using legacy contract
 
 	// Only fetch window config from contract if this is a NEW data market that supports it
 	// Legacy data markets don't have getSubmissionWindowConfig() and will revert
@@ -742,11 +743,13 @@ func (m *EventMonitor) handleEpochReleased(event *EpochReleasedEvent) {
 				useFallback = true
 			} else {
 				windowDuration = time.Duration(legacyWindow.Uint64()) * time.Second
+				useFallback = false // Successfully fetched from legacy contract
+				isLegacyContract = true
 				log.WithFields(log.Fields{
-					"data_market":      dataMarketAddr,
+					"data_market":     dataMarketAddr,
 					"window_duration": windowDuration,
 					"source":          "legacy_contract_snapshotSubmissionWindow",
-				}).Info("✅ Using snapshotSubmissionWindow from legacy ProtocolState contract")
+				}).Info("✅ Using snapshotSubmissionWindow from legacy ProtocolState contract - Level 1 finalization will trigger when submission window closes (after collecting snapshot CIDs)")
 			}
 		} else {
 			log.WithFields(log.Fields{
@@ -804,11 +807,13 @@ func (m *EventMonitor) handleEpochReleased(event *EpochReleasedEvent) {
 			useFallback = true
 		} else {
 			windowDuration = time.Duration(legacyWindow.Uint64()) * time.Second
+			useFallback = false // Successfully fetched from legacy contract
+			isLegacyContract = true
 			log.WithFields(log.Fields{
-				"data_market":      dataMarketAddr,
+				"data_market":     dataMarketAddr,
 				"window_duration": windowDuration,
 				"source":          "legacy_contract_snapshotSubmissionWindow",
-			}).Info("✅ Using snapshotSubmissionWindow from legacy ProtocolState contract")
+			}).Info("✅ Using snapshotSubmissionWindow from legacy ProtocolState contract - Level 1 finalization will trigger when submission window closes (after collecting snapshot CIDs)")
 		}
 	}
 
@@ -890,7 +895,11 @@ func (m *EventMonitor) handleEpochReleased(event *EpochReleasedEvent) {
 		}
 		// If window config fetcher exists but we're using fallback, it means this is a legacy data market
 		// This is expected and already logged above, so no need for additional warning
+	} else if isLegacyContract {
+		// Legacy contract - message already logged above with correct context
+		// No need to log again
 	} else {
+		// New contract with window config
 		hasSnapshotCommitReveal := windowConfig != nil && (windowConfig.SnapshotCommitWindow.Uint64() > 0 ||
 			windowConfig.SnapshotRevealWindow.Uint64() > 0)
 
