@@ -210,26 +210,28 @@ start_services() {
     # Start services with specified profiles
     print_color "$CYAN" "Starting services..."
     
-    # Build the complete docker compose command as an array
-    # Handle both "docker compose" (two words) and "docker-compose" (one word)
-    local compose_cmd=()
+    # Build complete command array - handle "docker compose" vs "docker-compose"
+    local cmd_array=()
     if [[ "$DOCKER_COMPOSE_CMD" == *" "* ]]; then
-        # Split multi-word command
+        # Multi-word command - split it
         IFS=' ' read -ra cmd_parts <<< "$DOCKER_COMPOSE_CMD"
-        compose_cmd=("${cmd_parts[@]}")
+        cmd_array=("${cmd_parts[@]}")
     else
         # Single word command
-        compose_cmd=("$DOCKER_COMPOSE_CMD")
+        cmd_array=("$DOCKER_COMPOSE_CMD")
     fi
-    compose_cmd+=(-f docker-compose.separated.yml)
+    cmd_array+=(-f docker-compose.separated.yml)
     
     if [ ${#profile_args[@]} -gt 0 ]; then
         print_color "$CYAN" "With profiles: ${profile_args[*]}"
-        "${compose_cmd[@]}" "${profile_args[@]}" up -d --build
+        cmd_array+=("${profile_args[@]}")
     else
         print_color "$CYAN" "Without additional profiles"
-        "${compose_cmd[@]}" up -d --build
     fi
+    cmd_array+=(up -d --build)
+    
+    # Execute the command
+    "${cmd_array[@]}"
 
     if [ $? -eq 0 ]; then
         print_color "$GREEN" "✅ Services started successfully"
