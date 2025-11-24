@@ -209,12 +209,26 @@ start_services() {
 
     # Start services with specified profiles
     print_color "$CYAN" "Starting services..."
+    
+    # Build the complete docker compose command as an array
+    # Handle both "docker compose" (two words) and "docker-compose" (one word)
+    local compose_cmd=()
+    if [[ "$DOCKER_COMPOSE_CMD" == *" "* ]]; then
+        # Split multi-word command
+        IFS=' ' read -ra cmd_parts <<< "$DOCKER_COMPOSE_CMD"
+        compose_cmd=("${cmd_parts[@]}")
+    else
+        # Single word command
+        compose_cmd=("$DOCKER_COMPOSE_CMD")
+    fi
+    compose_cmd+=(-f docker-compose.separated.yml)
+    
     if [ ${#profile_args[@]} -gt 0 ]; then
         print_color "$CYAN" "With profiles: ${profile_args[*]}"
-        $DOCKER_COMPOSE_CMD $compose_args "${profile_args[@]}" up -d --build
+        "${compose_cmd[@]}" "${profile_args[@]}" up -d --build
     else
         print_color "$CYAN" "Without additional profiles"
-        $DOCKER_COMPOSE_CMD $compose_args up -d --build
+        "${compose_cmd[@]}" up -d --build
     fi
 
     if [ $? -eq 0 ]; then
