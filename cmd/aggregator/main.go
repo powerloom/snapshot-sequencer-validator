@@ -470,7 +470,7 @@ func (a *Aggregator) claimStalledMessages(streamKey, groupName, consumerName str
 }
 
 func (a *Aggregator) processAggregationQueue() {
-	// Get namespaced queue keys
+	// Get namespaced queue key for Level 1 aggregation only
 	level1Queue := a.keyBuilder.AggregationQueueLevel1()
 
 	for {
@@ -478,7 +478,7 @@ func (a *Aggregator) processAggregationQueue() {
 		case <-a.ctx.Done():
 			return
 		default:
-			// FIRST: Check for Level 1 aggregation (finalizer worker parts) - namespaced
+			// Check for Level 1 aggregation (finalizer worker parts) - namespaced
 			result, err := a.redisClient.BRPop(a.ctx, time.Second, level1Queue).Result()
 			if err == nil && len(result) >= 2 {
 				// Parse the complex JSON from finalizer workers
@@ -497,12 +497,13 @@ func (a *Aggregator) processAggregationQueue() {
 				}).Info("📦 LEVEL 1: Aggregating finalizer worker parts into local batch")
 
 				// Aggregate worker parts into complete local batch
+				// This will write to stream, which triggers Level 2 aggregation via stream consumer
 				a.aggregateWorkerParts(epochIDStr, partsCompleted)
 				continue
 			}
 
-			// Stream notifications are mandatory - aggregation is triggered by stream messages
-			// Just sleep briefly to prevent busy-waiting
+			// Level 2 aggregation is handled by stream consumer (consumeStreamMessages)
+			// No need to poll queue - stream messages trigger aggregation windows
 			time.Sleep(100 * time.Millisecond)
 		}
 	}
@@ -573,6 +574,7 @@ func (a *Aggregator) startAggregationWindow(epochIDStr string) {
 }
 
 func (a *Aggregator) aggregateWorkerParts(epochIDStr string, totalParts int) {
+	// epochIDStr is already a parameter, no need to redeclare
 	// Convert string to uint64
 	epochID, err := parseEpochID(epochIDStr)
 	if err != nil {
@@ -679,6 +681,43 @@ func (a *Aggregator) aggregateWorkerParts(epochIDStr string, totalParts int) {
 	// Execute pipeline (ignore errors - monitoring is non-critical)
 	if _, err := pipe.Exec(a.ctx); err != nil {
 		log.Debugf("Failed to write monitoring metrics: %v", err)
+	}
+
+	// CRITICAL: Write to aggregation stream to trigger Level 2 aggregation (single unified path)
+	// This ensures our own local batch triggers aggregation, not just batches from other validators
+	streamKey := a.keyBuilder.AggregationStream()
+	// finalizedKey already declared above (line 631), reuse it
+
+	streamValues := map[string]interface{}{
+		"epoch":     epochIDStr,
+		"validator": a.config.SequencerID,
+		"batch_key": finalizedKey,
+		"timestamp": time.Now().Unix(),
+		"type":      "validator_batch",
+	}
+
+	// Add to stream with retry logic (same as P2P gateway)
+	maxRetries := 3
+	for i := 0; i < maxRetries; i++ {
+		_, err := a.redisClient.XAdd(a.ctx, &redis.XAddArgs{
+			Stream: streamKey,
+			Values: streamValues,
+		}).Result()
+		if err == nil {
+			log.WithFields(logrus.Fields{
+				"epoch":  epochID,
+				"stream": streamKey,
+			}).Debug("✅ Wrote local batch to aggregation stream")
+			break
+		}
+		if i == maxRetries-1 {
+			log.WithError(err).WithFields(logrus.Fields{
+				"epoch":  epochID,
+				"stream": streamKey,
+			}).Error("Failed to write local batch to aggregation stream after retries")
+		} else {
+			time.Sleep(time.Duration(i+1) * 100 * time.Millisecond)
+		}
 	}
 
 	// CRITICAL: Broadcast our local batch to validator network
@@ -1159,7 +1198,7 @@ func (a *Aggregator) monitorFinalizedBatches() {
 			}
 
 			// Check for finalized batches using timeline entries (matches monitoring API)
-			// Get recent aggregated entries from timeline
+			// Get recent local finalized entries from timeline (Level 1 batches ready for Level 2 aggregation)
 			timelineKey := a.keyBuilder.MetricsBatchesTimeline()
 			timelineEntries, err := a.redisClient.ZRevRangeByScoreWithScores(a.ctx, timelineKey, &redis.ZRangeBy{
 				Min:   strconv.FormatInt(time.Now().Unix()-3600, 10), // Last hour
@@ -1171,22 +1210,22 @@ func (a *Aggregator) monitorFinalizedBatches() {
 				continue
 			}
 
-			// Count aggregated entries from timeline
+			// Count local finalized entries from timeline (Level 1 batches ready for Level 2 aggregation)
 			finalizedCount := 0
 			for _, entry := range timelineEntries {
-				if strings.HasPrefix(entry.Member.(string), "aggregated:") {
+				if strings.HasPrefix(entry.Member.(string), "local:") {
 					finalizedCount++
 				}
 			}
 
 			newBatchesFound := 0
-			// Process each recent aggregated epoch from timeline
+			// Process each recent local finalized batch from timeline (Level 1 → needs Level 2 aggregation)
 			for _, entry := range timelineEntries {
-				if !strings.HasPrefix(entry.Member.(string), "aggregated:") {
+				if !strings.HasPrefix(entry.Member.(string), "local:") {
 					continue
 				}
 
-				epochID := strings.TrimPrefix(entry.Member.(string), "aggregated:")
+				epochID := strings.TrimPrefix(entry.Member.(string), "local:")
 
 				// Skip if already queued this session
 				if queuedEpochs[epochID] {
@@ -1299,9 +1338,8 @@ func (a *Aggregator) reportMetrics() {
 func (a *Aggregator) Start() error {
 	log.Info("Starting Aggregator")
 
-	// Start queue-based processing
+	// Start queue-based processing (Level 1 only - Level 2 handled by stream consumer)
 	go a.processAggregationQueue()
-	go a.monitorFinalizedBatches()
 	go a.reportMetrics()
 
 	return nil
