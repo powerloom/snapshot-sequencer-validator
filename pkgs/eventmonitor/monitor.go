@@ -1113,8 +1113,9 @@ func (wm *WindowManager) triggerFinalization(dataMarket string, epochID *big.Int
 	timestamp := time.Now().Unix()
 	epochStateKey := kb.EpochState(epochID.String())
 	wm.redisClient.HSet(ctx, epochStateKey, map[string]interface{}{
-		"level1_status": "in_progress",
-		"last_updated":  timestamp,
+		"level1_status":     "in_progress",
+		"level1_started_at": timestamp,
+		"last_updated":      timestamp,
 	})
 
 	// Push each batch to finalization queue

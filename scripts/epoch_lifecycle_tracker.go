@@ -127,15 +127,25 @@ func getRecentEpochs(rdb *redis.Client, ctx context.Context, protocol, market st
 		}
 	}
 
-	// Get from finalized batches
+	// Get from finalized batches (use SCAN instead of KEYS for production safety)
 	finalizedPattern := fmt.Sprintf("%s:%s:finalized:*", protocol, market)
-	keys, err := rdb.Keys(ctx, finalizedPattern).Result()
-	if err == nil {
-		for _, key := range keys {
-			parts := strings.Split(key, ":")
-			if len(parts) >= 3 {
-				epochSet[parts[2]] = true
-			}
+	var keys []string
+	var cursor uint64
+	for {
+		scanKeys, nextCursor, err := rdb.Scan(ctx, cursor, finalizedPattern, 100).Result()
+		if err != nil {
+			break
+		}
+		keys = append(keys, scanKeys...)
+		cursor = nextCursor
+		if cursor == 0 {
+			break
+		}
+	}
+	for _, key := range keys {
+		parts := strings.Split(key, ":")
+		if len(parts) >= 3 {
+			epochSet[parts[2]] = true
 		}
 	}
 

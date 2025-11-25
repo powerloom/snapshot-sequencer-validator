@@ -6,7 +6,7 @@ BIN_DIR := bin
 # Build all binaries
 all: build
 
-build: aggregator monitor-api unified p2p-gateway state-tracker
+build: aggregator monitor-api unified p2p-gateway state-tracker scripts
 
 # Individual component builds
 aggregator:
@@ -38,11 +38,26 @@ state-tracker:
 dequeuer: unified
 event-monitor: unified
 
+# Build script binaries
+scripts: check-epoch-gaps epoch-lifecycle-tracker
+
+check-epoch-gaps:
+	@echo "Building check-epoch-gaps..."
+	@mkdir -p $(BIN_DIR)
+	@go build -o $(BIN_DIR)/check-epoch-gaps ./scripts/check_epoch_gaps.go
+
+epoch-lifecycle-tracker:
+	@echo "Building epoch-lifecycle-tracker..."
+	@mkdir -p $(BIN_DIR)
+	@go build -o $(BIN_DIR)/epoch-lifecycle-tracker ./scripts/epoch_lifecycle_tracker.go
+
 # Clean build artifacts
 clean:
 	@echo "Cleaning build artifacts..."
 	@rm -rf $(BIN_DIR)
-	@rm -f aggregator monitor-api unified p2p-gateway
+	@rm -f aggregator monitor-api unified p2p-gateway state-tracker vpa-relayer
+	@rm -f check_epoch_gaps epoch_lifecycle_tracker
+	@rm -f scripts/check_epoch_gaps scripts/epoch_lifecycle_tracker
 
 # Run tests
 test:
@@ -93,18 +108,21 @@ swagger:
 # Display help
 help:
 	@echo "Available targets:"
-	@echo "  make build         - Build all components"
-	@echo "  make build-prod    - Build with production optimizations"
-	@echo "  make aggregator    - Build aggregator component"
-	@echo "  make monitor-api   - Build monitoring API"
-	@echo "  make unified       - Build unified sequencer"
-	@echo "  make p2p-gateway   - Build P2P gateway"
-	@echo "  make state-tracker - Build state tracker service"
-	@echo "  make clean         - Remove build artifacts"
-	@echo "  make test          - Run tests"
-	@echo "  make test-race     - Run tests with race detection"
-	@echo "  make deps          - Install/update dependencies"
-	@echo "  make fmt           - Format code"
-	@echo "  make lint          - Run linter"
-	@echo "  make swagger       - Generate Swagger documentation"
-	@echo "  make help          - Show this help"
+	@echo "  make build              - Build all components"
+	@echo "  make build-prod         - Build with production optimizations"
+	@echo "  make aggregator         - Build aggregator component"
+	@echo "  make monitor-api        - Build monitoring API"
+	@echo "  make unified            - Build unified sequencer"
+	@echo "  make p2p-gateway        - Build P2P gateway"
+	@echo "  make state-tracker      - Build state tracker service"
+	@echo "  make scripts            - Build script binaries (check-epoch-gaps, epoch-lifecycle-tracker)"
+	@echo "  make check-epoch-gaps   - Build check-epoch-gaps script binary"
+	@echo "  make epoch-lifecycle-tracker - Build epoch-lifecycle-tracker script binary"
+	@echo "  make clean              - Remove build artifacts"
+	@echo "  make test               - Run tests"
+	@echo "  make test-race          - Run tests with race detection"
+	@echo "  make deps               - Install/update dependencies"
+	@echo "  make fmt                - Format code"
+	@echo "  make lint               - Run linter"
+	@echo "  make swagger            - Generate Swagger documentation"
+	@echo "  make help               - Show this help"

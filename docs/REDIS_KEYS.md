@@ -104,13 +104,16 @@ P2P Gateway ←→ Redis ←→ Dequeuer
     - `phase`: "submission" | "level1_finalization" | "level2_aggregation" | "onchain_submission" | "complete" | "failed"
     - `submissions_count`: count of processed submissions
     - `level1_status`: "pending" | "in_progress" | "completed" | "failed"
-    - `level1_completed_at`: timestamp
+    - `level1_started_at`: timestamp (when finalization started)
+    - `level1_completed_at`: timestamp (when Level 1 batch created)
     - `level2_status`: "pending" | "collecting" | "aggregating" | "completed" | "failed"
-    - `level2_completed_at`: timestamp
+    - `level2_started_at`: timestamp (when Level 2 aggregation window opened)
+    - `level2_completed_at`: timestamp (when Level 2 batch created)
     - `onchain_status`: "pending" | "queued" | "submitted" | "confirmed" | "failed"
     - `onchain_tx_hash`: transaction hash
     - `onchain_block_number`: block number
     - `onchain_submitted_at`: timestamp
+    - `onchain_error`: error message when transaction fails (stored by relayer-py)
     - `priority`: validator priority for this epoch
     - `vpa_submission_attempted`: boolean
     - `last_updated`: timestamp
@@ -207,11 +210,27 @@ P2P Gateway ←→ Redis ←→ Dequeuer
   - Members: "local:{epochId}", "aggregated:{epochId}"
 
 - `{protocol}:{market}:metrics:submissions:timeline` - ZSET: Submission receipt events
-  - Written by: Unified Sequencer (handleSubmissionMessages)
-  - Read by: State-Tracker (for submission counting)
+  - Written by: P2P Gateway, Dequeuer (enhanced format)
+  - Read by: State-Tracker (for submission counting), Monitor API (epoch submissions endpoint)
   - No TTL (pruned daily by state-tracker)
-  - Format: Sorted set by timestamp
-  - Members: submissionId
+  - Format: Sorted set by timestamp (score = Unix timestamp)
+  - Members: Enhanced entity IDs like `received:{epochId}:{slotId}:{projectId}:{timestamp}:{peerId}` or legacy format `{epochId}-{projectId}-{timestamp}`
+  - Purpose: Track all submissions with epoch context for querying submissions per epoch
+
+- `{protocol}:{market}:metrics:submissions:metadata:{entityId}` - STRING: Detailed submission metadata
+  - Written by: P2P Gateway, Dequeuer (when enhanced entity ID format is used)
+  - Read by: Monitor API (epoch submissions endpoint, timeline with metadata)
+  - TTL: 24 hours
+  - Format: JSON object with fields:
+    - `epoch_id`: Epoch ID (string)
+    - `slot_id`: Snapshotter slot ID (string or number)
+    - `project_id`: Project ID (string)
+    - `cid` or `snapshot_cid`: IPFS CID of snapshot (string)
+    - `peer_id`: Peer ID that sent the submission (string)
+    - `validator_id`: Validator ID if available (string, optional)
+    - `timestamp`: Unix timestamp (number)
+    - `entity_id`: The entity ID from timeline (string)
+  - Purpose: Store detailed metadata for each submission to enable epoch-centered queries
 
 - `{protocol}:{market}:metrics:validations:timeline` - ZSET: Validation completion events
   - Written by: Dequeuer (ProcessSubmission)
@@ -236,12 +255,22 @@ P2P Gateway ←→ Redis ←→ Dequeuer
   - Format: JSON array of validator IDs
   - Purpose: Track who participated in each batch
 
+#### Submission Tracking Keys
+- `{protocol}:{market}:epoch:{epochId}:processed` - SET: Processed submission IDs per epoch
+  - Written by: Dequeuer (when processing submissions)
+  - Read by: Event Monitor (for collecting epoch submissions), State-Tracker
+  - TTL: 1 hour after epoch window closes
+  - Format: Set of submission IDs (internal format, not entity IDs)
+  - Purpose: Track which submissions were processed for a specific epoch
+  - Note: This is different from the timeline entity IDs - these are internal submission IDs
+
 #### Deterministic Aggregation Keys
-- `{protocol}:{market}:ActiveEpochs` - SET: Currently active epoch IDs
-  - Written by: Event Monitor
-  - Read by: State-Tracker (deterministic aggregation)
+- `{protocol}:{market}:epochs:active` - SET: Currently active epoch IDs (legacy, may be stale)
+  - Written by: Event Monitor (when epoch window opens)
+  - Read by: State-Tracker (deterministic aggregation) - but Monitor API queries timeline directly instead
   - Purpose: Direct access to active epochs instead of SCAN operations
   - Format: Set of epoch IDs as strings
+  - Note: Monitor API's `/epochs/active` endpoint queries timeline directly for accuracy, not this SET
 
 - `{protocol}:{market}:EpochValidators({epochId})` - SET: Validator IDs participating in each epoch
   - Written by: Event Monitor/Aggregator
@@ -251,9 +280,10 @@ P2P Gateway ←→ Redis ←→ Dequeuer
 
 - `{protocol}:{market}:EpochProcessed({epochId})` - SET: Processed submission IDs per epoch
   - Written by: Dequeuer
-  - Read by: State-Tracker (deterministic aggregation)
+  - Read by: State-Tracker (deterministic aggregation), Event Monitor (for collecting submissions)
   - Purpose: Fast submission counting without expensive operations
-  - Format: Set of submission IDs
+  - Format: Set of submission IDs (internal format)
+  - Note: This is the same as `{protocol}:{market}:epoch:{epochId}:processed` - both keys exist for compatibility
 
 - `{protocol}:{market}:epochs:gaps` - ZSET: Epoch gaps tracking
   - Written by: State-Tracker (detectEpochGaps)
@@ -280,9 +310,14 @@ P2P Gateway ←→ Redis ←→ Dequeuer
 ```
 Network → P2P Gateway → submissionQueue → Dequeuer → processed:{id} → Event Monitor
                                            ↓                          ↓
-                                   metrics:submissions:timeline   metrics:epochs:timeline
-                                           ↓                          ↓
-                                   metrics:validations:timeline   ActiveEpochs SET
+                    metrics:submissions:timeline              metrics:epochs:timeline
+                    (entityId: received:{epoch}:{slot}:...)          ↓
+                                           ↓                  epochs:active SET
+                    metrics:submissions:metadata:{entityId}   epoch:{epochId}:state
+                    (detailed metadata: slot_id, peer_id, etc.)      ↓
+                                           ↓                  epoch:{epochId}:processed SET
+                    Monitor API (/epochs/{id}/submissions)
+                    (queries timeline + metadata)
 ```
 
 ### 2. Level 1 Aggregation with Monitoring (Worker Parts → Local Batch)
@@ -322,8 +357,39 @@ Timeline Events (epochs, batches, submissions, validations) → State-Tracker
                                         dashboard:summary + stats:current
                                                             ↓
                                         metrics:participation + current_epoch
+                                        + epoch:{epochId}:state (submissions_count)
+                                        + epochs:gaps (gap detection)
                                                             ↓
                                                     Monitor API Response
+```
+
+### 8. Epoch Submissions Query Flow
+```
+Monitor API: GET /epochs/{epochId}/submissions
+    ↓
+Query: metrics:submissions:timeline (ZRANGEBYSCORE, last 24h)
+    ↓
+Filter: Parse entity IDs, match epoch ID
+    ↓
+For each matching entity ID:
+    Query: metrics:submissions:metadata:{entityId}
+    Fallback: Parse entity ID format if metadata missing
+    ↓
+Return: Array of SubmissionInfo (slot_id, peer_id, project_id, cid, etc.)
+```
+
+### 9. Active Epochs Query Flow (Fixed Implementation)
+```
+Monitor API: GET /epochs/active
+    ↓
+Query: metrics:epochs:timeline (ZREVRANGE, last 100 epochs)
+    ↓
+For each epoch ID:
+    Query: epoch:{epochId}:state (HGETALL)
+    Check: window_status, level1_status, level2_status
+    Filter: Only include if window="open" OR level1="in_progress" OR level2="collecting"/"aggregating"
+    ↓
+Return: Array of active EpochInfo (sorted by epoch ID descending)
 ```
 
 ### 7. Deterministic Aggregation Flow
@@ -415,7 +481,17 @@ Event Monitor → ActiveEpochs SET + EpochValidators({epochId}) SET + metrics:ep
 - `{protocol}:{market}:stats:current` - Current stats
 - `{protocol}:{market}:metrics:participation` - Participation data
 - `{protocol}:{market}:metrics:current_epoch` - Epoch status
-- All queue depths for real-time status
+- `{protocol}:{market}:metrics:epochs:timeline` - Epoch timeline (for active epochs query)
+- `{protocol}:{market}:epoch:{epochId}:state` - Epoch state hash (for status, active epochs, gaps)
+- `{protocol}:{market}:metrics:submissions:timeline` - Submissions timeline (for epoch submissions endpoint)
+- `{protocol}:{market}:metrics:submissions:metadata:{entityId}` - Submission metadata (for detailed submission info)
+- `{protocol}:{market}:metrics:batches:timeline` - Batches timeline
+- `{protocol}:{market}:metrics:batch:local:{epochId}` - Level 1 batch metadata
+- `{protocol}:{market}:metrics:batch:aggregated:{epochId}` - Level 2 batch metadata
+- `{protocol}:{market}:metrics:batch:{epochId}:validators` - Validator list for batch
+- `{protocol}:{market}:metrics:epoch:{epochId}:info` - Epoch info hash
+- `{protocol}:{market}:epochs:gaps` - Epoch gaps ZSET
+- All queue depths for real-time status (LLen operations)
 
 ## Key Naming Conventions
 

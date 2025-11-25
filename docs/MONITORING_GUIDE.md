@@ -38,7 +38,8 @@ http://localhost:9091/swagger/index.html
 | `/api/v1/dashboard/summary` | Real-time dashboard metrics | protocol, market |
 | `/api/v1/epochs/timeline` | Epoch progression timeline (sorted by epoch ID) | protocol, market, limit |
 | `/api/v1/epochs/{epochId}/status` | Complete epoch state with all phase information | protocol, market |
-| `/api/v1/epochs/active` | Epochs currently in progress | protocol, market |
+| `/api/v1/epochs/{epochId}/submissions` | All submissions for an epoch (slot ID, peer ID, project ID, CID) | protocol, market |
+| `/api/v1/epochs/active` | Epochs currently in progress (queries timeline directly for accuracy) | protocol, market |
 | `/api/v1/epochs/gaps` | Identify epochs with missing finalizations | protocol, market, window_minutes |
 | `/api/v1/batches/finalized` | Recently finalized batches (with phase and onchain status) | protocol, market, level, epoch_id, limit |
 | `/api/v1/aggregation/results` | Network aggregation results | protocol, market |
@@ -119,10 +120,16 @@ curl "http://localhost:9091/api/v1/dashboard/summary"
 # 3. View recent epochs
 curl "http://localhost:9091/api/v1/epochs/timeline"
 
-# 4. Check finalized batches
+# 4. Check a specific epoch's status
+curl "http://localhost:9091/api/v1/epochs/23875280/status?protocol=0x3B5A0FB70ef68B5dd677C7d614dFB89961f97401&market=0xb5cE2F9B71e785e3eC0C45EDE06Ad95c3bb71a4d"
+
+# 5. Get all submissions for an epoch (with slot ID, peer ID, project ID, CID)
+curl "http://localhost:9091/api/v1/epochs/23875280/submissions?protocol=0x3B5A0FB70ef68B5dd677C7d614dFB89961f97401&market=0xb5cE2F9B71e785e3eC0C45EDE06Ad95c3bb71a4d"
+
+# 6. Check finalized batches
 curl "http://localhost:9091/api/v1/batches/finalized"
 
-# 5. Monitor network aggregation
+# 7. Monitor network aggregation
 curl "http://localhost:9091/api/v1/aggregation/results"
 ```
 
@@ -731,14 +738,101 @@ The combined log commands are particularly useful for debugging cross-component 
 
 ## New Epoch-Centered Endpoints
 
+### GET /api/v1/epochs/{epochId}/submissions
+
+**Purpose**: Get all submissions received for a specific epoch with detailed metadata (slot ID, peer ID, project ID, snapshot CID).
+
+**How It Works**:
+1. Queries `{protocol}:{market}:metrics:submissions:timeline` (ZSET) for last 24 hours
+2. Filters entity IDs matching the epoch ID
+3. For each matching submission:
+   - Fetches detailed metadata from `{protocol}:{market}:metrics:submissions:metadata:{entityId}`
+   - Falls back to parsing entity ID format if metadata missing
+4. Returns array of submissions sorted by timestamp (most recent first)
+
+**Entity ID Formats**:
+- **Enhanced**: `received:{epochId}:{slotId}:{projectId}:{timestamp}:{peerId}`
+- **Legacy**: `{epochId}-{projectId}-{timestamp}`
+
+**Response Fields**:
+- `entity_id`: The entity ID from timeline
+- `epoch_id`: Epoch ID
+- `slot_id`: Snapshotter slot ID
+- `project_id`: Project ID
+- `snapshot_cid`: IPFS CID of snapshot (if available)
+- `peer_id`: Peer ID that sent the submission (if available)
+- `validator_id`: Validator ID (if available)
+- `timestamp`: Unix timestamp
+- `time`: RFC3339 formatted time
+
+**Example**:
+```bash
+curl "http://localhost:9091/api/v1/epochs/23875280/submissions?protocol=0x3B5A0FB70ef68B5dd677C7d614dFB89961f97401&market=0xb5cE2F9B71e785e3eC0C45EDE06Ad95c3bb71a4d" | jq '.submissions[0:3]'
+```
+
+**Use Cases**:
+- Debugging: "Which snapshotter sent what for epoch X?"
+- Analysis: "How many submissions per slot ID for this epoch?"
+- Validation: "Did peer Y send submissions for epoch X?"
+- Monitoring: "What projects submitted data for this epoch?"
+
+### GET /api/v1/epochs/active
+
+**Purpose**: Get epochs currently in progress (window open, level 1/2 in progress).
+
+**How It Works** (Fixed Implementation):
+1. Queries `{protocol}:{market}:metrics:epochs:timeline` (ZSET) for last 100 epochs
+2. For each epoch ID:
+   - Queries `{protocol}:{market}:epoch:{epochId}:state` (HASH) for current state
+   - Checks `window_status`, `level1_status`, `level2_status`
+   - Includes epoch if:
+     - `window_status == "open"` OR
+     - `level1_status == "in_progress"` OR
+     - `level2_status == "collecting"` OR `level2_status == "aggregating"`
+3. Returns filtered epochs sorted by epoch ID (descending)
+
+**Why This Approach**:
+- **Reliability**: Queries epoch state directly instead of relying on potentially stale `epochs:active` SET
+- **Accuracy**: Always reflects current state from authoritative source (epoch state hash)
+- **Consistency**: Same data source as `/epochs/{epochId}/status` endpoint
+
+**Response Fields**:
+- `epoch_id`: Epoch ID
+- `phase`: Current phase (submission, level1_finalization, level2_aggregation, etc.)
+- `status`: Window status (open, closed)
+- `start_time`: Window open timestamp
+- `duration`: Window duration in seconds
+- `level1_batch_exists`: Whether Level 1 batch exists
+- `level2_batch_exists`: Whether Level 2 batch exists
+
+**Example**:
+```bash
+curl "http://localhost:9091/api/v1/epochs/active?protocol=0x3B5A0FB70ef68B5dd677C7d614dFB89961f97401&market=0xb5cE2F9B71e785e3eC0C45EDE06Ad95c3bb71a4d" | jq '.[] | {epoch_id, phase, status}'
+```
+
+**Use Cases**:
+- Real-time monitoring: "What epochs are currently being processed?"
+- Debugging: "Is epoch X stuck in a phase?"
+- Operations: "Which epochs need attention?"
+
 ### GET /api/v1/epochs/{epochId}/status
 
 Get complete epoch state with all phase information.
 
+**⚠️ IMPORTANT**: You **MUST** pass `protocol` and `market` query parameters to see on-chain submission details written by relayer-py. Relayer-py writes using the NEW protocol state contract address (from `NEW_PROTOCOL_STATE_CONTRACT` env var) and the data market address from the transaction. If you don't pass these parameters, the endpoint uses default/legacy addresses and won't find the relayer-py data.
+
 **Example:**
 ```bash
-curl "http://localhost:9091/api/v1/epochs/23847425/status?protocol=0x3B5A0FB70ef68B5dd677C7d614dFB89961f97401&market=0xb5cE2F9B71e785e3eC0C45EDE06Ad95c3bb71a4d"
+# CORRECT - Pass protocol and market to match relayer-py's Redis keys
+curl "http://localhost:9091/api/v1/epochs/23847425/status?protocol=0xC9e7304f719D35919b0371d8B242ab59E0966d63&market=0xb6c1392944a335b72b9e34f9D4b8c0050cdb511f"
+
+# WRONG - Missing query params, won't find relayer-py transaction data
+curl "http://localhost:9091/api/v1/epochs/23847425/status"
 ```
+
+**Query Parameters**:
+- `protocol` (REQUIRED for relayer-py data): Protocol state contract address (must match `NEW_PROTOCOL_STATE_CONTRACT` in relayer-py)
+- `market` (REQUIRED for relayer-py data): Data market address (must match the data market address in the transaction)
 
 **Response:**
 ```json
@@ -1623,3 +1717,153 @@ docker exec redis redis-cli ZREVRANGEBYSCORE "{protocol}:vpa:priority:timeline" 
 docker exec redis redis-cli HGETALL "{protocol}:vpa:stats:{dataMarket}" | \
   grep -E "priority_[0-9]+_submissions"
 ```
+## Automated Epoch Status Analysis
+
+The DSV repository includes automated analysis scripts to verify transaction hash presence and identify issues with epoch processing.
+
+### analyze_epoch_status.py
+
+**Purpose**: Automated analysis of active epochs to verify transaction hash presence and identify processing issues.
+
+**Key Features**:
+- Compares active epochs (queried with OLD/default addresses) with their detailed status (queried with NEW addresses where relayer-py writes)
+- Automatically lowercases addresses to match Redis key format (relayer-py lowercases addresses)
+- Tracks transaction hash presence by on-chain status
+- Identifies epochs with missing transaction hashes
+- Reports failed submissions with error details
+
+**Usage**:
+```bash
+# Basic usage (requires NEW addresses where relayer-py writes)
+python3 scripts/analyze_epoch_status.py \
+  --status-protocol 0xC9e7304f719D35919b0371d8B242ab59E0966d63 \
+  --status-market 0xb6c1392944a335b72b9e34f9D4b8c0050cdb511f
+
+# Full usage with both OLD and NEW addresses
+python3 scripts/analyze_epoch_status.py \
+  --api-url http://localhost:9092 \
+  --active-protocol 0x3B5A0FB70ef68B5dd677C7d614dFB89961f97401 \
+  --active-market 0xb5cE2F9B71e785e3eC0C45EDE06Ad95c3bb71a4d \
+  --status-protocol 0xC9e7304f719D35919b0371d8B242ab59E0966d63 \
+  --status-market 0xb6c1392944a335b72b9e34f9D4b8c0050cdb511f \
+  --output table
+
+# JSON output for programmatic processing
+python3 scripts/analyze_epoch_status.py \
+  --status-protocol 0xC9e7304f719D35919b0371d8B242ab59E0966d63 \
+  --status-market 0xb6c1392944a335b72b9e34f9D4b8c0050cdb511f \
+  --output json | jq '.stats'
+```
+
+**Output Formats**:
+- `summary` (default): Human-readable summary with statistics
+- `table`: Detailed table showing each epoch's status
+- `json`: Machine-readable JSON output
+
+**What It Checks**:
+1. **Transaction Hash Presence**: Verifies that epochs with `onchain_status` of "submitted", "confirmed", or "failed" have transaction hashes
+2. **Status Consistency**: Checks that epochs in "onchain_submission" phase have appropriate on-chain status
+3. **Error Details**: Identifies failed submissions without error details
+4. **VPA Submission Tracking**: Verifies that VPA submission attempts are properly tracked
+
+**Example Output**:
+```
+================================================================================
+SUMMARY
+================================================================================
+Total active epochs: 32
+With status data (NEW addresses): 32
+Without status data: 0
+
+On-chain Status Distribution:
+  confirmed: 15
+  queued: 3
+  submitted: 2
+
+Transaction Hash Analysis:
+  Epochs WITH tx_hash: 17
+  Epochs WITHOUT tx_hash: 3
+
+Failed Submissions: 0
+Failed without error details: 0
+```
+
+**Exit Codes**:
+- `0`: No critical issues found
+- `1`: Critical issues detected (failed epochs without error details, or statuses requiring tx_hash but missing it)
+
+### check_tx_hashes.sh
+
+**Purpose**: Convenient wrapper script for quick transaction hash analysis.
+
+**Usage**:
+```bash
+# Use default addresses
+./scripts/check_tx_hashes.sh
+
+# Specify custom addresses
+./scripts/check_tx_hashes.sh \
+  http://localhost:9092 \
+  0x3B5A0FB70ef68B5dd677C7d614dFB89961f97401 \
+  0xb5cE2F9B71e785e3eC0C45EDE06Ad95c3bb71a4d \
+  0xC9e7304f719D35919b0371d8B242ab59E0966d63 \
+  0xb6c1392944a335b72b9e34f9D4b8c0050cdb511f
+```
+
+**What It Does**:
+1. Runs `analyze_epoch_status.py` with summary output
+2. Runs `analyze_epoch_status.py` with table output
+3. Provides both high-level summary and detailed epoch-by-epoch breakdown
+
+### Understanding Address Normalization
+
+**Important**: The scripts automatically lowercase Ethereum addresses to match Redis key format. Relayer-py lowercases addresses when writing to Redis, so the scripts normalize addresses to ensure correct key matching.
+
+**Why This Matters**:
+- Redis keys use lowercase addresses: `0xc9e7304f719d35919b0371d8b242ab59e0966d63:0xb6c1392944a335b72b9e34f9d4b8c0050cdb511f:epoch:23875427:state`
+- Relayer-py writes using lowercase addresses (from `NEW_PROTOCOL_STATE_CONTRACT` env var)
+- The Monitor API accepts addresses in any case, but Redis keys are case-sensitive
+- The scripts normalize addresses to ensure correct key matching
+
+**Verification**:
+```bash
+# Check Redis key format (addresses are lowercase)
+redis-cli KEYS "*c9e7304f719d35919b0371d8b242ab59e0966d63*23875427*"
+
+# Query API with mixed-case addresses (works, but scripts normalize to lowercase)
+curl "http://localhost:9092/api/v1/epochs/23875427/status?protocol=0xC9e7304f719D35919b0371d8B242ab59E0966d63&market=0xb6c1392944a335b72b9e34f9D4b8c0050cdb511f"
+```
+
+### Integration with Monitoring Workflow
+
+**Recommended Workflow**:
+1. **Daily Check**: Run `check_tx_hashes.sh` to verify transaction hash presence
+2. **Issue Investigation**: Use `analyze_epoch_status.py --output table` to see detailed epoch-by-epoch status
+3. **Automated Monitoring**: Integrate `analyze_epoch_status.py --output json` into monitoring systems
+4. **Alerting**: Script exits with code 1 if critical issues detected (can be used in cron jobs)
+
+**Example Cron Job**:
+```bash
+# Run every hour, alert on critical issues
+0 * * * * /path/to/dsv/scripts/check_tx_hashes.sh >> /var/log/dsv/tx_hash_check.log 2>&1 || echo "Critical issues detected" | mail -s "DSV Transaction Hash Check Failed" admin@example.com
+```
+
+### Troubleshooting
+
+**No Transaction Hashes Found**:
+1. Verify relayer-py is running and processing transactions
+2. Check relayer-py logs for "Updated epoch state in Redis" messages
+3. Verify `NEW_PROTOCOL_STATE_CONTRACT` env var in relayer-py matches the protocol address used in script
+4. Check Redis connectivity from relayer-py
+5. Verify addresses are correctly normalized (lowercase)
+
+**Status Data Not Found**:
+1. Ensure NEW protocol/market addresses are correct
+2. Verify epochs exist in the active epochs list
+3. Check that relayer-py has written to Redis for these epochs
+4. Verify Redis key format matches expected pattern
+
+**Case Sensitivity Issues**:
+- The scripts automatically handle case normalization
+- If manually querying Redis, use lowercase addresses
+- Monitor API accepts any case, but Redis keys are lowercase

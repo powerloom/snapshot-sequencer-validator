@@ -1,6 +1,10 @@
 package redis
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/ethereum/go-ethereum/common"
+)
 
 // KeyBuilder provides methods to generate namespaced Redis keys
 type KeyBuilder struct {
@@ -8,11 +12,31 @@ type KeyBuilder struct {
 	DataMarket    string
 }
 
-// NewKeyBuilder creates a new KeyBuilder instance
+// checksumAddress converts an Ethereum address to checksummed format (EIP-55).
+// If the input is not a valid Ethereum address, it returns the input unchanged.
+// This ensures all Redis keys use consistent checksummed addresses.
+func checksumAddress(addr string) string {
+	// Handle empty addresses
+	if addr == "" {
+		return addr
+	}
+
+	// Try to parse as Ethereum address and convert to checksummed format
+	if common.IsHexAddress(addr) {
+		address := common.HexToAddress(addr)
+		return address.Hex() // .Hex() returns checksummed format (EIP-55)
+	}
+
+	// If not a valid address, return as-is (might be a non-address identifier)
+	return addr
+}
+
+// NewKeyBuilder creates a new KeyBuilder instance with checksummed addresses.
+// All Ethereum addresses are converted to EIP-55 checksummed format for consistent Redis keys.
 func NewKeyBuilder(protocolState, dataMarket string) *KeyBuilder {
 	return &KeyBuilder{
-		ProtocolState: protocolState,
-		DataMarket:    dataMarket,
+		ProtocolState: checksumAddress(protocolState),
+		DataMarket:    checksumAddress(dataMarket),
 	}
 }
 

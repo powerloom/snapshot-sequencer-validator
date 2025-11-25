@@ -579,9 +579,10 @@ func (a *Aggregator) startAggregationWindow(epochIDStr string) {
 	timestamp := time.Now().Unix()
 	epochStateKey := a.keyBuilder.EpochState(epochIDStr)
 	a.redisClient.HSet(a.ctx, epochStateKey, map[string]interface{}{
-		"level2_status": "collecting",
-		"phase":         "level2_aggregation",
-		"last_updated":  timestamp,
+		"level2_status":     "collecting",
+		"level2_started_at": timestamp,
+		"phase":             "level2_aggregation",
+		"last_updated":      timestamp,
 	})
 
 	log.WithFields(logrus.Fields{

@@ -1306,8 +1306,27 @@ func (m *MonitorAPI) ActiveEpochs(c *gin.Context) {
 		// Get epoch state hash (authoritative source)
 		epochStateKey := kb.EpochState(epochID)
 		stateData, err := m.redis.HGetAll(m.ctx, epochStateKey).Result()
+
+		// If state hash doesn't exist, check if epoch has batches (might be in progress)
 		if err != nil || len(stateData) == 0 {
-			// Skip epochs without state hash (not yet initialized or too old)
+			// Check if epoch has Level 1 or Level 2 batches (might be actively processing)
+			level1Key := kb.MetricsBatchLocal(epochID)
+			level2Key := kb.MetricsBatchAggregated(epochID)
+			level1Exists, _ := m.redis.Exists(m.ctx, level1Key).Result()
+			level2Exists, _ := m.redis.Exists(m.ctx, level2Key).Result()
+
+			// If epoch has batches but no state hash, it might be actively processing
+			// Include it but mark as needing state initialization
+			if level1Exists > 0 || level2Exists > 0 {
+				epochInfo := EpochInfo{
+					EpochID: epochID,
+					Phase:   "unknown", // State hash missing, phase unknown
+					Status:  "unknown",
+				}
+				epochInfo.Level1Batch = level1Exists > 0
+				epochInfo.Level2Batch = level2Exists > 0
+				activeEpochs = append(activeEpochs, epochInfo)
+			}
 			continue
 		}
 
@@ -1316,13 +1335,19 @@ func (m *MonitorAPI) ActiveEpochs(c *gin.Context) {
 		level1Status, _ := stateData["level1_status"]
 		level2Status, _ := stateData["level2_status"]
 		phase, _ := stateData["phase"]
+		onchainStatus, _ := stateData["onchain_status"]
 
 		isActive := false
 		if windowStatus == "open" {
 			isActive = true
-		} else if level1Status == "in_progress" {
+		} else if level1Status == "in_progress" || level1Status == "pending" {
+			// Include pending level1 (window closed but finalization not started yet)
 			isActive = true
-		} else if level2Status == "collecting" || level2Status == "aggregating" {
+		} else if level2Status == "collecting" || level2Status == "aggregating" || level2Status == "pending" {
+			// Include pending level2 (level1 completed but level2 not started yet)
+			isActive = true
+		} else if onchainStatus == "queued" || onchainStatus == "submitted" {
+			// Include epochs with on-chain submissions in progress
 			isActive = true
 		}
 
