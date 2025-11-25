@@ -91,12 +91,21 @@ definitions:
     properties:
       epoch_id:
         type: string
+      has_gap:
+        description: Whether epoch has a gap
+        type: boolean
       ipfs_cid:
         type: string
       level:
         description: 1 for local, 2 for aggregated
         type: integer
       merkle_root:
+        type: string
+      onchain_status:
+        description: On-chain submission status
+        type: string
+      phase:
+        description: Current phase of epoch
         type: string
       project_count:
         type: integer
@@ -273,6 +282,87 @@ paths:
       summary: Dashboard summary
       tags:
       - dashboard
+  /epochs/{epochId}/status:
+    get:
+      description: Get complete epoch state with all phase information
+      parameters:
+      - description: Epoch ID
+        in: path
+        name: epochId
+        required: true
+        type: string
+      - description: Protocol state identifier
+        in: query
+        name: protocol
+        type: string
+      - description: Data market address
+        in: query
+        name: market
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Epoch status
+      tags:
+      - epochs
+  /epochs/active:
+    get:
+      description: Get epochs currently in progress (window open, level 1/2 in progress)
+      parameters:
+      - description: Protocol state identifier
+        in: query
+        name: protocol
+        type: string
+      - description: Data market address
+        in: query
+        name: market
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/main.EpochInfo'
+            type: array
+      summary: Active epochs
+      tags:
+      - epochs
+  /epochs/gaps:
+    get:
+      description: Identify epochs that should have finalizations but don't
+      parameters:
+      - description: Protocol state identifier
+        in: query
+        name: protocol
+        type: string
+      - description: Data market address
+        in: query
+        name: market
+        type: string
+      - description: Window minutes to check for gaps (default 5)
+        in: query
+        name: window_minutes
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+      summary: Epoch gaps
+      tags:
+      - epochs
   /epochs/timeline:
     get:
       description: Get epoch progression with phases and batch status
@@ -473,6 +563,35 @@ paths:
             additionalProperties: true
             type: object
       summary: Get VPA status for specific epoch
+      tags:
+      - vpa
+  /vpa/epoch/{epochID}/lifecycle:
+    get:
+      description: Track complete lifecycle of an epoch from release to submission,
+        showing all stages and timing
+      parameters:
+      - description: Epoch ID to track
+        in: path
+        name: epochID
+        required: true
+        type: string
+      - description: Protocol state identifier (defaults to configured protocol)
+        in: query
+        name: protocol
+        type: string
+      - description: Data market address (defaults to configured market)
+        in: query
+        name: market
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Epoch lifecycle with all stages and timing
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Get epoch lifecycle tracking
       tags:
       - vpa
   /vpa/stats:

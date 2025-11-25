@@ -126,6 +126,87 @@
                 }
             }
         },
+        "/epochs/active": {
+            "get": {
+                "description": "Get epochs currently in progress (window open, level 1/2 in progress)",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "epochs"
+                ],
+                "summary": "Active epochs",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/main.EpochInfo"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/epochs/gaps": {
+            "get": {
+                "description": "Identify epochs that should have finalizations but don't",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "epochs"
+                ],
+                "summary": "Epoch gaps",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Window minutes to check for gaps (default 5)",
+                        "name": "window_minutes",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": true
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/epochs/timeline": {
             "get": {
                 "description": "Get epoch progression with phases and batch status",
@@ -164,6 +245,48 @@
                             "items": {
                                 "$ref": "#/definitions/main.EpochInfo"
                             }
+                        }
+                    }
+                }
+            }
+        },
+        "/epochs/{epochId}/status": {
+            "get": {
+                "description": "Get complete epoch state with all phase information",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "epochs"
+                ],
+                "summary": "Epoch status",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Epoch ID",
+                        "name": "epochId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
                         }
                     }
                 }
@@ -431,6 +554,48 @@
                 }
             }
         },
+        "/vpa/epoch/{epochID}/lifecycle": {
+            "get": {
+                "description": "Track complete lifecycle of an epoch from release to submission, showing all stages and timing",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "vpa"
+                ],
+                "summary": "Get epoch lifecycle tracking",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Epoch ID to track",
+                        "name": "epochID",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier (defaults to configured protocol)",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address (defaults to configured market)",
+                        "name": "market",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Epoch lifecycle with all stages and timing",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
         "/vpa/stats": {
             "get": {
                 "description": "Get aggregated VPA statistics including total priority assignments, submission counts (success/failed), success rates, and 24-hour activity counts.",
@@ -645,6 +810,10 @@
                 "epoch_id": {
                     "type": "string"
                 },
+                "has_gap": {
+                    "description": "Whether epoch has a gap",
+                    "type": "boolean"
+                },
                 "ipfs_cid": {
                     "type": "string"
                 },
@@ -653,6 +822,14 @@
                     "type": "integer"
                 },
                 "merkle_root": {
+                    "type": "string"
+                },
+                "onchain_status": {
+                    "description": "On-chain submission status",
+                    "type": "string"
+                },
+                "phase": {
+                    "description": "Current phase of epoch",
                     "type": "string"
                 },
                 "project_count": {
