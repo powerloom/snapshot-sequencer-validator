@@ -8,6 +8,7 @@ The monitoring system provides comprehensive visibility into the batch processin
 - **Epoch-Centered Observability**: Complete state tracking for each epoch through all phases
 - **Gap Detection**: Automatic identification of epochs with missing finalizations
 - **Phase Tracking**: Real-time visibility into submission, finalization, aggregation, and on-chain phases
+- **Relayer-Py Integration**: Automatic transaction status tracking - relayer-py writes `onchain_status`, `onchain_tx_hash`, and `onchain_block_number` directly to Redis (no log parsing needed)
 - **Sorted Responses**: All timeline endpoints return epochs sorted by ID (most recent first)
 
 The system supports both P2PSnapshotSubmission batch format (multiple submissions per message) and single SnapshotSubmission format, with proper Redis key patterns for data organization.
@@ -747,20 +748,25 @@ curl "http://localhost:9091/api/v1/epochs/23847425/status?protocol=0x3B5A0FB70ef
     "window_status": "closed",
     "window_opened_at": 1763798270,
     "window_closes_at": 1763798290,
-    "phase": "level2_aggregation",
+    "phase": "onchain_submission",
     "submissions_count": 45,
     "level1_status": "completed",
     "level1_completed_at": 1763798300,
-    "level2_status": "aggregating",
-    "level2_completed_at": 0,
-    "onchain_status": "pending",
+    "level2_status": "completed",
+    "level2_completed_at": 1763798400,
+    "onchain_status": "confirmed",
+    "onchain_tx_hash": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+    "onchain_block_number": 12345678,
+    "onchain_submitted_at": 1763798500,
     "priority": 1,
-    "vpa_submission_attempted": false,
-    "last_updated": 1763798350
+    "vpa_submission_attempted": true,
+    "last_updated": 1763798600
   },
   "timestamp": "2025-01-22T08:00:00Z"
 }
 ```
+
+**Note**: The `onchain_status`, `onchain_tx_hash`, `onchain_block_number`, and `onchain_submitted_at` fields are automatically updated by relayer-py when transactions are submitted and confirmed. No log parsing needed!
 
 ### GET /api/v1/epochs/active
 
@@ -827,7 +833,7 @@ Potential monitoring improvements:
 - WebSocket real-time updates
 - Historical trend analysis
 - Alert system for persistent gaps
-- On-chain transaction confirmation tracking
+- ~~On-chain transaction confirmation tracking~~ ✅ **COMPLETE**: Relayer-py now writes transaction status to Redis automatically
 
 ### Consensus Troubleshooting
 
@@ -1222,7 +1228,24 @@ docker logs dsv-relayer-py --tail 100 | grep "Transaction.*submitted with hash" 
 
 ### Relayer-PY Integration Monitoring
 
-**Relayer Service:**
+**Relayer-Py State Tracking:**
+
+Relayer-py now writes epoch state directly to Redis, providing seamless integration with DSV monitoring. Transaction status is automatically updated in the epoch state hash (`{protocol}:{market}:epoch:{epochId}:state`) at two points:
+
+1. **Transaction Submitted**: `onchain_status: "submitted"`, `onchain_tx_hash` set, `onchain_submitted_at` timestamp
+2. **Transaction Confirmed**: `onchain_status: "confirmed"`, `onchain_block_number` set (from receipt)
+
+**Query Transaction Status via Monitor API:**
+```bash
+# Get complete epoch status including transaction details
+EPOCH_ID=23847425
+curl "http://localhost:9091/api/v1/epochs/${EPOCH_ID}/status?protocol=0x3B5A0FB70ef68B5dd677C7d614dFB89961f97401&market=0xb5cE2F9B71e785e3eC0C45EDE06Ad95c3bb71a4d" | jq '.state | {onchain_status, onchain_tx_hash, onchain_block_number, onchain_submitted_at}'
+
+# Check finalized batches with on-chain status
+curl "http://localhost:9091/api/v1/batches/finalized?epoch_id=${EPOCH_ID}" | jq '.batches[] | {epoch_id, onchain_status, onchain_tx_hash, onchain_block_number}'
+```
+
+**Relayer Service Logs (Fallback):**
 ```bash
 # Monitor relayer endpoint calls
 ./dsv.sh aggregator-logs | grep "🚀 Submitting batch via relayer-py"
@@ -1230,15 +1253,16 @@ docker logs dsv-relayer-py --tail 100 | grep "Transaction.*submitted with hash" 
 # Check relayer response
 ./dsv.sh aggregator-logs | grep -E "VPA batch submission|relayer returned"
 
-# Monitor relayer-py service logs
-docker logs dsv-relayer-py --tail 50 | grep -E "(submitSubmissionBatch|submitBatchSize)"
+# Monitor relayer-py service logs (for detailed transaction processing)
+docker logs dsv-relayer-py --tail 50 | grep -E "(submitSubmissionBatch|submitBatchSize|Transaction.*submitted with hash)"
 ```
 
 **Relayer Flow:**
 1. `submitBatchSize` - Informs relayer of expected batch count (typically 1 for DSV)
 2. `submitSubmissionBatch` - Submits the actual batch data
 3. Relayer processes and submits on-chain transaction
-4. Returns transaction hash and block number
+4. **Relayer-py writes to Redis**: Updates epoch state with `onchain_status: "submitted"` and `onchain_tx_hash`
+5. Transaction receipt received: Updates epoch state with `onchain_status: "confirmed"` and `onchain_block_number`
 
 ### End-to-End Submission Tracking
 
@@ -1256,7 +1280,9 @@ EPOCH_ID=23847425
 4. `✅ No existing submission found, proceeding with submission` - No duplicate
 5. `✅ Sent batch size to relayer` - Batch size notification sent
 6. `🚀 Submitting batch via relayer-py` - Sending to relayer
-7. `✅ VPA batch submission queued successfully - relayer processing asynchronously` - Queued (check relayer logs for tx_hash)
+7. `✅ VPA batch submission queued successfully - relayer processing asynchronously` - Queued
+8. **Relayer-py updates Redis**: `onchain_status: "submitted"`, `onchain_tx_hash` set
+9. **Transaction confirmed**: `onchain_status: "confirmed"`, `onchain_block_number` set (query via `/api/v1/epochs/{epochId}/status`)
 
 **Expected Flow (Priority 2+):**
 1. `priority=2` (or higher) - Priority assigned
@@ -1267,18 +1293,21 @@ EPOCH_ID=23847425
    - `✅ No existing submission found, proceeding with submission` - Priority 1 failed, proceeding
 5. `✅ Sent batch size to relayer` - Batch size notification sent
 6. `🚀 Submitting batch via relayer-py` - Sending to relayer (if no duplicate)
-7. `✅ VPA batch submission queued successfully - relayer processing asynchronously` - Queued (check relayer logs for tx_hash)
+7. `✅ VPA batch submission queued successfully - relayer processing asynchronously` - Queued
+8. **Relayer-py updates Redis**: `onchain_status: "submitted"`, `onchain_tx_hash` set (if submitted)
+9. **Transaction confirmed**: `onchain_status: "confirmed"`, `onchain_block_number` set (query via `/api/v1/epochs/{epochId}/status`)
 
 ### VPA Health Indicators
 
 **Healthy VPA Integration:**
 - Regular priority assignments (check logs for `priority=` entries)
 - Priority distribution: Mix of Priority 0, 1, 2+ over time
-- Successful submissions when Priority 1 assigned (check relayer logs for actual tx_hash)
+- Successful submissions when Priority 1 assigned (query epoch status endpoint for `onchain_status: "confirmed"`)
 - Priority 2+ correctly skipping when Priority 1 submits
 - No timeout errors waiting for submission windows
 - Relayer service responding successfully (200 OK responses)
-- Relayer logs show transactions being queued and processed
+- Epoch state shows `onchain_status` progressing: "queued" → "submitted" → "confirmed"
+- Transaction hashes and block numbers available in epoch state (no log parsing needed)
 
 **Warning Signs:**
 - No priority assignments for multiple epochs (check VPA client initialization)
@@ -1441,8 +1470,13 @@ echo "Success rate: $(( SUCCESS * 100 / TOTAL ))%"
 **Submission Outcomes:**
 
 - **Success (Queued)**: `✅ VPA batch submission queued successfully - relayer processing asynchronously`
-  - Redis: `{protocol}:vpa:submission:{market}:{epoch}` with `success: true` (tx_hash may be empty, check relayer logs)
-  - Note: Relayer processes transactions asynchronously, check relayer logs for actual `tx_hash` and `block_number`
+  - Redis: `{protocol}:vpa:submission:{market}:{epoch}` with `success: true`
+  - **Epoch State**: `{protocol}:{market}:epoch:{epochId}:state` updated by relayer-py:
+    - `onchain_status: "submitted"` (when transaction submitted)
+    - `onchain_tx_hash` set (transaction hash)
+    - `onchain_status: "confirmed"` (when receipt received)
+    - `onchain_block_number` set (block number from receipt)
+  - **Query via API**: Use `/api/v1/epochs/{epochId}/status` to get complete transaction status (no log parsing needed)
   
 - **Skipped (Priority 2+)**: `⏭️ Epoch already has a submission from a higher priority validator, skipping submission`
   - Redis: `{protocol}:vpa:submission:{market}:{epoch}` with `success: false` (no tx_hash)
