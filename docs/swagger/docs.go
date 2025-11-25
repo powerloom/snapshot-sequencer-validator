@@ -135,7 +135,7 @@ const docTemplate = `{
         },
         "/epochs/active": {
             "get": {
-                "description": "Get epochs currently in progress (window open, level 1/2 in progress)",
+                "description": "Get epochs currently in progress (window open, level 1/2 in progress). Queries epoch state directly for accuracy.",
                 "produces": [
                     "application/json"
                 ],
@@ -267,6 +267,48 @@ const docTemplate = `{
                     "epochs"
                 ],
                 "summary": "Epoch status",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Epoch ID",
+                        "name": "epochId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/epochs/{epochId}/submissions": {
+            "get": {
+                "description": "Get all submissions for a specific epoch with detailed metadata (slot ID, peer ID, project ID, CID)",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "epochs"
+                ],
+                "summary": "Epoch submissions",
                 "parameters": [
                     {
                         "type": "string",

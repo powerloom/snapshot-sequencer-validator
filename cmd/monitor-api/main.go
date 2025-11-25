@@ -98,6 +98,19 @@ type QueueStatus struct {
 	Status    string `json:"status"` // "empty", "healthy", "moderate", "high", "critical"
 }
 
+// SubmissionInfo represents a single submission with detailed metadata
+type SubmissionInfo struct {
+	EntityID    string `json:"entity_id"` // Enhanced entity ID: received:{epoch}:{slot}:{project}:{timestamp}:{peer}
+	EpochID     string `json:"epoch_id"`
+	SlotID      string `json:"slot_id"`
+	ProjectID   string `json:"project_id"`
+	SnapshotCID string `json:"snapshot_cid,omitempty"`
+	PeerID      string `json:"peer_id,omitempty"`
+	ValidatorID string `json:"validator_id,omitempty"`
+	Timestamp   int64  `json:"timestamp"`
+	Time        string `json:"time"` // RFC3339 formatted time
+}
+
 // TimelineEventMetadata contains enriched metadata for timeline events
 type TimelineEventMetadata struct {
 	EpochID        string `json:"epoch_id,omitempty"`
@@ -1253,7 +1266,7 @@ func (m *MonitorAPI) EpochStatus(c *gin.Context) {
 }
 
 // @Summary Active epochs
-// @Description Get epochs currently in progress (window open, level 1/2 in progress)
+// @Description Get epochs currently in progress (window open, level 1/2 in progress). Queries epoch state directly for accuracy.
 // @Tags epochs
 // @Produce json
 // @Param protocol query string false "Protocol state identifier"
@@ -1276,25 +1289,33 @@ func (m *MonitorAPI) ActiveEpochs(c *gin.Context) {
 		kb = keys.NewKeyBuilder(protocol, market)
 	}
 
-	// Get active epochs set
-	activeEpochsKey := kb.ActiveEpochs()
-	epochIDs, err := m.redis.SMembers(m.ctx, activeEpochsKey).Result()
-	if err != nil {
-		c.JSON(http.StatusOK, []EpochInfo{})
-		return
+	// Query recent epochs from timeline (more reliable than ActiveEpochs SET)
+	// Get last 100 epochs from timeline to check for active ones
+	entries, _ := m.redis.ZRevRange(m.ctx, kb.MetricsEpochsTimeline(), 0, 99).Result()
+
+	epochMap := make(map[string]bool)
+	for _, entry := range entries {
+		parts := strings.Split(entry, ":")
+		if len(parts) >= 2 {
+			epochMap[parts[1]] = true
+		}
 	}
 
 	var activeEpochs []EpochInfo
-	for _, epochID := range epochIDs {
-		// Get epoch state
+	for epochID := range epochMap {
+		// Get epoch state hash (authoritative source)
 		epochStateKey := kb.EpochState(epochID)
-		stateData, _ := m.redis.HGetAll(m.ctx, epochStateKey).Result()
+		stateData, err := m.redis.HGetAll(m.ctx, epochStateKey).Result()
+		if err != nil || len(stateData) == 0 {
+			// Skip epochs without state hash (not yet initialized or too old)
+			continue
+		}
 
-		// Only include epochs that are actively processing
-		phase, _ := stateData["phase"]
+		// Check if epoch is actively processing
 		windowStatus, _ := stateData["window_status"]
 		level1Status, _ := stateData["level1_status"]
 		level2Status, _ := stateData["level2_status"]
+		phase, _ := stateData["phase"]
 
 		isActive := false
 		if windowStatus == "open" {
@@ -1451,6 +1472,143 @@ func (m *MonitorAPI) EpochGaps(c *gin.Context) {
 		"gaps":      gaps,
 		"count":     len(gaps),
 		"timestamp": time.Now(),
+	})
+}
+
+// @Summary Epoch submissions
+// @Description Get all submissions for a specific epoch with detailed metadata (slot ID, peer ID, project ID, CID)
+// @Tags epochs
+// @Produce json
+// @Param epochId path string true "Epoch ID"
+// @Param protocol query string false "Protocol state identifier"
+// @Param market query string false "Data market address"
+// @Success 200 {object} map[string]interface{}
+// @Router /epochs/{epochId}/submissions [get]
+func (m *MonitorAPI) EpochSubmissions(c *gin.Context) {
+	epochID := c.Param("epochId")
+	protocol := c.Query("protocol")
+	market := c.Query("market")
+
+	// Use specified protocol/market or fall back to default
+	kb := m.keyBuilder
+	if protocol != "" || market != "" {
+		if protocol == "" {
+			protocol = m.keyBuilder.ProtocolState
+		}
+		if market == "" {
+			market = m.keyBuilder.DataMarket
+		}
+		kb = keys.NewKeyBuilder(protocol, market)
+	}
+
+	// Get submissions from timeline (query recent entries to avoid scanning all)
+	// Get last 1000 entries which should cover recent epochs
+	timelineKey := kb.MetricsSubmissionsTimeline()
+	now := time.Now().Unix()
+	// Look back 24 hours for submissions (epochs are typically processed within hours)
+	startTime := now - (24 * 3600)
+
+	entries, err := m.redis.ZRangeByScoreWithScores(m.ctx, timelineKey, &redis.ZRangeBy{
+		Min: strconv.FormatInt(startTime, 10),
+		Max: "+inf",
+	}).Result()
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"epoch_id":    epochID,
+			"submissions": []SubmissionInfo{},
+			"count":       0,
+			"timestamp":   time.Now(),
+		})
+		return
+	}
+
+	var submissions []SubmissionInfo
+	for _, entry := range entries {
+		entityID := entry.Member.(string)
+		timestamp := int64(entry.Score)
+
+		// Parse entity ID format: received:{epoch}:{slot}:{project}:{timestamp}:{peer}
+		// Or legacy format: {epoch}-{project}-{timestamp}
+		parts := strings.Split(entityID, ":")
+
+		var submissionEpochID string
+		if len(parts) >= 2 && parts[0] == "received" {
+			// Enhanced format: received:{epoch}:{slot}:{project}:{timestamp}:{peer}
+			submissionEpochID = parts[1]
+		} else {
+			// Legacy format: try to extract epoch from first part
+			legacyParts := strings.Split(entityID, "-")
+			if len(legacyParts) >= 1 {
+				submissionEpochID = legacyParts[0]
+			}
+		}
+
+		// Only include submissions for this epoch
+		if submissionEpochID != epochID {
+			continue
+		}
+
+		// Fetch detailed metadata
+		metadataKey := kb.MetricsSubmissionsMetadata(entityID)
+		metadataJSON, err := m.redis.Get(m.ctx, metadataKey).Result()
+
+		submission := SubmissionInfo{
+			EntityID:  entityID,
+			EpochID:   epochID,
+			Timestamp: timestamp,
+			Time:      time.Unix(timestamp, 0).Format(time.RFC3339),
+		}
+
+		if err == nil && metadataJSON != "" {
+			// Parse metadata JSON
+			var metadata map[string]interface{}
+			if json.Unmarshal([]byte(metadataJSON), &metadata) == nil {
+				if slotID, ok := metadata["slot_id"].(string); ok {
+					submission.SlotID = slotID
+				} else if slotID, ok := metadata["slot_id"].(float64); ok {
+					submission.SlotID = strconv.FormatFloat(slotID, 'f', 0, 64)
+				}
+				if projectID, ok := metadata["project_id"].(string); ok {
+					submission.ProjectID = projectID
+				}
+				if cid, ok := metadata["cid"].(string); ok {
+					submission.SnapshotCID = cid
+				} else if cid, ok := metadata["snapshot_cid"].(string); ok {
+					submission.SnapshotCID = cid
+				}
+				if peerID, ok := metadata["peer_id"].(string); ok {
+					submission.PeerID = peerID
+				}
+				if validatorID, ok := metadata["validator_id"].(string); ok {
+					submission.ValidatorID = validatorID
+				}
+			}
+		}
+
+		// If metadata not found, try to parse from entity ID
+		if submission.SlotID == "" && len(parts) >= 3 && parts[0] == "received" {
+			submission.SlotID = parts[2]
+		}
+		if submission.ProjectID == "" && len(parts) >= 4 && parts[0] == "received" {
+			submission.ProjectID = parts[3]
+		}
+		if submission.PeerID == "" && len(parts) >= 6 && parts[0] == "received" {
+			submission.PeerID = parts[5]
+		}
+
+		submissions = append(submissions, submission)
+	}
+
+	// Sort by timestamp descending (most recent first)
+	sort.Slice(submissions, func(i, j int) bool {
+		return submissions[i].Timestamp > submissions[j].Timestamp
+	})
+
+	c.JSON(http.StatusOK, gin.H{
+		"epoch_id":    epochID,
+		"submissions": submissions,
+		"count":       len(submissions),
+		"timestamp":   time.Now(),
 	})
 }
 
@@ -2221,6 +2379,7 @@ func main() {
 		v1.GET("/aggregation/results", api.AggregationResults)
 		v1.GET("/epochs/timeline", api.EpochsTimeline)
 		v1.GET("/epochs/:epochId/status", api.EpochStatus)
+		v1.GET("/epochs/:epochId/submissions", api.EpochSubmissions)
 		v1.GET("/epochs/active", api.ActiveEpochs)
 		v1.GET("/epochs/gaps", api.EpochGaps)
 		v1.GET("/queues/status", api.QueuesStatus)

@@ -310,9 +310,39 @@ paths:
       summary: Epoch status
       tags:
       - epochs
+  /epochs/{epochId}/submissions:
+    get:
+      description: Get all submissions for a specific epoch with detailed metadata
+        (slot ID, peer ID, project ID, CID)
+      parameters:
+      - description: Epoch ID
+        in: path
+        name: epochId
+        required: true
+        type: string
+      - description: Protocol state identifier
+        in: query
+        name: protocol
+        type: string
+      - description: Data market address
+        in: query
+        name: market
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Epoch submissions
+      tags:
+      - epochs
   /epochs/active:
     get:
-      description: Get epochs currently in progress (window open, level 1/2 in progress)
+      description: Get epochs currently in progress (window open, level 1/2 in progress).
+        Queries epoch state directly for accuracy.
       parameters:
       - description: Protocol state identifier
         in: query
