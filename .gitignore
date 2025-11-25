@@ -43,6 +43,12 @@ cmd/monitor-api/monitor-api
 # Test binaries
 *.test
 
+# Script binaries (should be built to bin/ directory)
+scripts/check_epoch_gaps
+scripts/epoch_lifecycle_tracker
+check_epoch_gaps
+epoch_lifecycle_tracker
+
 # Build artifacts
 *.exe
 *.dll
