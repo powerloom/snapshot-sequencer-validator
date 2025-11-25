@@ -73,7 +73,10 @@ type FinalizedBatch struct {
 	IPFSCid        string   `json:"ipfs_cid,omitempty"`
 	MerkleRoot     string   `json:"merkle_root,omitempty"`
 	Timestamp      int64    `json:"timestamp"`
-	Type           string   `json:"type"` // "local" or "aggregated"
+	Type           string   `json:"type"`                     // "local" or "aggregated"
+	Phase          string   `json:"phase,omitempty"`          // Current phase of epoch
+	OnchainStatus  string   `json:"onchain_status,omitempty"` // On-chain submission status
+	HasGap         bool     `json:"has_gap,omitempty"`        // Whether epoch has a gap
 }
 
 // EpochInfo represents epoch timeline information
@@ -777,6 +780,24 @@ func (m *MonitorAPI) FinalizedBatches(c *gin.Context) {
 					if cid, ok := batchData["ipfs_cid"].(string); ok {
 						batch.IPFSCid = cid
 					}
+					// Get epoch state for phase and onchain status
+					epochStateKey := kb.EpochState(epochID)
+					stateData, _ := m.redis.HGetAll(m.ctx, epochStateKey).Result()
+					if phase, ok := stateData["phase"]; ok {
+						batch.Phase = phase
+					}
+					if onchainStatus, ok := stateData["onchain_status"]; ok {
+						batch.OnchainStatus = onchainStatus
+					}
+					// Check for gaps
+					windowStatus, _ := stateData["window_status"]
+					level1Status, _ := stateData["level1_status"]
+					level2Status, _ := stateData["level2_status"]
+					if windowStatus == "closed" && level1Status != "completed" && level1Status != "in_progress" {
+						batch.HasGap = true
+					} else if level1Status == "completed" && level2Status != "completed" && level2Status != "aggregating" && level2Status != "collecting" {
+						batch.HasGap = true
+					}
 					batches = append(batches, batch)
 				}
 			}
@@ -811,6 +832,21 @@ func (m *MonitorAPI) FinalizedBatches(c *gin.Context) {
 					}
 					if root, ok := batchData["merkle_root"].(string); ok {
 						batch.MerkleRoot = root
+					}
+					// Get epoch state for phase and onchain status
+					epochStateKey := kb.EpochState(epochID)
+					stateData, _ := m.redis.HGetAll(m.ctx, epochStateKey).Result()
+					if phase, ok := stateData["phase"]; ok {
+						batch.Phase = phase
+					}
+					if onchainStatus, ok := stateData["onchain_status"]; ok {
+						batch.OnchainStatus = onchainStatus
+					}
+					// Check for gaps
+					level2Status, _ := stateData["level2_status"]
+					onchainStatus, _ := stateData["onchain_status"]
+					if level2Status == "completed" && onchainStatus != "confirmed" && onchainStatus != "submitted" && onchainStatus != "queued" {
+						batch.HasGap = true
 					}
 					batches = append(batches, batch)
 				}
@@ -854,6 +890,15 @@ func (m *MonitorAPI) FinalizedBatches(c *gin.Context) {
 						if cid, ok := batchData["ipfs_cid"].(string); ok {
 							batch.IPFSCid = cid
 						}
+						// Get epoch state for phase and onchain status
+						epochStateKey := kb.EpochState(batchEpoch)
+						stateData, _ := m.redis.HGetAll(m.ctx, epochStateKey).Result()
+						if phase, ok := stateData["phase"]; ok {
+							batch.Phase = phase
+						}
+						if onchainStatus, ok := stateData["onchain_status"]; ok {
+							batch.OnchainStatus = onchainStatus
+						}
 						batches = append(batches, batch)
 					}
 				}
@@ -884,6 +929,15 @@ func (m *MonitorAPI) FinalizedBatches(c *gin.Context) {
 						}
 						if root, ok := batchData["merkle_root"].(string); ok {
 							batch.MerkleRoot = root
+						}
+						// Get epoch state for phase and onchain status
+						epochStateKey := kb.EpochState(batchEpoch)
+						stateData, _ := m.redis.HGetAll(m.ctx, epochStateKey).Result()
+						if phase, ok := stateData["phase"]; ok {
+							batch.Phase = phase
+						}
+						if onchainStatus, ok := stateData["onchain_status"]; ok {
+							batch.OnchainStatus = onchainStatus
 						}
 						batches = append(batches, batch)
 					}
@@ -1090,21 +1144,314 @@ func (m *MonitorAPI) EpochsTimeline(c *gin.Context) {
 		level2Exists, _ := m.redis.Exists(m.ctx, level2Key).Result()
 		epochInfo.Level2Batch = level2Exists > 0
 
-		// Determine phase
-		if epochInfo.Status == "open" {
-			epochInfo.Phase = "submission"
-		} else if epochInfo.Level2Batch {
-			epochInfo.Phase = "complete"
-		} else if epochInfo.Level1Batch {
-			epochInfo.Phase = "aggregation"
+		// Get phase from epoch state hash (authoritative source)
+		epochStateKey := kb.EpochState(epochID)
+		stateData, _ := m.redis.HGetAll(m.ctx, epochStateKey).Result()
+		if phase, ok := stateData["phase"]; ok && phase != "" {
+			epochInfo.Phase = phase
 		} else {
-			epochInfo.Phase = "finalization"
+			// Fallback: Determine phase from batch status
+			if epochInfo.Status == "open" {
+				epochInfo.Phase = "submission"
+			} else if epochInfo.Level2Batch {
+				epochInfo.Phase = "complete"
+			} else if epochInfo.Level1Batch {
+				epochInfo.Phase = "aggregation"
+			} else {
+				epochInfo.Phase = "finalization"
+			}
 		}
 
 		epochs = append(epochs, *epochInfo)
 	}
 
+	// Sort epochs by epoch ID (numeric, descending - most recent first)
+	sort.Slice(epochs, func(i, j int) bool {
+		epochI, errI := strconv.ParseUint(epochs[i].EpochID, 10, 64)
+		epochJ, errJ := strconv.ParseUint(epochs[j].EpochID, 10, 64)
+		if errI != nil || errJ != nil {
+			// If parsing fails, fall back to string comparison
+			return epochs[i].EpochID > epochs[j].EpochID
+		}
+		return epochI > epochJ
+	})
+
 	c.JSON(http.StatusOK, epochs)
+}
+
+// @Summary Epoch status
+// @Description Get complete epoch state with all phase information
+// @Tags epochs
+// @Produce json
+// @Param epochId path string true "Epoch ID"
+// @Param protocol query string false "Protocol state identifier"
+// @Param market query string false "Data market address"
+// @Success 200 {object} map[string]interface{}
+// @Router /epochs/{epochId}/status [get]
+func (m *MonitorAPI) EpochStatus(c *gin.Context) {
+	epochID := c.Param("epochId")
+	protocol := c.Query("protocol")
+	market := c.Query("market")
+
+	// Use specified protocol/market or fall back to default
+	kb := m.keyBuilder
+	if protocol != "" || market != "" {
+		if protocol == "" {
+			protocol = m.keyBuilder.ProtocolState
+		}
+		if market == "" {
+			market = m.keyBuilder.DataMarket
+		}
+		kb = keys.NewKeyBuilder(protocol, market)
+	}
+
+	// Get epoch state hash
+	epochStateKey := kb.EpochState(epochID)
+	stateData, err := m.redis.HGetAll(m.ctx, epochStateKey).Result()
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Epoch state not found"})
+		return
+	}
+
+	// Convert string values to appropriate types
+	result := make(map[string]interface{})
+	for k, v := range stateData {
+		// Try to parse as int64 for timestamps
+		if strings.HasSuffix(k, "_at") || strings.HasSuffix(k, "_timestamp") || k == "last_updated" {
+			if intVal, err := strconv.ParseInt(v, 10, 64); err == nil {
+				result[k] = intVal
+			} else {
+				result[k] = v
+			}
+		} else if k == "submissions_count" || k == "priority" || k == "onchain_block_number" {
+			if intVal, err := strconv.Atoi(v); err == nil {
+				result[k] = intVal
+			} else {
+				result[k] = v
+			}
+		} else if k == "vpa_submission_attempted" {
+			result[k] = v == "true" || v == "1"
+		} else {
+			result[k] = v
+		}
+	}
+
+	// Also include batch status
+	level1Key := kb.MetricsBatchLocal(epochID)
+	level1Exists, _ := m.redis.Exists(m.ctx, level1Key).Result()
+	result["level1_batch_exists"] = level1Exists > 0
+
+	level2Key := kb.MetricsBatchAggregated(epochID)
+	level2Exists, _ := m.redis.Exists(m.ctx, level2Key).Result()
+	result["level2_batch_exists"] = level2Exists > 0
+
+	c.JSON(http.StatusOK, gin.H{
+		"epoch_id":  epochID,
+		"state":     result,
+		"timestamp": time.Now(),
+	})
+}
+
+// @Summary Active epochs
+// @Description Get epochs currently in progress (window open, level 1/2 in progress)
+// @Tags epochs
+// @Produce json
+// @Param protocol query string false "Protocol state identifier"
+// @Param market query string false "Data market address"
+// @Success 200 {array} EpochInfo
+// @Router /epochs/active [get]
+func (m *MonitorAPI) ActiveEpochs(c *gin.Context) {
+	protocol := c.Query("protocol")
+	market := c.Query("market")
+
+	// Use specified protocol/market or fall back to default
+	kb := m.keyBuilder
+	if protocol != "" || market != "" {
+		if protocol == "" {
+			protocol = m.keyBuilder.ProtocolState
+		}
+		if market == "" {
+			market = m.keyBuilder.DataMarket
+		}
+		kb = keys.NewKeyBuilder(protocol, market)
+	}
+
+	// Get active epochs set
+	activeEpochsKey := kb.ActiveEpochs()
+	epochIDs, err := m.redis.SMembers(m.ctx, activeEpochsKey).Result()
+	if err != nil {
+		c.JSON(http.StatusOK, []EpochInfo{})
+		return
+	}
+
+	var activeEpochs []EpochInfo
+	for _, epochID := range epochIDs {
+		// Get epoch state
+		epochStateKey := kb.EpochState(epochID)
+		stateData, _ := m.redis.HGetAll(m.ctx, epochStateKey).Result()
+
+		// Only include epochs that are actively processing
+		phase, _ := stateData["phase"]
+		windowStatus, _ := stateData["window_status"]
+		level1Status, _ := stateData["level1_status"]
+		level2Status, _ := stateData["level2_status"]
+
+		isActive := false
+		if windowStatus == "open" {
+			isActive = true
+		} else if level1Status == "in_progress" {
+			isActive = true
+		} else if level2Status == "collecting" || level2Status == "aggregating" {
+			isActive = true
+		}
+
+		if !isActive {
+			continue
+		}
+
+		epochInfo := EpochInfo{
+			EpochID: epochID,
+			Phase:   phase,
+			Status:  windowStatus,
+		}
+
+		// Get epoch info for additional details
+		infoKey := kb.MetricsEpochInfo(epochID)
+		infoData, _ := m.redis.HGetAll(m.ctx, infoKey).Result()
+		if startStr, ok := infoData["start"]; ok {
+			if startInt, err := strconv.ParseInt(startStr, 10, 64); err == nil {
+				epochInfo.StartTime = startInt
+			}
+		}
+		if durStr, ok := infoData["duration"]; ok {
+			if durInt, err := strconv.Atoi(durStr); err == nil {
+				epochInfo.Duration = durInt
+			}
+		}
+
+		// Check batch status
+		level1Key := kb.MetricsBatchLocal(epochID)
+		level1Exists, _ := m.redis.Exists(m.ctx, level1Key).Result()
+		epochInfo.Level1Batch = level1Exists > 0
+
+		level2Key := kb.MetricsBatchAggregated(epochID)
+		level2Exists, _ := m.redis.Exists(m.ctx, level2Key).Result()
+		epochInfo.Level2Batch = level2Exists > 0
+
+		activeEpochs = append(activeEpochs, epochInfo)
+	}
+
+	// Sort by epoch ID descending
+	sort.Slice(activeEpochs, func(i, j int) bool {
+		epochI, errI := strconv.ParseUint(activeEpochs[i].EpochID, 10, 64)
+		epochJ, errJ := strconv.ParseUint(activeEpochs[j].EpochID, 10, 64)
+		if errI != nil || errJ != nil {
+			return activeEpochs[i].EpochID > activeEpochs[j].EpochID
+		}
+		return epochI > epochJ
+	})
+
+	c.JSON(http.StatusOK, activeEpochs)
+}
+
+// @Summary Epoch gaps
+// @Description Identify epochs that should have finalizations but don't
+// @Tags epochs
+// @Produce json
+// @Param protocol query string false "Protocol state identifier"
+// @Param market query string false "Data market address"
+// @Param window_minutes query int false "Window minutes to check for gaps (default 5)"
+// @Success 200 {array} map[string]interface{}
+// @Router /epochs/gaps [get]
+func (m *MonitorAPI) EpochGaps(c *gin.Context) {
+	protocol := c.Query("protocol")
+	market := c.Query("market")
+	windowMinutesParam := c.DefaultQuery("window_minutes", "5")
+	windowMinutes, _ := strconv.Atoi(windowMinutesParam)
+	if windowMinutes <= 0 {
+		windowMinutes = 5
+	}
+
+	// Use specified protocol/market or fall back to default
+	kb := m.keyBuilder
+	if protocol != "" || market != "" {
+		if protocol == "" {
+			protocol = m.keyBuilder.ProtocolState
+		}
+		if market == "" {
+			market = m.keyBuilder.DataMarket
+		}
+		kb = keys.NewKeyBuilder(protocol, market)
+	}
+
+	// Get recent epochs from timeline
+	now := time.Now().Unix()
+	cutoffTime := now - int64(windowMinutes*60)
+	entries, _ := m.redis.ZRangeByScore(m.ctx, kb.MetricsEpochsTimeline(), &redis.ZRangeBy{
+		Min: strconv.FormatInt(cutoffTime, 10),
+		Max: "+inf",
+	}).Result()
+
+	epochSet := make(map[string]bool)
+	for _, entry := range entries {
+		parts := strings.Split(entry, ":")
+		if len(parts) >= 2 {
+			epochSet[parts[1]] = true
+		}
+	}
+
+	var gaps []map[string]interface{}
+	for epochID := range epochSet {
+		epochStateKey := kb.EpochState(epochID)
+		stateData, _ := m.redis.HGetAll(m.ctx, epochStateKey).Result()
+
+		windowStatus, _ := stateData["window_status"]
+		level1Status, _ := stateData["level1_status"]
+		level2Status, _ := stateData["level2_status"]
+		onchainStatus, _ := stateData["onchain_status"]
+
+		// Check for gaps
+		gapType := ""
+		diagnostic := ""
+
+		if windowStatus == "closed" && level1Status != "completed" && level1Status != "in_progress" {
+			gapType = "missing_level1"
+			diagnostic = "Window closed but Level 1 finalization not started"
+		} else if level1Status == "completed" && level2Status != "completed" && level2Status != "aggregating" && level2Status != "collecting" {
+			gapType = "missing_level2"
+			diagnostic = "Level 1 completed but Level 2 aggregation not started"
+		} else if level2Status == "completed" && onchainStatus != "confirmed" && onchainStatus != "submitted" && onchainStatus != "queued" {
+			gapType = "missing_onchain"
+			diagnostic = "Level 2 completed but on-chain submission not attempted"
+		}
+
+		if gapType != "" {
+			gaps = append(gaps, map[string]interface{}{
+				"epoch_id":   epochID,
+				"gap_type":   gapType,
+				"diagnostic": diagnostic,
+				"state":      stateData,
+			})
+		}
+	}
+
+	// Sort by epoch ID descending
+	sort.Slice(gaps, func(i, j int) bool {
+		epochI := gaps[i]["epoch_id"].(string)
+		epochJ := gaps[j]["epoch_id"].(string)
+		epochIVal, errI := strconv.ParseUint(epochI, 10, 64)
+		epochJVal, errJ := strconv.ParseUint(epochJ, 10, 64)
+		if errI != nil || errJ != nil {
+			return epochI > epochJ
+		}
+		return epochIVal > epochJVal
+	})
+
+	c.JSON(http.StatusOK, gin.H{
+		"gaps":      gaps,
+		"count":     len(gaps),
+		"timestamp": time.Now(),
+	})
 }
 
 // @Summary Queue status
@@ -1873,6 +2220,9 @@ func main() {
 		v1.GET("/batches/finalized", api.FinalizedBatches)
 		v1.GET("/aggregation/results", api.AggregationResults)
 		v1.GET("/epochs/timeline", api.EpochsTimeline)
+		v1.GET("/epochs/:epochId/status", api.EpochStatus)
+		v1.GET("/epochs/active", api.ActiveEpochs)
+		v1.GET("/epochs/gaps", api.EpochGaps)
 		v1.GET("/queues/status", api.QueuesStatus)
 
 		// Timeline events

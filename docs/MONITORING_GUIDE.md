@@ -4,6 +4,12 @@
 
 The monitoring system provides comprehensive visibility into the batch processing pipeline, tracking data flow from submission collection through final aggregation.
 
+**Key Features:**
+- **Epoch-Centered Observability**: Complete state tracking for each epoch through all phases
+- **Gap Detection**: Automatic identification of epochs with missing finalizations
+- **Phase Tracking**: Real-time visibility into submission, finalization, aggregation, and on-chain phases
+- **Sorted Responses**: All timeline endpoints return epochs sorted by ID (most recent first)
+
 The system supports both P2PSnapshotSubmission batch format (multiple submissions per message) and single SnapshotSubmission format, with proper Redis key patterns for data organization.
 
 ## RESTful Monitor API
@@ -23,14 +29,17 @@ http://localhost:9091/swagger/index.html
 # - Protocol/market query parameter support
 ```
 
-### All 10 Monitoring Endpoints
+### All Monitoring Endpoints
 
 | Endpoint | Purpose | Query Parameters |
 |----------|---------|-----------------|
 | `/api/v1/health` | Service health check | None |
 | `/api/v1/dashboard/summary` | Real-time dashboard metrics | protocol, market |
-| `/api/v1/epochs/timeline` | Epoch progression timeline | protocol, market |
-| `/api/v1/batches/finalized` | Recently finalized batches | protocol, market |
+| `/api/v1/epochs/timeline` | Epoch progression timeline (sorted by epoch ID) | protocol, market, limit |
+| `/api/v1/epochs/{epochId}/status` | Complete epoch state with all phase information | protocol, market |
+| `/api/v1/epochs/active` | Epochs currently in progress | protocol, market |
+| `/api/v1/epochs/gaps` | Identify epochs with missing finalizations | protocol, market, window_minutes |
+| `/api/v1/batches/finalized` | Recently finalized batches (with phase and onchain status) | protocol, market, level, epoch_id, limit |
 | `/api/v1/aggregation/results` | Network aggregation results | protocol, market |
 | `/api/v1/timeline/recent` | Recent activity feed | protocol, market |
 | `/api/v1/queues/status` | Queue monitoring | protocol, market |
@@ -55,11 +64,14 @@ curl "http://localhost:9091/api/v1/aggregation/results?market=[\"0x21cb57C1f2352
 
 ### Working Endpoints Status
 
-All 10 endpoints are operational with real data:
+All endpoints are operational with real data:
 - **Health Check**: Shows `data_fresh: true` with actual pipeline data
-- **Dashboard**: Real metrics with participation rates, current epoch status
-- **Epoch Timeline**: Actual epoch progression with correct status reading
-- **Finalized Batches**: Batch data with validator attribution and IPFS CIDs
+- **Dashboard**: Real metrics with participation rates, current epoch status, gap detection
+- **Epoch Timeline**: Actual epoch progression with correct status reading, sorted by epoch ID
+- **Epoch Status**: Complete epoch state with all phase transitions and on-chain status
+- **Active Epochs**: Real-time view of epochs currently in progress
+- **Epoch Gaps**: Identifies epochs with missing finalizations for troubleshooting
+- **Finalized Batches**: Batch data with validator attribution, IPFS CIDs, phase, and onchain status
 - **Aggregation Results**: Network-wide consensus with validator counting
 - **Timeline Activity**: Recent submissions and batch completions
 - **Queue Status**: Real-time queue depths and processing rates with accurate monitoring
@@ -318,19 +330,28 @@ curl "http://localhost:9091/api/v1/health"
 # 2. Get dashboard summary
 curl "http://localhost:9091/api/v1/dashboard/summary"
 
-# 3. View recent epochs
+# 3. View recent epochs (sorted by epoch ID)
 curl "http://localhost:9091/api/v1/epochs/timeline"
 
-# 4. Check finalized batches
+# 4. Get complete status for specific epoch
+curl "http://localhost:9091/api/v1/epochs/23847425/status?protocol=0x3B5A0FB70ef68B5dd677C7d614dFB89961f97401&market=0xb5cE2F9B71e785e3eC0C45EDE06Ad95c3bb71a4d"
+
+# 5. View active epochs (currently processing)
+curl "http://localhost:9091/api/v1/epochs/active"
+
+# 6. Check for epoch gaps (missing finalizations)
+curl "http://localhost:9091/api/v1/epochs/gaps?window_minutes=5"
+
+# 7. Check finalized batches (with phase and onchain status)
 curl "http://localhost:9091/api/v1/batches/finalized"
 
-# 5. Monitor network aggregation
+# 8. Monitor network aggregation
 curl "http://localhost:9091/api/v1/aggregation/results"
 
-# 6. Check queue status
+# 9. Check queue status
 curl "http://localhost:9091/api/v1/queues/status"
 
-# 7. View pipeline overview
+# 10. View pipeline overview
 curl "http://localhost:9091/api/v1/pipeline/overview"
 ```
 
@@ -707,6 +728,96 @@ The combined log commands are particularly useful for debugging cross-component 
 | Missing projects | `aggregator-logs` | Ensure JSON parsing matches data structure |
 | Queue buildup | `curl api/v1/queues/status` | Increase worker count or check for errors |
 
+## New Epoch-Centered Endpoints
+
+### GET /api/v1/epochs/{epochId}/status
+
+Get complete epoch state with all phase information.
+
+**Example:**
+```bash
+curl "http://localhost:9091/api/v1/epochs/23847425/status?protocol=0x3B5A0FB70ef68B5dd677C7d614dFB89961f97401&market=0xb5cE2F9B71e785e3eC0C45EDE06Ad95c3bb71a4d"
+```
+
+**Response:**
+```json
+{
+  "epoch_id": "23847425",
+  "state": {
+    "window_status": "closed",
+    "window_opened_at": 1763798270,
+    "window_closes_at": 1763798290,
+    "phase": "level2_aggregation",
+    "submissions_count": 45,
+    "level1_status": "completed",
+    "level1_completed_at": 1763798300,
+    "level2_status": "aggregating",
+    "level2_completed_at": 0,
+    "onchain_status": "pending",
+    "priority": 1,
+    "vpa_submission_attempted": false,
+    "last_updated": 1763798350
+  },
+  "timestamp": "2025-01-22T08:00:00Z"
+}
+```
+
+### GET /api/v1/epochs/active
+
+Get epochs currently in progress (window open, level 1/2 in progress).
+
+**Example:**
+```bash
+curl "http://localhost:9091/api/v1/epochs/active?protocol=0x3B5A0FB70ef68B5dd677C7d614dFB89961f97401&market=0xb5cE2F9B71e785e3eC0C45EDE06Ad95c3bb71a4d"
+```
+
+**Response:**
+```json
+[
+  {
+    "epoch_id": "23847425",
+    "phase": "level2_aggregation",
+    "status": "closed",
+    "start_time": 1763798270,
+    "duration": 20,
+    "level1_batch": true,
+    "level2_batch": false
+  }
+]
+```
+
+### GET /api/v1/epochs/gaps
+
+Identify epochs that should have finalizations but don't.
+
+**Query Parameters:**
+- `window_minutes`: Time window to check for gaps (default: 5)
+
+**Example:**
+```bash
+curl "http://localhost:9091/api/v1/epochs/gaps?window_minutes=5&protocol=0x3B5A0FB70ef68B5dd677C7d614dFB89961f97401&market=0xb5cE2F9B71e785e3eC0C45EDE06Ad95c3bb71a4d"
+```
+
+**Response:**
+```json
+{
+  "gaps": [
+    {
+      "epoch_id": "23847420",
+      "gap_type": "missing_level1",
+      "diagnostic": "Window closed but Level 1 finalization not started",
+      "state": {
+        "window_status": "closed",
+        "level1_status": "pending",
+        "phase": "level1_finalization"
+      }
+    }
+  ],
+  "count": 1,
+  "timestamp": "2025-01-22T08:00:00Z"
+}
+```
+
 ## Future Enhancements
 
 Potential monitoring improvements:
@@ -715,6 +826,8 @@ Potential monitoring improvements:
 - Grafana dashboards
 - WebSocket real-time updates
 - Historical trend analysis
+- Alert system for persistent gaps
+- On-chain transaction confirmation tracking
 
 ### Consensus Troubleshooting
 

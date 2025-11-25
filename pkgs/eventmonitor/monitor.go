@@ -984,6 +984,22 @@ func (wm *WindowManager) StartSubmissionWindow(ctx context.Context, dataMarket s
 	})
 	pipe.Expire(context.Background(), epochInfoKey, 2*time.Hour)
 
+	// 3. Store comprehensive epoch state hash
+	epochStateKey := kb.EpochState(epochID.String())
+	windowClosesAt := timestamp + int64(duration.Seconds())
+	pipe.HSet(context.Background(), epochStateKey, map[string]interface{}{
+		"window_status":     "open",
+		"window_opened_at":  timestamp,
+		"window_closes_at":  windowClosesAt,
+		"phase":             "submission",
+		"submissions_count": 0,
+		"level1_status":     "pending",
+		"level2_status":     "pending",
+		"onchain_status":    "pending",
+		"last_updated":      timestamp,
+	})
+	pipe.Expire(context.Background(), epochStateKey, 7*24*time.Hour) // Keep for 7 days
+
 	// 3. Publish state change
 	pipe.Publish(context.Background(), "state:change", fmt.Sprintf("epoch:open:%s", epochID.String()))
 
@@ -1047,7 +1063,15 @@ func (wm *WindowManager) closeWindow(dataMarket string, epochID *big.Int) {
 		"end":    timestamp,
 	})
 
-	// 3. Publish state change
+	// 3. Update epoch state hash - window closed, transition to level1_finalization phase
+	epochStateKey := kb.EpochState(epochID.String())
+	pipe.HSet(context.Background(), epochStateKey, map[string]interface{}{
+		"window_status": "closed",
+		"phase":         "level1_finalization",
+		"last_updated":  timestamp,
+	})
+
+	// 4. Publish state change
 	pipe.Publish(context.Background(), "state:change", fmt.Sprintf("epoch:closed:%s", epochID.String()))
 
 	// Execute pipeline
@@ -1084,6 +1108,14 @@ func (wm *WindowManager) triggerFinalization(dataMarket string, epochID *big.Int
 
 	metaData, _ := json.Marshal(batchMeta)
 	wm.redisClient.Set(ctx, batchMetaKey, metaData, 2*time.Hour)
+
+	// Update epoch state hash - Level 1 finalization started
+	timestamp := time.Now().Unix()
+	epochStateKey := kb.EpochState(epochID.String())
+	wm.redisClient.HSet(ctx, epochStateKey, map[string]interface{}{
+		"level1_status": "in_progress",
+		"last_updated":  timestamp,
+	})
 
 	// Push each batch to finalization queue
 	queueKey := kb.FinalizationQueue()

@@ -62,6 +62,12 @@ func (kb *KeyBuilder) EpochWindow(epochID string) string {
 	return fmt.Sprintf("%s:%s:epoch:%s:window", kb.ProtocolState, kb.DataMarket, epochID)
 }
 
+// EpochState returns the key for comprehensive epoch state hash
+// Format: {protocol}:{market}:epoch:{epochId}:state
+func (kb *KeyBuilder) EpochState(epochID string) string {
+	return fmt.Sprintf("%s:%s:epoch:%s:state", kb.ProtocolState, kb.DataMarket, epochID)
+}
+
 // FinalizationQueue returns the key for epochs ready for finalization
 func (kb *KeyBuilder) FinalizationQueue() string {
 	return fmt.Sprintf("%s:%s:finalizationQueue", kb.ProtocolState, kb.DataMarket)
@@ -198,6 +204,11 @@ func (kb *KeyBuilder) EpochValidators(epochID string) string {
 // ActiveEpochs returns the key for active epochs tracking
 func (kb *KeyBuilder) ActiveEpochs() string {
 	return fmt.Sprintf("%s:%s:epochs:active", kb.ProtocolState, kb.DataMarket)
+}
+
+// EpochsGaps returns the key for epoch gaps tracking
+func (kb *KeyBuilder) EpochsGaps() string {
+	return fmt.Sprintf("%s:%s:epochs:gaps", kb.ProtocolState, kb.DataMarket)
 }
 
 // Metrics Keys (namespaced per protocol:market)

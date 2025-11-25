@@ -93,6 +93,28 @@ P2P Gateway ←→ Redis ←→ Dequeuer
   - Values: "open" or "closed"
   - TTL: 1 hour after close
 
+- `{protocol}:{market}:epoch:{epochId}:state` - HASH: Comprehensive epoch state tracking
+  - Written by: Event Monitor, Aggregator, Finalizer, State-Tracker
+  - Read by: Monitor API, State-Tracker
+  - TTL: 7 days
+  - Fields:
+    - `window_status`: "open" | "closed"
+    - `window_opened_at`: timestamp
+    - `window_closes_at`: timestamp
+    - `phase`: "submission" | "level1_finalization" | "level2_aggregation" | "onchain_submission" | "complete" | "failed"
+    - `submissions_count`: count of processed submissions
+    - `level1_status`: "pending" | "in_progress" | "completed" | "failed"
+    - `level1_completed_at`: timestamp
+    - `level2_status`: "pending" | "collecting" | "aggregating" | "completed" | "failed"
+    - `level2_completed_at`: timestamp
+    - `onchain_status`: "pending" | "queued" | "submitted" | "confirmed" | "failed"
+    - `onchain_tx_hash`: transaction hash
+    - `onchain_block_number`: block number
+    - `onchain_submitted_at`: timestamp
+    - `priority`: validator priority for this epoch
+    - `vpa_submission_attempted`: boolean
+    - `last_updated`: timestamp
+
 - `{protocol}:{market}:finalizationQueue` - LIST: Epochs ready for finalization
   - Written by: Event Monitor (on window close)
   - Read by: Finalizer
@@ -233,6 +255,14 @@ P2P Gateway ←→ Redis ←→ Dequeuer
   - Purpose: Fast submission counting without expensive operations
   - Format: Set of submission IDs
 
+- `{protocol}:{market}:epochs:gaps` - ZSET: Epoch gaps tracking
+  - Written by: State-Tracker (detectEpochGaps)
+  - Read by: Monitor API (epochs/gaps endpoint)
+  - TTL: 24 hours (old gaps pruned after 1 hour)
+  - Format: Sorted set by timestamp
+  - Members: "{epochId}:{gapType}" where gapType is "missing_level1", "missing_level2", or "missing_onchain"
+  - Purpose: Track epochs with missing finalizations for gap detection and alerting
+
 #### Legacy Health Monitoring
 - `pipeline:health:{component}` - STRING: Component health status
   - Written by: Each component
@@ -331,6 +361,7 @@ Event Monitor → ActiveEpochs SET + EpochValidators({epochId}) SET + metrics:ep
 ### Event Monitor
 **Writes:**
 - `{protocol}:{market}:epoch:{epochId}:window` - Submission window status
+- `{protocol}:{market}:epoch:{epochId}:state` - Initial epoch state hash (window status, phase, timestamps)
 - `{protocol}:{market}:finalizationQueue` - Epochs ready for finalization
 - `{protocol}:{market}:metrics:epochs:timeline` - Epoch lifecycle events
 - `{protocol}:{market}:ActiveEpochs` - SET of active epoch IDs
@@ -342,6 +373,7 @@ Event Monitor → ActiveEpochs SET + EpochValidators({epochId}) SET + metrics:ep
 - `{protocol}:{market}:epoch:{epochId}:parts:*` - Progress tracking
 - `{protocol}:{market}:aggregationQueue` - Ready for Level 1 aggregation
 - `submission_stats:{epochId}` - Epoch statistics
+- `{protocol}:{market}:epoch:{epochId}:state` - Updates level1_status to "in_progress" when finalization starts
 
 ### Aggregator
 **Writes:**
@@ -351,6 +383,7 @@ Event Monitor → ActiveEpochs SET + EpochValidators({epochId}) SET + metrics:ep
 - `{protocol}:{market}:metrics:validator:{validatorId}:batches` - Per-validator timeline
 - `{protocol}:{market}:metrics:batch:{epochId}:validators` - Validator list per batch
 - `{protocol}:{market}:metrics:participation` - 24h participation metrics
+- `{protocol}:{market}:epoch:{epochId}:state` - Updates level1_status, level2_status, onchain_status, priority
 
 **Reads:**
 - `{protocol}:{market}:aggregationQueue` - Worker parts to aggregate
@@ -362,6 +395,8 @@ Event Monitor → ActiveEpochs SET + EpochValidators({epochId}) SET + metrics:ep
 - `{protocol}:{market}:dashboard:summary` - Pre-aggregated system metrics
 - `{protocol}:{market}:stats:current` - Current operational stats (hash)
 - `{protocol}:{market}:metrics:current_epoch` - Current epoch status
+- `{protocol}:{market}:epoch:{epochId}:state` - Updates submission_count field
+- `{protocol}:{market}:epochs:gaps` - Epoch gaps tracking
 - Pruning of old timeline data
 
 **Reads:**
@@ -369,6 +404,7 @@ Event Monitor → ActiveEpochs SET + EpochValidators({epochId}) SET + metrics:ep
 - `{protocol}:{market}:ActiveEpochs` - Direct epoch access
 - `{protocol}:{market}:EpochValidators({epochId})` - Validator sets
 - `{protocol}:{market}:EpochProcessed({epochId})` - Submission sets
+- `{protocol}:{market}:epoch:{epochId}:state` - Epoch state for gap detection
 
 ### Monitor API
 **Writes:**

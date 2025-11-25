@@ -557,6 +557,13 @@ func (a *Aggregator) startAggregationWindow(epochIDStr string) {
 			"window": a.config.AggregationWindowDuration,
 		}).Info("⏰ Aggregation window expired - finalizing Level 2 aggregation")
 
+		// Update epoch state - transitioning to aggregating phase
+		epochStateKey := a.keyBuilder.EpochState(epochIDStr)
+		a.redisClient.HSet(a.ctx, epochStateKey, map[string]interface{}{
+			"level2_status": "aggregating",
+			"last_updated":  time.Now().Unix(),
+		})
+
 		// Perform aggregation after window expires
 		a.aggregateEpoch(epochIDStr)
 
@@ -567,6 +574,16 @@ func (a *Aggregator) startAggregationWindow(epochIDStr string) {
 	})
 
 	a.epochTimers[epochID] = timer
+
+	// Update epoch state hash - Level 2 aggregation started (collecting phase)
+	timestamp := time.Now().Unix()
+	epochStateKey := a.keyBuilder.EpochState(epochIDStr)
+	a.redisClient.HSet(a.ctx, epochStateKey, map[string]interface{}{
+		"level2_status": "collecting",
+		"phase":         "level2_aggregation",
+		"last_updated":  timestamp,
+	})
+
 	log.WithFields(logrus.Fields{
 		"epoch":  epochID,
 		"window": a.config.AggregationWindowDuration,
@@ -641,8 +658,17 @@ func (a *Aggregator) aggregateWorkerParts(epochIDStr string, totalParts int) {
 		"projects": len(aggregatedResults),
 	}).Info("✅ LEVEL 1 COMPLETE: Created local finalized batch from worker parts")
 
-	// Add monitoring metrics for Level 1 aggregation
+	// Update epoch state hash - Level 1 completed
 	timestamp := time.Now().Unix()
+	epochStateKey := a.keyBuilder.EpochState(strconv.FormatUint(epochID, 10))
+	a.redisClient.HSet(a.ctx, epochStateKey, map[string]interface{}{
+		"level1_status":       "completed",
+		"level1_completed_at": timestamp,
+		"phase":               "level2_aggregation",
+		"last_updated":        timestamp,
+	})
+
+	// Add monitoring metrics for Level 1 aggregation
 
 	// Pipeline for monitoring metrics
 	pipe := a.redisClient.Pipeline()
@@ -936,6 +962,15 @@ func (a *Aggregator) aggregateEpoch(epochIDStr string) {
 	// Add monitoring metrics for Level 2 aggregation
 	timestamp := time.Now().Unix()
 	epochID, _ := parseEpochID(epochIDStr)
+
+	// Update epoch state hash - Level 2 completed, transition to onchain_submission phase
+	epochStateKey := a.keyBuilder.EpochState(epochIDStr)
+	a.redisClient.HSet(a.ctx, epochStateKey, map[string]interface{}{
+		"level2_status":       "completed",
+		"level2_completed_at": timestamp,
+		"phase":               "onchain_submission",
+		"last_updated":        timestamp,
+	})
 
 	// Pipeline for monitoring metrics
 	pipe := a.redisClient.Pipeline()
@@ -1743,6 +1778,37 @@ func (a *Aggregator) storeSubmissionMetrics(epochID uint64, dataMarketAddr strin
 	jsonData, _ := json.Marshal(submissionData)
 	a.redisClient.SetEx(a.ctx, submissionKey, string(jsonData), 7*24*time.Hour) // Keep for 7 days
 
+	// Update epoch state hash with submission status
+	epochStateKey := kb.EpochState(epochIDStr)
+	onchainStatus := "pending"
+	if success {
+		if txHash != "" {
+			onchainStatus = "submitted"
+		} else {
+			onchainStatus = "queued"
+		}
+	} else {
+		onchainStatus = "failed"
+	}
+
+	stateUpdates := map[string]interface{}{
+		"onchain_status":           onchainStatus,
+		"vpa_submission_attempted": true,
+		"priority":                 priority,
+		"last_updated":             timestamp,
+	}
+	if txHash != "" {
+		stateUpdates["onchain_tx_hash"] = txHash
+		stateUpdates["onchain_submitted_at"] = timestamp
+	}
+	if blockNumber > 0 {
+		stateUpdates["onchain_block_number"] = blockNumber
+		if txHash != "" {
+			stateUpdates["onchain_status"] = "confirmed"
+		}
+	}
+	a.redisClient.HSet(a.ctx, epochStateKey, stateUpdates)
+
 	// Add to submission timeline (namespaced by protocol:market)
 	timelineKey := kb.VPASubmissionTimeline()
 	status := "success"
@@ -1764,6 +1830,14 @@ func (a *Aggregator) storeSubmissionMetrics(epochID uint64, dataMarketAddr strin
 		a.redisClient.HIncrBy(a.ctx, statsKey, fmt.Sprintf("priority_%d_submissions_failed", priority), 1)
 	}
 	a.redisClient.Expire(a.ctx, statsKey, 7*24*time.Hour)
+
+	// Update epoch state hash with priority (epochStateKey already declared above)
+	if priority > 0 {
+		a.redisClient.HSet(a.ctx, epochStateKey, map[string]interface{}{
+			"priority":     priority,
+			"last_updated": timestamp,
+		})
+	}
 
 	// Update combined epoch status (priority + submission status)
 	epochStatusKey := kb.VPAEpochStatus(epochIDStr)

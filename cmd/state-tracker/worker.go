@@ -171,6 +171,7 @@ func (sw *StateWorker) aggregateCurrentMetrics(ctx context.Context) {
 	submissionQueueCount, _ := sw.redis.LLen(ctx, sw.keyBuilder.SubmissionQueue()).Result()
 
 	// Count processed submissions using ActiveEpochs set (deterministic aggregation with migration)
+	// Also update submission counts in epoch state hashes
 	recentProcessedSubmissions := int64(0)
 	activeEpochs, err := sw.redis.SMembers(ctx, sw.keyBuilder.ActiveEpochs()).Result()
 	if err == nil {
@@ -179,6 +180,9 @@ func (sw *StateWorker) aggregateCurrentMetrics(ctx context.Context) {
 			count, err := sw.redis.SCard(ctx, epochKey).Result()
 			if err == nil {
 				recentProcessedSubmissions += count
+				// Update submission count in epoch state hash
+				epochStateKey := sw.keyBuilder.EpochState(epochID)
+				sw.redis.HSet(ctx, epochStateKey, "submissions_count", count)
 			}
 		}
 	}
@@ -331,6 +335,11 @@ func (sw *StateWorker) aggregateCurrentMetrics(ctx context.Context) {
 	for k, v := range vpaMetrics {
 		summary[k] = v
 	}
+
+	// Detect epoch gaps
+	gapCount := sw.detectEpochGaps(ctx)
+	summary["epoch_gaps_count"] = gapCount
+	summary["epoch_gaps_rate"] = float64(gapCount) / float64(recentEpochs5m+1) // Avoid division by zero
 
 	// Store summary with TTL
 	summaryJSON, _ := json.Marshal(summary)
@@ -1160,6 +1169,60 @@ func (sw *StateWorker) aggregateCurrentEpochStatusFromTimeline(ctx context.Conte
 		"submissions":    submissionsReceived,
 		"method":         "timeline_fallback",
 	}).Debug("Updated current epoch status using timeline fallback")
+}
+
+// detectEpochGaps scans active epochs and identifies gaps where finalizations are missing
+func (sw *StateWorker) detectEpochGaps(ctx context.Context) int64 {
+	// Get active epochs
+	activeEpochs, err := sw.redis.SMembers(ctx, sw.keyBuilder.ActiveEpochs()).Result()
+	if err != nil {
+		return 0
+	}
+
+	gapsKey := sw.keyBuilder.EpochsGaps()
+	now := time.Now().Unix()
+	var gapCount int64
+
+	// Clear old gaps (older than 1 hour)
+	oneHourAgo := now - 3600
+	sw.redis.ZRemRangeByScore(ctx, gapsKey, "0", strconv.FormatInt(oneHourAgo, 10))
+
+	for _, epochID := range activeEpochs {
+		epochStateKey := sw.keyBuilder.EpochState(epochID)
+		stateData, err := sw.redis.HGetAll(ctx, epochStateKey).Result()
+		if err != nil {
+			continue
+		}
+
+		windowStatus, _ := stateData["window_status"]
+		level1Status, _ := stateData["level1_status"]
+		level2Status, _ := stateData["level2_status"]
+		onchainStatus, _ := stateData["onchain_status"]
+
+		// Check for gaps
+		gapType := ""
+		if windowStatus == "closed" && level1Status != "completed" && level1Status != "in_progress" {
+			gapType = "missing_level1"
+		} else if level1Status == "completed" && level2Status != "completed" && level2Status != "aggregating" && level2Status != "collecting" {
+			gapType = "missing_level2"
+		} else if level2Status == "completed" && onchainStatus != "confirmed" && onchainStatus != "submitted" && onchainStatus != "queued" {
+			gapType = "missing_onchain"
+		}
+
+		if gapType != "" {
+			// Add to gaps set
+			sw.redis.ZAdd(ctx, gapsKey, redis.Z{
+				Score:  float64(now),
+				Member: fmt.Sprintf("%s:%s", epochID, gapType),
+			})
+			gapCount++
+		}
+	}
+
+	// Set TTL on gaps key
+	sw.redis.Expire(ctx, gapsKey, 24*time.Hour)
+
+	return gapCount
 }
 
 // Shutdown gracefully stops the worker
