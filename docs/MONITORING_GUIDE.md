@@ -780,15 +780,21 @@ curl "http://localhost:9091/api/v1/epochs/23875280/submissions?protocol=0x3B5A0F
 
 **Purpose**: Get epochs currently in progress (window open, level 1/2 in progress).
 
+**⚠️ Important Disclaimer**: This endpoint **excludes** epochs that have completed Level 2 finalization (`level2_status == "completed"`) and/or been committed on-chain (`onchain_status == "confirmed"`). The endpoint only returns epochs that are actively processing, not completed ones. To view completed epochs, use `/api/v1/epochs/{epochId}/status` or `/api/v1/epochs/timeline`.
+
 **How It Works** (Fixed Implementation):
 1. Queries `{protocol}:{market}:metrics:epochs:timeline` (ZSET) for last 100 epochs
 2. For each epoch ID:
    - Queries `{protocol}:{market}:epoch:{epochId}:state` (HASH) for current state
-   - Checks `window_status`, `level1_status`, `level2_status`
+   - Checks `window_status`, `level1_status`, `level2_status`, `onchain_status`
    - Includes epoch if:
      - `window_status == "open"` OR
-     - `level1_status == "in_progress"` OR
-     - `level2_status == "collecting"` OR `level2_status == "aggregating"`
+     - `level1_status == "in_progress"` OR `level1_status == "pending"` OR
+     - `level2_status == "collecting"` OR `level2_status == "aggregating"` OR `level2_status == "pending"` OR
+     - `onchain_status == "queued"` OR `onchain_status == "submitted"`
+   - **Excludes** epochs where:
+     - `level2_status == "completed"` (Level 2 finalized)
+     - `onchain_status == "confirmed"` (committed on-chain)
 3. Returns filtered epochs sorted by epoch ID (descending)
 
 **Why This Approach**:
@@ -865,6 +871,8 @@ curl "http://localhost:9091/api/v1/epochs/23847425/status"
 ### GET /api/v1/epochs/active
 
 Get epochs currently in progress (window open, level 1/2 in progress).
+
+**⚠️ Important Disclaimer**: This endpoint **excludes** epochs that have completed Level 2 finalization (`level2_status == "completed"`) and/or been committed on-chain (`onchain_status == "confirmed"`). The endpoint only returns epochs that are actively processing, not completed ones. To view completed epochs, use `/api/v1/epochs/{epochId}/status` or `/api/v1/epochs/timeline`.
 
 **Example:**
 ```bash
