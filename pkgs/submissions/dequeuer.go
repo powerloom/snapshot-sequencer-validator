@@ -334,19 +334,33 @@ func (d *Dequeuer) storeProcessingResult(submissionID string, processed *Process
 
 	// Add submission ID to ZSET for deterministic ordering (score = timestamp)
 	submissionsIdsKey := epochKeyBuilder.EpochSubmissionsIds(epochIDStr)
-	d.redisClient.ZAdd(ctx, submissionsIdsKey, redis.Z{
+	if err := d.redisClient.ZAdd(ctx, submissionsIdsKey, redis.Z{
 		Score:  float64(time.Now().Unix()),
 		Member: submissionID,
-	})
+	}).Err(); err != nil {
+		log.Errorf("❌ CRITICAL: Failed to add submission %s to ZSET %s: %v", submissionID, submissionsIdsKey, err)
+		// Continue - don't fail entire operation, but this is a critical error
+	} else {
+		log.Debugf("✅ Added submission %s to ZSET %s", submissionID, submissionsIdsKey)
+	}
 
 	// Store submission data in epoch-keyed HASH for deterministic lookup
 	submissionsDataKey := epochKeyBuilder.EpochSubmissionsData(epochIDStr)
-	d.redisClient.HSet(ctx, submissionsDataKey, submissionID, data)
+	if err := d.redisClient.HSet(ctx, submissionsDataKey, submissionID, data).Err(); err != nil {
+		log.Errorf("❌ CRITICAL: Failed to store submission %s in HASH %s: %v", submissionID, submissionsDataKey, err)
+		// Continue - don't fail entire operation, but this is a critical error
+	} else {
+		log.Debugf("✅ Stored submission %s in HASH %s", submissionID, submissionsDataKey)
+	}
 
 	// Set TTL on BOTH epoch structures (2 hours covers finalization window + buffer)
 	// Refresh TTL on each write to ensure data persists through finalization
-	d.redisClient.Expire(ctx, submissionsIdsKey, 2*time.Hour)  // ZSET expiry
-	d.redisClient.Expire(ctx, submissionsDataKey, 2*time.Hour) // HASH expiry
+	if err := d.redisClient.Expire(ctx, submissionsIdsKey, 2*time.Hour).Err(); err != nil {
+		log.Errorf("❌ CRITICAL: Failed to set TTL on ZSET %s: %v", submissionsIdsKey, err)
+	}
+	if err := d.redisClient.Expire(ctx, submissionsDataKey, 2*time.Hour).Err(); err != nil {
+		log.Errorf("❌ CRITICAL: Failed to set TTL on HASH %s: %v", submissionsDataKey, err)
+	}
 
 	log.Debugf("Stored submission %s with epochKey: %s (protocolState=%s, market=%s, epoch=%d)",
 		submissionID, epochKey, protocolState, dataMarket, processed.Submission.Request.EpochId)

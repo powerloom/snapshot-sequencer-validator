@@ -1063,12 +1063,44 @@ func (wm *WindowManager) triggerFinalization(dataMarket string, epochID *big.Int
 	// These snapshot CIDs will be aggregated into a finalized batch during Level 1 aggregation
 	submissions := wm.collectEpochSubmissions(dataMarket, epochID)
 
+	// Check if we have any submissions BEFORE proceeding
+	if len(submissions) == 0 {
+		log.Errorf("❌ CRITICAL: No submissions found for epoch %s - new deterministic structures may not exist (dequeuer write failure?)", epochID)
+		ctx := context.Background()
+		kb := wm.getKeyBuilder(dataMarket)
+		timestamp := time.Now().Unix()
+		epochStateKey := kb.EpochState(epochID.String())
+		wm.redisClient.HSet(ctx, epochStateKey, map[string]interface{}{
+			"level1_status":     "skipped",
+			"level1_started_at": timestamp,
+			"level1_reason":     "no_submissions_found",
+			"last_updated":      timestamp,
+		})
+		return // Don't proceed with empty batches
+	}
+
 	// Split submissions into smaller batches for parallel processing
 	batchSize := wm.finalizationBatchSize
 	if batchSize <= 0 {
 		batchSize = 20 // Default fallback
 	}
 	batches := wm.splitIntoBatches(submissions, batchSize)
+
+	// Double-check batches isn't empty (shouldn't happen if submissions isn't empty, but be safe)
+	if len(batches) == 0 {
+		log.Errorf("❌ CRITICAL: No batches created for epoch %s despite %d submissions - skipping finalization", epochID, len(submissions))
+		ctx := context.Background()
+		kb := wm.getKeyBuilder(dataMarket)
+		timestamp := time.Now().Unix()
+		epochStateKey := kb.EpochState(epochID.String())
+		wm.redisClient.HSet(ctx, epochStateKey, map[string]interface{}{
+			"level1_status":     "skipped",
+			"level1_started_at": timestamp,
+			"level1_reason":     "no_batches_created",
+			"last_updated":      timestamp,
+		})
+		return
+	}
 
 	// Track batch metadata in Redis for aggregation worker
 	ctx := context.Background()
@@ -1163,7 +1195,7 @@ func (wm *WindowManager) collectEpochSubmissions(dataMarket string, epochID *big
 	}
 
 	if len(submissionIDs) == 0 {
-		log.Debugf("No submission IDs found in ZSET for epoch %s (key: %s)", epochIDStr, submissionsIdsKey)
+		log.Errorf("❌ CRITICAL: No submission IDs found in ZSET for epoch %s (key: %s) - dequeuer may not have written to new structures", epochIDStr, submissionsIdsKey)
 		return make(map[string]interface{})
 	}
 
