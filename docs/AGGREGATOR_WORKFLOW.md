@@ -40,15 +40,23 @@ Combine parallel worker parts into a single finalized batch representing the loc
 
 **Purpose**: Collect all snapshot CIDs from snapshotter nodes before Level 1 finalization begins
 
+**Historical Context & Repurposing**:
+- The legacy contract's `snapshotSubmissionWindow(dataMarket)` function was originally designed for **centralized sequencer architecture**, where a single sequencer collected snapshots from snapshotter nodes.
+- In the new **decentralized validator architecture**, this same window duration is **repurposed** as the snapshot CID collection period that triggers Level 1 finalization.
+- **Usage Condition**: This repurposing occurs specifically when commit/reveal windows are **NOT enabled** (absence of commit/reveal windows). When commit/reveal is enabled, Level 1 finalization timing is tied to the snapshot reveal window closure instead.
+
 **Window Duration**:
-- **Legacy Contracts**: Queries `snapshotSubmissionWindow(dataMarket)` function on ProtocolState contract (typically 20 seconds)
+- **Legacy Contracts**: Queries `snapshotSubmissionWindow(dataMarket)` function on ProtocolState contract → **30 seconds** (repurposed from centralized sequencer design)
 - **New Contracts**: Uses dynamic window configuration from `getDataMarketSubmissionWindowConfig(dataMarket)`
+  - P1 submission window: **45 seconds** (Priority 1 validators commit on-chain)
+  - PN submission window: **45 seconds** (Priority N validators commit on-chain)
 - **Fallback**: `LEVEL1_FINALIZATION_DELAY_SECONDS` environment variable if contract query fails
 
 **Timing**:
 - Window opens when `EpochReleased` event is detected
 - During window: Snapshotters submit snapshot CIDs via P2P network (`/powerloom/snapshot-submissions/all`)
 - Window closes: Level 1 finalization begins, aggregating collected snapshot CIDs into finalized batch
+- **Visual Reference**: See the [Submission Timeline diagram](./imgs/sequencing-timeline.png) for a visual representation of the submission windows and phases.
 
 **Submission Collection (Deterministic)**:
 - Submissions stored deterministically in epoch-keyed structures:
@@ -63,8 +71,8 @@ Combine parallel worker parts into a single finalized batch representing the loc
 1. Event Monitor detects EpochReleased event
    ↓
 2. Event Monitor queries contract for submission window duration:
-   - Legacy: snapshotSubmissionWindow(dataMarket) → typically 20s
-   - New: getDataMarketSubmissionWindowConfig(dataMarket) → dynamic config
+   - Legacy: snapshotSubmissionWindow(dataMarket) → 30 seconds
+   - New: getDataMarketSubmissionWindowConfig(dataMarket) → dynamic config (P1=45s, PN=45s)
    ↓
 3. Event Monitor starts submission window timer
    ↓
@@ -500,8 +508,8 @@ func (a *Aggregator) combineValidatorViews(epochID uint64, batches map[string]*V
 
 ## References
 
-- **Implementation**: `decentralized-sequencer/cmd/aggregator/main.go`
-- **Redis Keys**: `decentralized-sequencer/REDIS_KEYS.md`
-- **Architecture**: `ai-coord-docs/specs/TECHNICAL_REFERENCE.md`
-- **Consensus Flow**: `ai-coord-docs/specs/DSV_CONSENSUS_FLOW.md`
+- **Implementation**: `cmd/aggregator/main.go`
+- **Redis Keys**: [`REDIS_KEYS.md`](./REDIS_KEYS.md)
+- **State Transitions**: [`PROTOCOL_STATE_TRANSITIONS.md`](./PROTOCOL_STATE_TRANSITIONS.md)
+- **Visual Timeline**: [`imgs/sequencing-timeline.png`](./imgs/sequencing-timeline.png)
 

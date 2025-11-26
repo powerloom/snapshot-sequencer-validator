@@ -73,8 +73,8 @@ Redis: {protocol}:{market}:epoch:{epochId}:submissions:data (HASH - deterministi
 Event Monitor detects EpochReleased event
   ↓
 Event Monitor queries contract for submission window duration:
-  - Legacy: snapshotSubmissionWindow(dataMarket) → typically 20s
-  - New: getDataMarketSubmissionWindowConfig(dataMarket) → dynamic config
+  - Legacy: snapshotSubmissionWindow(dataMarket) → 30 seconds (originally for centralized sequencer, now repurposed for snapshot CID collection in decentralized architecture when commit/reveal is disabled)
+  - New: getDataMarketSubmissionWindowConfig(dataMarket) → dynamic config (P1=45s, PN=45s)
   ↓
 Submission window opens → Snapshotters submit snapshot CIDs via P2P
   ↓
@@ -231,7 +231,7 @@ See [`PROTOCOL_STATE_TRANSITIONS.md`](./PROTOCOL_STATE_TRANSITIONS.md) for detai
   - State: `{protocol}:{market}:finalized:{epochId}`, `{protocol}:{market}:batch:aggregated:{epochId}`
   - Incoming Batches: `{protocol}:{market}:incoming:batch:{epochId}:{validatorId}`
   - Metrics: `{protocol}:{market}:metrics:batches:timeline`, `{protocol}:{market}:metrics:epoch:{id}:info`
-- **See**: [`REDIS_KEYS.md`](../../decentralized-sequencer/REDIS_KEYS.md)
+- **See**: [`REDIS_KEYS.md`](./REDIS_KEYS.md)
 
 **Unified Aggregation Path:**
 - Both local batches (after Level 1) and remote batches (from P2P Gateway) write to the same aggregation stream
@@ -430,12 +430,14 @@ See [`PROTOCOL_STATE_TRANSITIONS.md`](./PROTOCOL_STATE_TRANSITIONS.md) for detai
 
 ### Code References
 
-- **Redis Keys**: [`decentralized-sequencer/REDIS_KEYS.md`](../../decentralized-sequencer/REDIS_KEYS.md)
+- **Redis Keys**: [`REDIS_KEYS.md`](./REDIS_KEYS.md)
+- **Monitoring Guide**: [`MONITORING_GUIDE.md`](./MONITORING_GUIDE.md)
+- **Visual Timeline**: [`imgs/sequencing-timeline.png`](./imgs/sequencing-timeline.png)
 - **Main Components**:
-  - Aggregator: `decentralized-sequencer/cmd/aggregator/main.go`
-  - IPFS Client: `decentralized-sequencer/pkgs/ipfs/client.go`
-  - Redis Keys: `decentralized-sequencer/pkgs/redis/keys.go`
-  - Docker Compose: `decentralized-sequencer/docker-compose.separated.yml`
+  - Aggregator: `cmd/aggregator/main.go`
+  - IPFS Client: `pkgs/ipfs/client.go`
+  - Redis Keys: `pkgs/redis/keys.go`
+  - Docker Compose: `docker-compose.separated.yml`
 
 ### High-Level Meta Documents
 

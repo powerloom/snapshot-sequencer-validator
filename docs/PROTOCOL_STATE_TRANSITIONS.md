@@ -96,9 +96,14 @@ State: COLLECTED
 
 **Submission Window (Snapshot CID Collection):**
 - **Purpose**: Collect all snapshot CIDs from snapshotter nodes before Level 1 finalization begins
+- **Historical Context**: The legacy contract's `snapshotSubmissionWindow(dataMarket)` function was originally designed for centralized sequencer architecture, where a single sequencer collected snapshots. In the new decentralized validator architecture, this same window duration is repurposed as the snapshot CID collection period that triggers Level 1 finalization.
+- **Usage Condition**: This repurposing occurs specifically when commit/reveal windows are **NOT enabled** (absence of commit/reveal windows). When commit/reveal is enabled, Level 1 finalization timing is tied to the snapshot reveal window closure instead.
+- **Visual Reference**: See the [Submission Timeline diagram](./imgs/sequencing-timeline.png) for a visual representation of the submission windows and phases.
 - **Duration**: Fetched from legacy ProtocolState contract's `snapshotSubmissionWindow(dataMarket)` function
-  - Legacy contracts: Queries `snapshotSubmissionWindow()` directly (typically 20 seconds)
+  - Legacy contracts: Queries `snapshotSubmissionWindow()` directly → **30 seconds** (repurposed from centralized sequencer design)
   - New contracts: Uses dynamic window configuration from `getDataMarketSubmissionWindowConfig()`
+    - P1 submission window: **45 seconds** (Priority 1 validators commit on-chain)
+    - PN submission window: **45 seconds** (Priority N validators commit on-chain)
   - Fallback: `LEVEL1_FINALIZATION_DELAY_SECONDS` env var if contract query fails
 - **Timing**: Window opens when `EpochReleased` event is detected, closes after duration expires
 - **Collection**: During this window, snapshotters submit snapshot CIDs via P2P network
@@ -109,8 +114,8 @@ State: COLLECTED
 Event Monitor detects EpochReleased event
   ↓
 Event Monitor queries contract for submission window duration:
-  - Legacy: snapshotSubmissionWindow(dataMarket) → typically 20s
-  - New: getDataMarketSubmissionWindowConfig(dataMarket) → dynamic config
+  - Legacy: snapshotSubmissionWindow(dataMarket) → 30 seconds
+  - New: getDataMarketSubmissionWindowConfig(dataMarket) → dynamic config (P1=45s, PN=45s)
   ↓
 Event Monitor starts submission window timer
   ↓
@@ -440,13 +445,13 @@ redis-cli ZRANGE "{protocol}:{market}:metrics:batches:timeline" -100 -1
 - Total: ~500ms-1s
 
 **Collection → Finalization:**
-- Submission window duration: 20s (legacy contract `snapshotSubmissionWindow()`) or dynamic (new contract)
+- Submission window duration: 30s (legacy contract `snapshotSubmissionWindow()`) or dynamic (new contract: P1=45s, PN=45s)
   - During window: Snapshot CIDs collected from snapshotter nodes via P2P network
   - Window closes: Level 1 finalization begins
 - Event detection: <1s
 - Worker processing: 5-30s (depends on batch size)
 - Level 1 aggregation: 1-3s
-- Total: ~26-54s (includes 20s submission window for snapshot CID collection)
+- Total: ~36-64s (includes 30s submission window for snapshot CID collection)
 
 **Finalization → Broadcast:**
 - IPFS upload: 100ms-2s (local/external)
@@ -514,8 +519,8 @@ redis-cli ZRANGE "{protocol}:{market}:metrics:batches:timeline" -100 -1
 
 ## References
 
-- **Implementation**: `decentralized-sequencer/cmd/aggregator/main.go`
-- **Redis Keys**: `decentralized-sequencer/REDIS_KEYS.md`
-- **Consensus Flow**: `ai-coord-docs/specs/DSV_CONSENSUS_FLOW.md`
-- **Aggregator Workflow**: `ai-coord-docs/specs/AGGREGATOR_WORKFLOW.md`
+- **Implementation**: `cmd/aggregator/main.go`
+- **Redis Keys**: [`REDIS_KEYS.md`](./REDIS_KEYS.md)
+- **Aggregator Workflow**: [`AGGREGATOR_WORKFLOW.md`](./AGGREGATOR_WORKFLOW.md)
+- **Visual Timeline**: [`imgs/sequencing-timeline.png`](./imgs/sequencing-timeline.png)
 
