@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
@@ -311,8 +312,9 @@ func (d *Dequeuer) storeProcessingResult(submissionID string, processed *Process
 		return
 	}
 
-	// Store with TTL
-	err = d.redisClient.Set(ctx, key, data, 10*time.Minute).Err()
+	// Store with TTL - must be at least as long as epoch processed SET (1 hour)
+	// to ensure submissions are available when event monitor collects them for finalization
+	err = d.redisClient.Set(ctx, key, data, 1*time.Hour).Err()
 	if err != nil {
 		log.Errorf("Failed to store processing result: %v", err)
 	}
@@ -323,8 +325,33 @@ func (d *Dequeuer) storeProcessingResult(submissionID string, processed *Process
 	d.redisClient.SAdd(ctx, epochKey, submissionID)
 	d.redisClient.Expire(ctx, epochKey, 1*time.Hour)
 
+	// Store deterministically in epoch-keyed structures (ZSET + HASH)
+	// This eliminates the need for SCAN operations when collecting submissions for finalization
+	epochIDStr := strconv.FormatUint(processed.Submission.Request.EpochId, 10)
+
+	// Create KeyBuilder with correct protocolState and dataMarket for epoch-specific keys
+	epochKeyBuilder := redislib.NewKeyBuilder(protocolState, dataMarket)
+
+	// Add submission ID to ZSET for deterministic ordering (score = timestamp)
+	submissionsIdsKey := epochKeyBuilder.EpochSubmissionsIds(epochIDStr)
+	d.redisClient.ZAdd(ctx, submissionsIdsKey, redis.Z{
+		Score:  float64(time.Now().Unix()),
+		Member: submissionID,
+	})
+
+	// Store submission data in epoch-keyed HASH for deterministic lookup
+	submissionsDataKey := epochKeyBuilder.EpochSubmissionsData(epochIDStr)
+	d.redisClient.HSet(ctx, submissionsDataKey, submissionID, data)
+
+	// Set TTL on BOTH epoch structures (2 hours covers finalization window + buffer)
+	// Refresh TTL on each write to ensure data persists through finalization
+	d.redisClient.Expire(ctx, submissionsIdsKey, 2*time.Hour)  // ZSET expiry
+	d.redisClient.Expire(ctx, submissionsDataKey, 2*time.Hour) // HASH expiry
+
 	log.Debugf("Stored submission %s with epochKey: %s (protocolState=%s, market=%s, epoch=%d)",
 		submissionID, epochKey, protocolState, dataMarket, processed.Submission.Request.EpochId)
+	log.Debugf("Stored submission %s deterministically in epoch-keyed structures (ZSET: %s, HASH: %s)",
+		submissionID, submissionsIdsKey, submissionsDataKey)
 }
 
 func (d *Dequeuer) cleanupOldSubmissions() {

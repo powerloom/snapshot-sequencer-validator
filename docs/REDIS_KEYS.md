@@ -76,14 +76,33 @@ P2P Gateway ←→ Redis ←→ Dequeuer
   - Read by: Dequeuer (for recovery)
   - TTL: 5 minutes
 
-- `{protocol}:{market}:processed:{sequencerId}:{submissionId}` - HASH: Validated submission
+- `{protocol}:{market}:processed:{sequencerId}:{submissionId}` - STRING: Validated submission (legacy, kept for backward compatibility)
   - Written by: Dequeuer
-  - Read by: Finalizer
-  - Format: Submission details as hash
+  - Read by: (deprecated - use epoch-keyed structures instead)
+  - Format: JSON-encoded ProcessedSubmission
+  - TTL: 1 hour
 
-- `{protocol}:{market}:epoch:{epochId}:processed` - SET: Submission IDs for epoch
+- `{protocol}:{market}:epoch:{epochId}:processed` - SET: Submission IDs for epoch (deprecated, no longer used)
+  - Written by: Dequeuer (kept for backward compatibility, may be removed in future)
+  - Read by: (deprecated - State-Tracker now uses ZSET)
+  - TTL: 1 hour
+  - Note: Both Event Monitor and State-Tracker now use deterministic epoch-keyed structures (`EpochSubmissionsIds` ZSET)
+
+- `{protocol}:{market}:epoch:{epochId}:submissions:ids` - ZSET: Submission IDs for epoch (deterministic, ordered by timestamp)
   - Written by: Dequeuer
-  - Read by: Finalizer
+  - Read by: Event Monitor (for collecting epoch submissions)
+  - Score: Unix timestamp
+  - Member: Submission ID
+  - TTL: 2 hours (refreshed on each write)
+  - Purpose: Deterministic list of all submission IDs for an epoch, ordered by timestamp
+
+- `{protocol}:{market}:epoch:{epochId}:submissions:data` - HASH: Submission data for epoch (deterministic lookup)
+  - Written by: Dequeuer
+  - Read by: Event Monitor (for collecting epoch submissions)
+  - Field: Submission ID
+  - Value: JSON-encoded ProcessedSubmission
+  - TTL: 2 hours (refreshed on each write)
+  - Purpose: Deterministic lookup of submission data by epoch and submission ID
 
 ### Event Monitor Keys - NAMESPACED
 
@@ -256,13 +275,34 @@ P2P Gateway ←→ Redis ←→ Dequeuer
   - Purpose: Track who participated in each batch
 
 #### Submission Tracking Keys
-- `{protocol}:{market}:epoch:{epochId}:processed` - SET: Processed submission IDs per epoch
+
+**Deterministic Epoch Submission Storage (Primary)**:
+- `{protocol}:{market}:epoch:{epochId}:submissions:ids` - ZSET: Submission IDs per epoch (deterministic, ordered)
   - Written by: Dequeuer (when processing submissions)
-  - Read by: Event Monitor (for collecting epoch submissions), State-Tracker
+  - Read by: Event Monitor (for collecting epoch submissions)
+  - Score: Unix timestamp
+  - Member: Submission ID
+  - TTL: 2 hours (refreshed on each write)
+  - Purpose: Deterministic list of all submission IDs for an epoch, ordered by timestamp
+  - **No SCAN operations needed** - direct ZRANGE lookup
+
+- `{protocol}:{market}:epoch:{epochId}:submissions:data` - HASH: Submission data per epoch (deterministic lookup)
+  - Written by: Dequeuer (when processing submissions)
+  - Read by: Event Monitor (for collecting epoch submissions)
+  - Field: Submission ID
+  - Value: JSON-encoded ProcessedSubmission
+  - TTL: 2 hours (refreshed on each write)
+  - Purpose: Deterministic lookup of submission data by epoch and submission ID
+  - **No SCAN operations needed** - direct HGETALL lookup
+
+**Legacy Keys (Deprecated - no longer used)**:
+- `{protocol}:{market}:epoch:{epochId}:processed` - SET: Processed submission IDs per epoch
+  - Written by: Dequeuer (kept for backward compatibility, may be removed in future)
+  - Read by: (deprecated - State-Tracker now uses ZSET)
   - TTL: 1 hour after epoch window closes
   - Format: Set of submission IDs (internal format, not entity IDs)
-  - Purpose: Track which submissions were processed for a specific epoch
-  - Note: This is different from the timeline entity IDs - these are internal submission IDs
+  - Purpose: Legacy tracking of processed submissions (replaced by deterministic ZSET)
+  - Note: Both Event Monitor and State-Tracker now use deterministic epoch-keyed structures (`EpochSubmissionsIds` ZSET)
 
 #### Deterministic Aggregation Keys
 - `{protocol}:{market}:epochs:active` - SET: Currently active epoch IDs (legacy, may be stale)
@@ -416,8 +456,10 @@ Event Monitor → ActiveEpochs SET + EpochValidators({epochId}) SET + metrics:ep
 
 ### Dequeuer
 **Writes:**
-- `{protocol}:{market}:processed:{sequencerId}:{submissionId}` - Validated submissions
-- `{protocol}:{market}:epoch:{epochId}:processed` - Set of processed submissions
+- `{protocol}:{market}:processed:{sequencerId}:{submissionId}` - Validated submissions (legacy, kept for compatibility)
+- `{protocol}:{market}:epoch:{epochId}:processed` - Set of processed submissions (legacy, kept for compatibility)
+- `{protocol}:{market}:epoch:{epochId}:submissions:ids` - ZSET: Deterministic submission IDs per epoch (NEW)
+- `{protocol}:{market}:epoch:{epochId}:submissions:data` - HASH: Deterministic submission data per epoch (NEW)
 - `{protocol}:{market}:EpochProcessed({epochId})` - Deterministic aggregation set
 - `metrics:validations:timeline` - Validation completion events (NEW)
 
@@ -432,6 +474,10 @@ Event Monitor → ActiveEpochs SET + EpochValidators({epochId}) SET + metrics:ep
 - `{protocol}:{market}:metrics:epochs:timeline` - Epoch lifecycle events
 - `{protocol}:{market}:ActiveEpochs` - SET of active epoch IDs
 - `{protocol}:{market}:EpochValidators({epochId})` - SET of validators per epoch
+
+**Reads:**
+- `{protocol}:{market}:epoch:{epochId}:submissions:ids` - ZSET: Deterministic submission IDs (no SCAN needed)
+- `{protocol}:{market}:epoch:{epochId}:submissions:data` - HASH: Deterministic submission data (no SCAN needed)
 
 ### Finalizer
 **Writes:**

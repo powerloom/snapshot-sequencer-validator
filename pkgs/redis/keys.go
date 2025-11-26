@@ -79,6 +79,16 @@ func (kb *KeyBuilder) EpochProcessed(epochID string) string {
 	return fmt.Sprintf("%s:%s:epoch:%s:processed", kb.ProtocolState, kb.DataMarket, epochID)
 }
 
+// EpochSubmissionsIds returns the ZSET key for submission IDs in an epoch (deterministic, ordered by timestamp)
+func (kb *KeyBuilder) EpochSubmissionsIds(epochID string) string {
+	return fmt.Sprintf("%s:%s:epoch:%s:submissions:ids", kb.ProtocolState, kb.DataMarket, epochID)
+}
+
+// EpochSubmissionsData returns the HASH key for submission data in an epoch (deterministic lookup)
+func (kb *KeyBuilder) EpochSubmissionsData(epochID string) string {
+	return fmt.Sprintf("%s:%s:epoch:%s:submissions:data", kb.ProtocolState, kb.DataMarket, epochID)
+}
+
 // Event Monitor Keys
 
 // EpochWindow returns the key for submission window status

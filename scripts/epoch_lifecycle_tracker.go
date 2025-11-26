@@ -142,10 +142,10 @@ func getRecentEpochs(rdb *redis.Client, ctx context.Context, protocol, market st
 			break
 		}
 	}
-	for _, key := range keys {
-		parts := strings.Split(key, ":")
-		if len(parts) >= 3 {
-			epochSet[parts[2]] = true
+		for _, key := range keys {
+			parts := strings.Split(key, ":")
+			if len(parts) >= 3 {
+				epochSet[parts[2]] = true
 		}
 	}
 

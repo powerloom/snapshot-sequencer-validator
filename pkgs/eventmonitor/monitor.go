@@ -1168,23 +1168,38 @@ func (wm *WindowManager) splitIntoBatches(submissions map[string]interface{}, ba
 }
 
 // collectEpochSubmissions retrieves all processed submissions for an epoch
+// Uses deterministic epoch-keyed structures (ZSET + HASH)
 func (wm *WindowManager) collectEpochSubmissions(dataMarket string, epochID *big.Int) map[string]interface{} {
 	ctx := context.Background()
 
 	// Get key builder for this data market
 	kb := wm.getKeyBuilder(dataMarket)
+	epochIDStr := epochID.String()
 
-	// Get all submission IDs from the epoch set (namespaced)
-	// Format: {protocol}:{market}:epoch:{epochID}:processed
-	epochKey := kb.EpochProcessed(epochID.String())
-	log.Debugf("Looking for submissions with key: %s (protocolState=%s)", epochKey, wm.protocolState)
-	submissionIDs, err := wm.redisClient.SMembers(ctx, epochKey).Result()
+	// Get submission IDs from ZSET (deterministic, ordered by timestamp)
+	submissionsIdsKey := kb.EpochSubmissionsIds(epochIDStr)
+	submissionIDs, err := wm.redisClient.ZRange(ctx, submissionsIdsKey, 0, -1).Result()
 	if err != nil {
-		log.Errorf("Failed to get submission IDs for epoch %s in market %s: %v",
-			epochID, dataMarket, err)
+		log.Errorf("Failed to get submission IDs from ZSET for epoch %s: %v", epochIDStr, err)
 		return make(map[string]interface{})
 	}
-	log.Debugf("Found %d submission IDs for epoch %s", len(submissionIDs), epochID)
+
+	if len(submissionIDs) == 0 {
+		log.Debugf("No submission IDs found in ZSET for epoch %s (key: %s)", epochIDStr, submissionsIdsKey)
+		return make(map[string]interface{})
+	}
+
+	log.Debugf("Found %d submission IDs in ZSET for epoch %s", len(submissionIDs), epochIDStr)
+
+	// Get all submission data from HASH (deterministic, single operation)
+	submissionsDataKey := kb.EpochSubmissionsData(epochIDStr)
+	submissionDataMap, err := wm.redisClient.HGetAll(ctx, submissionsDataKey).Result()
+	if err != nil {
+		log.Errorf("Failed to get submission data from HASH for epoch %s: %v", epochIDStr, err)
+		return make(map[string]interface{})
+	}
+
+	log.Debugf("Retrieved %d submission entries from HASH for epoch %s", len(submissionDataMap), epochIDStr)
 
 	// Track CIDs per project with vote counts AND submitter details
 	// Structure: map[projectID]map[CID]count
@@ -1192,86 +1207,84 @@ func (wm *WindowManager) collectEpochSubmissions(dataMarket string, epochID *big
 	// Track WHO submitted WHAT for challenges/proofs
 	submissionMetadata := make(map[string][]map[string]interface{}) // projectID -> list of submissions
 
+	foundCount := 0
+	missingCount := 0
+
+	// Process submissions deterministically
 	for _, submissionID := range submissionIDs {
-		// Get the processed submission data
-		// Keys are formatted as: {protocol}:{market}:processed:{sequencer_id}:{submission_id}
-		pattern := fmt.Sprintf("%s:%s:processed:*:%s",
-			wm.protocolState, dataMarket, submissionID)
-		keys, _ := wm.scanKeys(ctx, pattern)
+		data, exists := submissionDataMap[submissionID]
+		if !exists {
+			log.Warnf("⚠️  Submission ID %s in ZSET but not in HASH for epoch %s", submissionID, epochIDStr)
+			missingCount++
+			continue
+		}
 
-		for _, key := range keys {
-			// Extract validator ID from key: {protocol}:{market}:processed:{validator_id}:{submission_id}
-			// Note: validatorID extraction removed as reported_by_validator field no longer needed
+		foundCount++
 
-			data, err := wm.redisClient.Get(ctx, key).Result()
-			if err != nil {
-				continue
-			}
+		var submission map[string]interface{}
+		if err := json.Unmarshal([]byte(data), &submission); err != nil {
+			log.Errorf("Failed to unmarshal submission %s: %v", submissionID, err)
+			missingCount++
+			continue
+		}
 
-			var submission map[string]interface{}
-			if err := json.Unmarshal([]byte(data), &submission); err != nil {
-				log.Errorf("Failed to unmarshal submission: %v", err)
-				continue
-			}
-
-			if subData, ok := submission["Submission"].(map[string]interface{}); ok {
-				if request, ok := subData["request"].(map[string]interface{}); ok {
-					if projectID, ok := request["projectId"].(string); ok {
-						if snapshotCID, ok := request["snapshotCid"].(string); ok {
-							// Track vote counts
-							if projectVotes[projectID] == nil {
-								projectVotes[projectID] = make(map[string]int)
-							}
-							projectVotes[projectID][snapshotCID]++
-
-							// Track submission metadata for challenges/proofs
-							slotID := uint64(0)
-							if slot, ok := request["slotId"].(float64); ok {
-								slotID = uint64(slot)
-							}
-
-							// Extract submitter info from submission
-							// EIP-712 signature verification is done by dequeuer during processing
-							// The verified snapshotter EVM address is stored in SnapshotterAddr field
-							submitterID := ""
-							if addr, ok := submission["SnapshotterAddr"].(string); ok && addr != "" {
-								submitterID = addr
-							} else {
-								// Missing SnapshotterAddr indicates signature verification failed in dequeuer
-								// This submission should not have been processed - log error and skip
-								log.Errorf("Missing SnapshotterAddr for submission %s (epoch=%d, project=%s, CID=%s) - signature verification may have failed",
-									submissionID, submission["Submission"].(map[string]interface{})["request"].(map[string]interface{})["epochId"],
-									projectID, snapshotCID)
-								continue
-							}
-
-							signature := ""
-							if sig, ok := subData["signature"].(string); ok {
-								signature = sig
-							}
-
-							metadata := map[string]interface{}{
-								"submitter_id": submitterID,
-								"snapshot_cid": snapshotCID,
-								"slot_id":      slotID,
-								"signature":    signature,
-								"timestamp":    time.Now().Unix(),
-							}
-
-							submissionMetadata[projectID] = append(submissionMetadata[projectID], metadata)
-							log.Debugf("Found submission: project=%s, CID=%s, submitter=%s", projectID, snapshotCID, submitterID)
-						} else {
-							log.Warnf("No snapshotCid in request: %+v", request)
+		if subData, ok := submission["Submission"].(map[string]interface{}); ok {
+			if request, ok := subData["request"].(map[string]interface{}); ok {
+				if projectID, ok := request["projectId"].(string); ok {
+					if snapshotCID, ok := request["snapshotCid"].(string); ok {
+						// Track vote counts
+						if projectVotes[projectID] == nil {
+							projectVotes[projectID] = make(map[string]int)
 						}
+						projectVotes[projectID][snapshotCID]++
+
+						// Track submission metadata for challenges/proofs
+						slotID := uint64(0)
+						if slot, ok := request["slotId"].(float64); ok {
+							slotID = uint64(slot)
+						}
+
+						// Extract submitter info from submission
+						// EIP-712 signature verification is done by dequeuer during processing
+						// The verified snapshotter EVM address is stored in SnapshotterAddr field
+						submitterID := ""
+						if addr, ok := submission["SnapshotterAddr"].(string); ok && addr != "" {
+							submitterID = addr
+						} else {
+							// Missing SnapshotterAddr indicates signature verification failed in dequeuer
+							// This submission should not have been processed - log error and skip
+							log.Errorf("Missing SnapshotterAddr for submission %s (epoch=%d, project=%s, CID=%s) - signature verification may have failed",
+								submissionID, submission["Submission"].(map[string]interface{})["request"].(map[string]interface{})["epochId"],
+								projectID, snapshotCID)
+							continue
+						}
+
+						signature := ""
+						if sig, ok := subData["signature"].(string); ok {
+							signature = sig
+						}
+
+						metadata := map[string]interface{}{
+							"submitter_id": submitterID,
+							"snapshot_cid": snapshotCID,
+							"slot_id":      slotID,
+							"signature":    signature,
+							"timestamp":    time.Now().Unix(),
+						}
+
+						submissionMetadata[projectID] = append(submissionMetadata[projectID], metadata)
+						log.Debugf("Found submission: project=%s, CID=%s, submitter=%s", projectID, snapshotCID, submitterID)
 					} else {
-						log.Warnf("No projectId in request: %+v", request)
+						log.Warnf("No snapshotCid in request: %+v", request)
 					}
 				} else {
-					log.Warnf("No request field in submission: %+v", subData)
+					log.Warnf("No projectId in request: %+v", request)
 				}
 			} else {
-				log.Warnf("No Submission field in data: %+v", submission)
+				log.Warnf("No request field in submission: %+v", subData)
 			}
+		} else {
+			log.Warnf("No Submission field in data: %+v", submission)
 		}
 	}
 
@@ -1298,8 +1311,17 @@ func (wm *WindowManager) collectEpochSubmissions(dataMarket string, epochID *big
 	batchData, _ := json.Marshal(projectSubmissions)
 	wm.redisClient.Set(ctx, batchKey, batchData, 1*time.Hour)
 
-	log.Infof("📦 Collected %d unique projects for epoch %s",
-		len(projectSubmissions), epochID)
+	log.Infof("📦 Collected %d unique projects for epoch %s (found %d/%d submissions deterministically from epoch-keyed structures)",
+		len(projectSubmissions), epochID, foundCount, len(submissionIDs))
+
+	if missingCount > 0 {
+		log.Warnf("⚠️  %d submission IDs in ZSET but missing from HASH for epoch %s", missingCount, epochID)
+	}
+
+	if len(submissionIDs) > 0 && len(projectSubmissions) == 0 {
+		log.Errorf("❌ CRITICAL: Found %d submission IDs but collected 0 projects for epoch %s - data may be corrupted",
+			len(submissionIDs), epochID)
+	}
 
 	return projectSubmissions
 }

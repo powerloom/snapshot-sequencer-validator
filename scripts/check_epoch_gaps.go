@@ -182,10 +182,10 @@ func getRedisEpochs(rdb *redis.Client, ctx context.Context, protocol, market str
 			break
 		}
 	}
-	for _, key := range keys {
-		parts := strings.Split(key, ":")
-		if len(parts) >= 3 {
-			processed[parts[2]] = true
+		for _, key := range keys {
+			parts := strings.Split(key, ":")
+			if len(parts) >= 3 {
+				processed[parts[2]] = true
 		}
 	}
 

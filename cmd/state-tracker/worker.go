@@ -176,8 +176,9 @@ func (sw *StateWorker) aggregateCurrentMetrics(ctx context.Context) {
 	activeEpochs, err := sw.redis.SMembers(ctx, sw.keyBuilder.ActiveEpochs()).Result()
 	if err == nil {
 		for _, epochID := range activeEpochs {
-			epochKey := sw.keyBuilder.EpochProcessed(epochID)
-			count, err := sw.redis.SCard(ctx, epochKey).Result()
+			// Use deterministic ZSET for submission counting
+			epochSubmissionsKey := sw.keyBuilder.EpochSubmissionsIds(epochID)
+			count, err := sw.redis.ZCard(ctx, epochSubmissionsKey).Result()
 			if err == nil {
 				recentProcessedSubmissions += count
 				// Update submission count in epoch state hash
@@ -523,8 +524,9 @@ func (sw *StateWorker) aggregateHourPeriod(ctx context.Context, hourStart, hourE
 	activeEpochs, err := sw.redis.SMembers(ctx, sw.keyBuilder.ActiveEpochs()).Result()
 	if err == nil {
 		for _, epochID := range activeEpochs {
-			epochKey := sw.keyBuilder.EpochProcessed(epochID)
-			count, err := sw.redis.SCard(ctx, epochKey).Result()
+			// Use deterministic ZSET for submission counting
+			epochSubmissionsKey := sw.keyBuilder.EpochSubmissionsIds(epochID)
+			count, err := sw.redis.ZCard(ctx, epochSubmissionsKey).Result()
 			if err == nil {
 				submissionCount += count
 			}
@@ -668,8 +670,9 @@ func (sw *StateWorker) aggregateDailyStats(ctx context.Context) {
 	activeEpochs, err := sw.redis.SMembers(ctx, sw.keyBuilder.ActiveEpochs()).Result()
 	if err == nil {
 		for _, epochID := range activeEpochs {
-			epochKey := sw.keyBuilder.EpochProcessed(epochID)
-			count, err := sw.redis.SCard(ctx, epochKey).Result()
+			// Use deterministic ZSET for submission counting
+			epochSubmissionsKey := sw.keyBuilder.EpochSubmissionsIds(epochID)
+			count, err := sw.redis.ZCard(ctx, epochSubmissionsKey).Result()
 			if err == nil {
 				submissionCount += count
 			}
@@ -969,10 +972,10 @@ func (sw *StateWorker) aggregateCurrentEpochStatus(ctx context.Context) {
 		}
 	}
 
-	// Count submissions in current epoch (from processed submissions for this epoch)
-	epochProcessedKey := sw.keyBuilder.EpochProcessed(currentEpochID)
-	if submissionIDs, err := sw.redis.SMembers(ctx, epochProcessedKey).Result(); err == nil {
-		submissionsReceived = int64(len(submissionIDs))
+	// Count submissions in current epoch (from deterministic ZSET)
+	epochSubmissionsKey := sw.keyBuilder.EpochSubmissionsIds(currentEpochID)
+	if count, err := sw.redis.ZCard(ctx, epochSubmissionsKey).Result(); err == nil {
+		submissionsReceived = count
 	}
 
 	currentEpochStatus := map[string]interface{}{
@@ -1127,10 +1130,10 @@ func (sw *StateWorker) aggregateCurrentEpochStatusFromTimeline(ctx context.Conte
 		}
 	}
 
-	// Count submissions in current epoch (from processed submissions for this epoch)
-	epochProcessedKey := sw.keyBuilder.EpochProcessed(currentEpochID)
-	if submissionIDs, err := sw.redis.SMembers(ctx, epochProcessedKey).Result(); err == nil {
-		submissionsReceived = int64(len(submissionIDs))
+	// Count submissions in current epoch (from deterministic ZSET)
+	epochSubmissionsKey := sw.keyBuilder.EpochSubmissionsIds(currentEpochID)
+	if count, err := sw.redis.ZCard(ctx, epochSubmissionsKey).Result(); err == nil {
+		submissionsReceived = count
 	}
 
 	currentEpochStatus := map[string]interface{}{

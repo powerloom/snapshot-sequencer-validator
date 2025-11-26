@@ -1164,14 +1164,14 @@ func (m *MonitorAPI) EpochsTimeline(c *gin.Context) {
 			epochInfo.Phase = phase
 		} else {
 			// Fallback: Determine phase from batch status
-			if epochInfo.Status == "open" {
-				epochInfo.Phase = "submission"
-			} else if epochInfo.Level2Batch {
-				epochInfo.Phase = "complete"
-			} else if epochInfo.Level1Batch {
-				epochInfo.Phase = "aggregation"
-			} else {
-				epochInfo.Phase = "finalization"
+		if epochInfo.Status == "open" {
+			epochInfo.Phase = "submission"
+		} else if epochInfo.Level2Batch {
+			epochInfo.Phase = "complete"
+		} else if epochInfo.Level1Batch {
+			epochInfo.Phase = "aggregation"
+		} else {
+			epochInfo.Phase = "finalization"
 			}
 		}
 

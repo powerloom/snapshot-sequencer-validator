@@ -55,7 +55,7 @@ The worker prepares these datasets that are consumed by the Monitor API:
 - **`{protocol}:{market}:stats:daily`** - 24-hour summary
 
 ### Redis Keys Prepared
-- Uses **deterministic aggregation** with `ActiveEpochs()`, `EpochValidators({epochId})`, `EpochProcessed({epochId})` sets
+- Uses **deterministic aggregation** with `ActiveEpochs()`, `EpochValidators({epochId})`, `EpochSubmissionsIds({epochId})` ZSET
 - Maintains timeline data for epochs, batches, and submissions
 - Prunes data older than 24 hours automatically
 
@@ -68,7 +68,7 @@ The service maintains efficient indexes with deterministic aggregation:
 # Set Operations for Deterministic Aggregation (NEW - October 2025)
 ActiveEpochs()                       # Set of currently active epoch IDs
 EpochValidators({epochId})           # Set of validator IDs for each epoch
-EpochProcessed({epochId})            # Set of processed submission IDs per epoch
+EpochSubmissionsIds({epochId})       # ZSET of processed submission IDs per epoch (deterministic, ordered by timestamp)
 ```
 
 ### Traditional Index Structure (Backward Compatibility)
@@ -206,7 +206,7 @@ curl http://localhost:8086/api/v1/current-epoch
 ### Technical Implementation
 - **ActiveEpochs Set**: Direct access to currently active epochs instead of timeline parsing
 - **EpochValidators Sets**: Efficient validator detection per epoch instead of batch timeline iteration
-- **EpochProcessed Sets**: Fast submission counting per epoch without expensive operations
+- **EpochSubmissionsIds ZSET**: Fast submission counting per epoch using `ZCARD` on deterministic ZSET
 - **Fallback Mechanisms**: Graceful degradation to timeline-based detection when new keys aren't available
 
 ### Backward Compatibility
@@ -221,5 +221,5 @@ curl http://localhost:8086/api/v1/current-epoch
 2. **Event Processing**: Subscribes to Redis Pub/Sub "state:change" channel for real-time counting
 3. **Multiple Aggregation Workers**: Runs concurrent workers for different time periods (metrics, hourly, daily, pruning)
 4. **Monitor API Integration**: Data is consumed by Monitor API, not directly by users
-5. **Deterministic Aggregation**: Uses ActiveEpochs(), EpochValidators(), and EpochProcessed() sets
+5. **Deterministic Aggregation**: Uses ActiveEpochs(), EpochValidators(), and EpochSubmissionsIds() ZSET
 6. **Graceful Shutdown**: Properly closes connections and stops all workers
