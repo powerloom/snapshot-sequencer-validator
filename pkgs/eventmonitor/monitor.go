@@ -91,28 +91,6 @@ type WindowManager struct {
 	keyBuilders           map[string]*rediskeys.KeyBuilder // Cache key builders per data market
 }
 
-// scanKeys uses SCAN instead of KEYS for production safety
-func (wm *WindowManager) scanKeys(ctx context.Context, pattern string) ([]string, error) {
-	var keys []string
-	var cursor uint64
-
-	for {
-		scanKeys, nextCursor, err := wm.redisClient.Scan(ctx, cursor, pattern, 100).Result()
-		if err != nil {
-			return nil, err
-		}
-
-		keys = append(keys, scanKeys...)
-		cursor = nextCursor
-
-		if cursor == 0 {
-			break
-		}
-	}
-
-	return keys, nil
-}
-
 // EpochWindow represents an active submission window
 type EpochWindow struct {
 	EpochID           *big.Int
