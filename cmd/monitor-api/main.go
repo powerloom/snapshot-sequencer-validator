@@ -872,19 +872,13 @@ func (m *MonitorAPI) FinalizedBatches(c *gin.Context) {
 		now := time.Now().Unix()
 		start := now - 86400 // Last 24 hours (matches pruneOldData retention)
 
-		// When level=0 (both levels), fetch more entries to account for:
-		// 1. Mix of local and aggregated entries
-		// 2. Entries that may not have batch data available (filtered out)
-		timelineFetchCount := int64(limit)
-		if level == 0 {
-			// Fetch 3x limit to ensure we get enough valid batches after filtering
-			timelineFetchCount = int64(limit * 3)
-		}
-
+		// Fetch all entries from timeline in the 24-hour window
+		// We'll filter and limit in code to ensure we get the requested number of batches
+		// Note: Count parameter may limit results, so we fetch without it and filter manually
 		entries, _ := m.redis.ZRevRangeByScore(m.ctx, kb.MetricsBatchesTimeline(), &redis.ZRangeBy{
-			Min:   strconv.FormatInt(start, 10),
-			Max:   "+inf",
-			Count: timelineFetchCount,
+			Min: strconv.FormatInt(start, 10),
+			Max: "+inf",
+			// Don't use Count here - fetch all entries and filter in code
 		}).Result()
 
 		for _, entry := range entries {
