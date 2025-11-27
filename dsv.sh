@@ -47,6 +47,7 @@ show_usage() {
     echo "  start [--with-ipfs] [--with-vpa] [--no-monitor]  - Start services (monitoring enabled by default)"
     echo "  stop                  - Stop all services"
     echo "  restart               - Restart all services"
+    echo "  restart-monitor       - Restart only monitoring services (state-tracker, monitor-api)"
     echo "  status                - Show service status"
     echo "  clean                 - Stop and remove all containers/volumes"
     echo "  clean-queue          - Clean up stale aggregation queue items"
@@ -255,6 +256,28 @@ stop_services() {
         $DOCKER_COMPOSE_CMD down 2>/dev/null || true
     fi
     print_color "$GREEN" "✓ All services stopped"
+}
+
+# Restart monitoring services only
+restart_monitoring() {
+    print_color "$CYAN" "🔄 Restarting monitoring services (state-tracker, monitor-api)..."
+    if is_separated_running; then
+        # Restart only monitoring profile services
+        $DOCKER_COMPOSE_CMD -f docker-compose.separated.yml --profile monitoring restart
+        if [ $? -eq 0 ]; then
+            print_color "$GREEN" "✅ Monitoring services restarted successfully"
+            echo ""
+            print_color "$CYAN" "Services restarted:"
+            echo "  • State Tracker (data aggregation)"
+            echo "  • Monitor API (dashboard)"
+        else
+            print_color "$RED" "❌ Failed to restart monitoring services"
+            exit 1
+        fi
+    else
+        print_color "$YELLOW" "No services running. Start services first with: ./dsv.sh start"
+        exit 1
+    fi
 }
 
 # Show status
@@ -662,6 +685,9 @@ case "${1:-}" in
         sleep 2
         shift
         start_services "$@"
+        ;;
+    restart-monitor)
+        restart_monitoring
         ;;
     status|ps)
         show_status
