@@ -734,14 +734,14 @@ func (m *MonitorAPI) Health(c *gin.Context) {
 }
 
 // @Summary Finalized batches
-// @Description Get Level 1 (local) or Level 2 (aggregated) finalized batches
+// @Description Get Level 1 (local) or Level 2 (aggregated) finalized batches. Queries last 24 hours of data (matches retention period).
 // @Tags batches
 // @Produce json
 // @Param protocol query string false "Protocol state identifier"
 // @Param market query string false "Data market address"
 // @Param level query int false "Batch level (1 or 2, default both)"
 // @Param epoch_id query string false "Specific epoch ID"
-// @Param limit query int false "Number of batches to retrieve (default 50)"
+// @Param limit query int false "Number of batches to retrieve (default 50, max 100)"
 // @Success 200 {array} FinalizedBatch
 // @Router /batches/finalized [get]
 func (m *MonitorAPI) FinalizedBatches(c *gin.Context) {
@@ -867,8 +867,9 @@ func (m *MonitorAPI) FinalizedBatches(c *gin.Context) {
 		}
 	} else {
 		// Get recent batches from timeline
+		// Query full 24-hour window (matches data retention period)
 		now := time.Now().Unix()
-		start := now - 3600 // Last hour by default
+		start := now - 86400 // Last 24 hours (matches pruneOldData retention)
 
 		entries, _ := m.redis.ZRevRangeByScore(m.ctx, kb.MetricsBatchesTimeline(), &redis.ZRangeBy{
 			Min:   strconv.FormatInt(start, 10),
