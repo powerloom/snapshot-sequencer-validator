@@ -566,7 +566,7 @@ func (m *MonitorAPI) PipelineOverview(c *gin.Context) {
 // @Tags timeline
 // @Produce json
 // @Param type query string false "Event type (submission, validation, epoch, batch)"
-// @Param minutes query int false "Minutes to look back (default 5)"
+// @Param minutes query int false "Minutes to look back (default 5, max 1440 for 24 hours)"
 // @Param include_metadata query bool false "Include detailed metadata from Redis (default true)"
 // @Success 200 {object} EnhancedTimelineResponse
 // @Router /timeline/recent [get]
@@ -591,7 +591,8 @@ func (m *MonitorAPI) RecentTimeline(c *gin.Context) {
 	eventType := c.DefaultQuery("type", "submission")
 	minutesParam := c.DefaultQuery("minutes", "5")
 	minutes, _ := strconv.Atoi(minutesParam)
-	if minutes <= 0 || minutes > 60 {
+	// Allow up to 24 hours (1440 minutes) to match data retention period
+	if minutes <= 0 || minutes > 1440 {
 		minutes = 5
 	}
 
@@ -1165,14 +1166,14 @@ func (m *MonitorAPI) EpochsTimeline(c *gin.Context) {
 			epochInfo.Phase = phase
 		} else {
 			// Fallback: Determine phase from batch status
-		if epochInfo.Status == "open" {
-			epochInfo.Phase = "submission"
-		} else if epochInfo.Level2Batch {
-			epochInfo.Phase = "complete"
-		} else if epochInfo.Level1Batch {
-			epochInfo.Phase = "aggregation"
-		} else {
-			epochInfo.Phase = "finalization"
+			if epochInfo.Status == "open" {
+				epochInfo.Phase = "submission"
+			} else if epochInfo.Level2Batch {
+				epochInfo.Phase = "complete"
+			} else if epochInfo.Level1Batch {
+				epochInfo.Phase = "aggregation"
+			} else {
+				epochInfo.Phase = "finalization"
 			}
 		}
 
@@ -1415,7 +1416,8 @@ func (m *MonitorAPI) EpochGaps(c *gin.Context) {
 	market := c.Query("market")
 	windowMinutesParam := c.DefaultQuery("window_minutes", "5")
 	windowMinutes, _ := strconv.Atoi(windowMinutesParam)
-	if windowMinutes <= 0 {
+	// Allow up to 24 hours (1440 minutes) to match data retention period
+	if windowMinutes <= 0 || windowMinutes > 1440 {
 		windowMinutes = 5
 	}
 
