@@ -235,7 +235,8 @@ paths:
       - aggregation
   /batches/finalized:
     get:
-      description: Get Level 1 (local) or Level 2 (aggregated) finalized batches
+      description: Get Level 1 (local) or Level 2 (aggregated) finalized batches.
+        Queries last 24 hours of data (matches retention period).
       parameters:
       - description: Protocol state identifier
         in: query
@@ -253,7 +254,7 @@ paths:
         in: query
         name: epoch_id
         type: string
-      - description: Number of batches to retrieve (default 50)
+      - description: Number of batches to retrieve (default 50, max 100)
         in: query
         name: limit
         type: integer
@@ -538,7 +539,7 @@ paths:
         in: query
         name: type
         type: string
-      - description: Minutes to look back (default 5)
+      - description: Minutes to look back (default 5, max 1440 for 24 hours)
         in: query
         name: minutes
         type: integer

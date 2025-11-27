@@ -60,7 +60,7 @@ const docTemplate = `{
         },
         "/batches/finalized": {
             "get": {
-                "description": "Get Level 1 (local) or Level 2 (aggregated) finalized batches",
+                "description": "Get Level 1 (local) or Level 2 (aggregated) finalized batches. Queries last 24 hours of data (matches retention period).",
                 "produces": [
                     "application/json"
                 ],
@@ -95,7 +95,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "integer",
-                        "description": "Number of batches to retrieve (default 50)",
+                        "description": "Number of batches to retrieve (default 50, max 100)",
                         "name": "limit",
                         "in": "query"
                     }
@@ -527,7 +527,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "integer",
-                        "description": "Minutes to look back (default 5)",
+                        "description": "Minutes to look back (default 5, max 1440 for 24 hours)",
                         "name": "minutes",
                         "in": "query"
                     },
