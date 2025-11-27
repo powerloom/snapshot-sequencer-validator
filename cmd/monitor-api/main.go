@@ -804,9 +804,9 @@ func (m *MonitorAPI) FinalizedBatches(c *gin.Context) {
 						batch.OnchainStatus = onchainStatus
 					}
 					// Check for gaps
-					windowStatus, _ := stateData["window_status"]
-					level1Status, _ := stateData["level1_status"]
-					level2Status, _ := stateData["level2_status"]
+					windowStatus := stateData["window_status"]
+					level1Status := stateData["level1_status"]
+					level2Status := stateData["level2_status"]
 					if windowStatus == "closed" && level1Status != "completed" && level1Status != "in_progress" {
 						batch.HasGap = true
 					} else if level1Status == "completed" && level2Status != "completed" && level2Status != "aggregating" && level2Status != "collecting" {
@@ -857,8 +857,8 @@ func (m *MonitorAPI) FinalizedBatches(c *gin.Context) {
 						batch.OnchainStatus = onchainStatus
 					}
 					// Check for gaps
-					level2Status, _ := stateData["level2_status"]
-					onchainStatus, _ := stateData["onchain_status"]
+					level2Status := stateData["level2_status"]
+					onchainStatus := stateData["onchain_status"]
 					if level2Status == "completed" && onchainStatus != "confirmed" && onchainStatus != "submitted" && onchainStatus != "queued" {
 						batch.HasGap = true
 					}
@@ -1341,11 +1341,11 @@ func (m *MonitorAPI) ActiveEpochs(c *gin.Context) {
 		}
 
 		// Check if epoch is actively processing
-		windowStatus, _ := stateData["window_status"]
-		level1Status, _ := stateData["level1_status"]
-		level2Status, _ := stateData["level2_status"]
-		phase, _ := stateData["phase"]
-		onchainStatus, _ := stateData["onchain_status"]
+		windowStatus := stateData["window_status"]
+		level1Status := stateData["level1_status"]
+		level2Status := stateData["level2_status"]
+		phase := stateData["phase"]
+		onchainStatus := stateData["onchain_status"]
 
 		isActive := false
 		if windowStatus == "open" {
@@ -1462,10 +1462,10 @@ func (m *MonitorAPI) EpochGaps(c *gin.Context) {
 		epochStateKey := kb.EpochState(epochID)
 		stateData, _ := m.redis.HGetAll(m.ctx, epochStateKey).Result()
 
-		windowStatus, _ := stateData["window_status"]
-		level1Status, _ := stateData["level1_status"]
-		level2Status, _ := stateData["level2_status"]
-		onchainStatus, _ := stateData["onchain_status"]
+		windowStatus := stateData["window_status"]
+		level1Status := stateData["level1_status"]
+		level2Status := stateData["level2_status"]
+		onchainStatus := stateData["onchain_status"]
 
 		// Check for gaps
 		gapType := ""
