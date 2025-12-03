@@ -90,19 +90,57 @@ In a network where some nodes (sequencers) primarily consume rather than relay:
 
 ## Active Heartbeat Publishing Strategy
 
-To maintain mesh membership, nodes publish periodic heartbeats:
+To maintain mesh membership, nodes publish periodic heartbeats. The local collector uses **two different heartbeat formats** optimized for each topic:
 
-```go
-// Every 10 seconds, publish to maintain presence
-ticker := time.NewTicker(10 * time.Second)
-msg := HeartbeatMessage{
-    PeerID:    h.ID().String(),
-    Timestamp: time.Now().Unix(),
-    MsgType:   "heartbeat",
+### Heartbeat Message Types
+
+#### Type 1: Discovery Topic Heartbeat (`/powerloom/{prefix}/snapshot-submissions/0`)
+
+**Format:**
+```json
+{
+  "epoch_id": 0,
+  "submissions": null,
+  "snapshotter_id": "...",
+  "signature": "heartbeat-discovery-..."
 }
 ```
 
-This ensures nodes appear "active" even when not relaying application messages.
+**DSV Node Handling:**
+- **Detection**: Checks `epoch_id == 0 && submissions == null` (unified/main.go line 731)
+- **Action**: Skipped immediately at queue level (no processing overhead)
+- **Purpose**: Lightweight presence announcement for peer discovery
+
+#### Type 2: Submissions Topic Heartbeat (`/powerloom/{prefix}/snapshot-submissions/all`)
+
+**Format:**
+```json
+{
+  "epoch_id": 0,
+  "submissions": [{
+    "request": {
+      "epoch_id": 0,
+      "project_id": "test:mesh-formation:local-collector",
+      "snapshot_cid": ""
+    }
+  }],
+  "snapshotter_id": "...",
+  "signature": "heartbeat-submissions-..."
+}
+```
+
+**DSV Node Handling:**
+- **Detection**: Checks `EpochId == 0 && SnapshotCid == ""` (dequeuer.go line 229)
+- **Action**: Queued but skipped during validation (recognized as heartbeat)
+- **Error Handling**: Logged as debug, not error (unified/main.go line 1023)
+- **Purpose**: Helps mesh formation on submissions topic while maintaining presence
+
+### Why Two Types?
+
+- **Discovery Topic**: Uses `null` submissions for minimal overhead - DSV skips queueing entirely
+- **Submissions Topic**: Uses non-nil array with empty CID - helps mesh formation while still being recognized as heartbeat
+
+Both types ensure nodes appear "active" even when not relaying application messages, preventing mesh pruning due to inactivity.
 
 ## Relevant Research & References
 

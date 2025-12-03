@@ -286,8 +286,60 @@ The system uses libp2p with gossipsub for peer discovery:
 
 - **Discovery Topic**: `RENDEZVOUS_POINT` (default: `powerloom-snapshot-sequencer-network`)
 - **Message Topics**:
-  - `/powerloom/snapshot-submissions/all` - Actual submissions
+  - `/powerloom/{prefix}/snapshot-submissions/0` - Discovery topic (peer discovery)
+  - `/powerloom/{prefix}/snapshot-submissions/all` - Actual submissions
   - `/powerloom/finalized-batches/all` - Batch consensus
+
+### Heartbeat Message Handling
+
+The DSV node recognizes and handles heartbeat messages from local collectors to prevent unnecessary processing overhead. Local collectors publish two types of heartbeat messages:
+
+#### Type 1: Discovery Topic Heartbeat
+
+**Format:**
+```json
+{
+  "epoch_id": 0,
+  "submissions": null,
+  "snapshotter_id": "...",
+  "signature": "..."
+}
+```
+
+**DSV Processing:**
+- **Detection**: `epoch_id == 0 && submissions == null` (unified/main.go line 731)
+- **Action**: Skipped immediately at queue level (no processing overhead)
+- **Logging**: Debug level: `💓 Heartbeat received from {peer} (skipping queue)`
+
+#### Type 2: Submissions Topic Heartbeat
+
+**Format:**
+```json
+{
+  "epoch_id": 0,
+  "submissions": [{
+    "request": {
+      "epoch_id": 0,
+      "project_id": "test:mesh-formation:local-collector",
+      "snapshot_cid": ""
+    }
+  }],
+  "snapshotter_id": "...",
+  "signature": "..."
+}
+```
+
+**DSV Processing:**
+- **Detection**: `EpochId == 0 && SnapshotCid == ""` (dequeuer.go line 229)
+- **Action**: Queued but skipped during validation (recognized as heartbeat)
+- **Error Handling**: Validation returns `"epoch 0 heartbeat: skipping"` error, caught and logged as debug (unified/main.go line 1023)
+- **Logging**: Debug level: `Skipped epoch 0 heartbeat (P2P mesh maintenance)`
+
+**Why Two Types?**
+- Discovery topic uses `null` submissions for minimal overhead
+- Submissions topic uses non-nil array with empty CID to help mesh formation while still being recognized as heartbeat
+
+Both heartbeat types help maintain mesh connectivity and prevent pruning, but are automatically skipped by the DSV node to avoid processing overhead.
 
 ### Network Testing
 
