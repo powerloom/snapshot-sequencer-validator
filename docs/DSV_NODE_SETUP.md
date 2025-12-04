@@ -258,8 +258,10 @@ FINALIZER_WORKERS=8
 FINALIZATION_BATCH_SIZE=50
 
 # P2P networking
-CONN_MANAGER_LOW_WATER=100
-CONN_MANAGER_HIGH_WATER=400
+# CRITICAL: DSV nodes serve thousands of snapshotter peers (local collectors)
+# These limits must be high enough to prevent pruning publishers
+CONN_MANAGER_LOW_WATER=2000   # Minimum connections (was 100 - too low for DSV)
+CONN_MANAGER_HIGH_WATER=5000  # Maximum before pruning (was 400 - way too low for DSV)
 
 # Storage
 STORAGE_PROVIDER=ipfs

@@ -179,8 +179,12 @@ func LoadConfig() error {
 		Rendezvous:    getEnv("RENDEZVOUS_POINT", "powerloom-snapshot-sequencer-network"),
 
 		// Connection Manager
-		ConnManagerLowWater:  getEnvAsInt("CONN_MANAGER_LOW_WATER", 100),
-		ConnManagerHighWater: getEnvAsInt("CONN_MANAGER_HIGH_WATER", 400),
+		// CRITICAL: DSV nodes serve thousands of snapshotter peers (local collectors)
+		// Default limits are too low - need much higher limits to prevent pruning publishers
+		// LowWater: minimum connections to maintain (should be high enough for all active publishers)
+		// HighWater: maximum before pruning starts (should accommodate peak load)
+		ConnManagerLowWater:  getEnvAsInt("CONN_MANAGER_LOW_WATER", 2000),  // Default: 2000 (was 100)
+		ConnManagerHighWater: getEnvAsInt("CONN_MANAGER_HIGH_WATER", 5000), // Default: 5000 (was 400)
 
 		// Gossipsub Configuration
 		GossipsubHeartbeat: time.Duration(getEnvAsInt("GOSSIPSUB_HEARTBEAT_MS", 700)) * time.Millisecond,

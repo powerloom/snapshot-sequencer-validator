@@ -199,6 +199,40 @@ func NewP2PHost(ctx context.Context, cfg *config.Settings) (*P2PHost, error) {
 		cancel:    cancel,
 	}
 
+	// Periodically tag only mesh peers to protect them from connection manager pruning
+	// This prevents DSV nodes from pruning legitimate publishers (local collectors) in the mesh
+	// Security: We only tag peers in the gossipsub mesh, not all connections (prevents DDoS)
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-hostCtx.Done():
+				return
+			case <-ticker.C:
+				if connMgr := h.ConnManager(); connMgr != nil {
+					meshPeers := make(map[peer.ID]bool)
+
+					// Collect mesh peers from both topics
+					for _, peerID := range ps.ListPeers(discoveryTopic) {
+						meshPeers[peerID] = true
+						connMgr.TagPeer(peerID, "mesh-peer", 50) // Medium priority
+					}
+					for _, peerID := range ps.ListPeers(submissionsTopic) {
+						if !meshPeers[peerID] {
+							meshPeers[peerID] = true
+							connMgr.TagPeer(peerID, "mesh-peer", 50) // Medium priority
+						}
+					}
+
+					if len(meshPeers) > 0 {
+						log.Debugf("Tagged %d mesh peers to protect from pruning", len(meshPeers))
+					}
+				}
+			}
+		}
+	}()
+
 	return p2pHost, nil
 }
 

@@ -383,6 +383,39 @@ func main() {
 
 		log.Infof("🔑 Gossipsub parameter hash: %s (unified sequencer)", paramHash)
 		log.Info("Initialized gossipsub with standardized snapshot submissions mesh parameters")
+
+		// Periodically tag only mesh peers to protect them from connection manager pruning
+		// This prevents DSV nodes from pruning legitimate publishers (local collectors) in the mesh
+		go func() {
+			ticker := time.NewTicker(10 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					if connMgr := h.ConnManager(); connMgr != nil && ps != nil {
+						meshPeers := make(map[peer.ID]bool)
+
+						// Collect mesh peers from both topics
+						for _, peerID := range ps.ListPeers(discoveryTopic) {
+							meshPeers[peerID] = true
+							connMgr.TagPeer(peerID, "mesh-peer", 50) // Medium priority
+						}
+						for _, peerID := range ps.ListPeers(submissionsTopic) {
+							if !meshPeers[peerID] {
+								meshPeers[peerID] = true
+								connMgr.TagPeer(peerID, "mesh-peer", 50) // Medium priority
+							}
+						}
+
+						if len(meshPeers) > 0 {
+							log.Debugf("Tagged %d mesh peers to protect from pruning", len(meshPeers))
+						}
+					}
+				}
+			}
+		}()
 	}
 
 	// Initialize IPFS client if finalizer is enabled
