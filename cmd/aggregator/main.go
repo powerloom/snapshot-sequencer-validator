@@ -563,6 +563,7 @@ func (a *Aggregator) startAggregationWindow(epochIDStr string) {
 			"level2_status": "aggregating",
 			"last_updated":  time.Now().Unix(),
 		})
+		a.redisClient.Expire(a.ctx, epochStateKey, 7*24*time.Hour)
 
 		// Perform aggregation after window expires
 		a.aggregateEpoch(epochIDStr)
@@ -584,6 +585,7 @@ func (a *Aggregator) startAggregationWindow(epochIDStr string) {
 		"phase":             "level2_aggregation",
 		"last_updated":      timestamp,
 	})
+	a.redisClient.Expire(a.ctx, epochStateKey, 7*24*time.Hour)
 
 	log.WithFields(logrus.Fields{
 		"epoch":  epochID,
@@ -668,6 +670,7 @@ func (a *Aggregator) aggregateWorkerParts(epochIDStr string, totalParts int) {
 		"phase":               "level2_aggregation",
 		"last_updated":        timestamp,
 	})
+	a.redisClient.Expire(a.ctx, epochStateKey, 7*24*time.Hour)
 
 	// Add monitoring metrics for Level 1 aggregation
 
@@ -972,6 +975,7 @@ func (a *Aggregator) aggregateEpoch(epochIDStr string) {
 		"phase":               "onchain_submission",
 		"last_updated":        timestamp,
 	})
+	a.redisClient.Expire(a.ctx, epochStateKey, 7*24*time.Hour)
 
 	// Pipeline for monitoring metrics
 	pipe := a.redisClient.Pipeline()
@@ -1809,6 +1813,8 @@ func (a *Aggregator) storeSubmissionMetrics(epochID uint64, dataMarketAddr strin
 		}
 	}
 	a.redisClient.HSet(a.ctx, epochStateKey, stateUpdates)
+	// Refresh TTL on epoch state (7 days - same as initial creation)
+	a.redisClient.Expire(a.ctx, epochStateKey, 7*24*time.Hour)
 
 	// Add to submission timeline (namespaced by protocol:market)
 	timelineKey := kb.VPASubmissionTimeline()
@@ -1838,6 +1844,7 @@ func (a *Aggregator) storeSubmissionMetrics(epochID uint64, dataMarketAddr strin
 			"priority":     priority,
 			"last_updated": timestamp,
 		})
+		a.redisClient.Expire(a.ctx, epochStateKey, 7*24*time.Hour)
 	}
 
 	// Update combined epoch status (priority + submission status)

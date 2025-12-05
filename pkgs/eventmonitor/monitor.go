@@ -1048,6 +1048,8 @@ func (wm *WindowManager) closeWindow(dataMarket string, epochID *big.Int) {
 		"phase":         "level1_finalization",
 		"last_updated":  timestamp,
 	})
+	// Refresh TTL on epoch state (7 days - same as initial creation)
+	pipe.Expire(context.Background(), epochStateKey, 7*24*time.Hour)
 
 	// 4. Publish state change
 	pipe.Publish(context.Background(), "state:change", fmt.Sprintf("epoch:closed:%s", epochID.String()))
@@ -1076,6 +1078,7 @@ func (wm *WindowManager) triggerFinalization(dataMarket string, epochID *big.Int
 			"level1_reason":     "no_submissions_found",
 			"last_updated":      timestamp,
 		})
+		wm.redisClient.Expire(ctx, epochStateKey, 7*24*time.Hour)
 		return // Don't proceed with empty batches
 	}
 
@@ -1099,6 +1102,7 @@ func (wm *WindowManager) triggerFinalization(dataMarket string, epochID *big.Int
 			"level1_reason":     "no_batches_created",
 			"last_updated":      timestamp,
 		})
+		wm.redisClient.Expire(ctx, epochStateKey, 7*24*time.Hour)
 		return
 	}
 
@@ -1127,6 +1131,7 @@ func (wm *WindowManager) triggerFinalization(dataMarket string, epochID *big.Int
 		"level1_started_at": timestamp,
 		"last_updated":      timestamp,
 	})
+	wm.redisClient.Expire(ctx, epochStateKey, 7*24*time.Hour)
 
 	// Push each batch to finalization queue
 	queueKey := kb.FinalizationQueue()

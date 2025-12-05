@@ -184,6 +184,8 @@ func (sw *StateWorker) aggregateCurrentMetrics(ctx context.Context) {
 				// Update submission count in epoch state hash
 				epochStateKey := sw.keyBuilder.EpochState(epochID)
 				sw.redis.HSet(ctx, epochStateKey, "submissions_count", count)
+				// Refresh TTL on epoch state (7 days - same as initial creation)
+				sw.redis.Expire(ctx, epochStateKey, 7*24*time.Hour)
 			}
 		}
 	}
