@@ -3,7 +3,7 @@ services:
     image: redis:8-alpine
     volumes:
       - redis-data:/data
-    command: redis-server --appendonly yes --maxmemory 2gb
+    command: redis-server --appendonly yes --maxmemory 4gb
     ports:
       # defaulting to expose on 6380 to avoid conflicts with existing redis which is the most common scenario
       - "127.0.0.1:${REDIS_EXTERNAL_PORT:-6380}:6379"
