@@ -246,6 +246,7 @@ func NewEventMonitor(cfg *Config) (*EventMonitor, error) {
 				cfg.RedisClient,
 				cfg.ProtocolState,
 				cfg.DataMarkets[0], // Use first data market as default
+				cfg.NewProtocolStateContract,
 			)
 			if err != nil {
 				cancel()

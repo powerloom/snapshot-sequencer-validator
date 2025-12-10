@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum"
@@ -64,22 +65,46 @@ type CachedPriorities struct {
 // PriorityCachingClient wraps VPA client with Redis caching
 type PriorityCachingClient struct {
 	*ValidatorPriorityAssigner
-	redisClient *redis.Client
-	keyBuilder  *rediskeys.KeyBuilder
-	cacheTTL    time.Duration
-	logger      *logrus.Entry
+	redisClient       *redis.Client
+	keyBuilder        *rediskeys.KeyBuilder
+	cacheTTL          time.Duration
+	logger            *logrus.Entry
+	cachedNodeId      *uint64 // Cached validator nodeId (doesn't change at runtime)
+	nodeIdMutex       sync.RWMutex
+	protocolStateAddr common.Address // ProtocolState contract address for getPriorities()
+	protocolStateABI  abi.ABI        // ProtocolState ABI for getPriorities()
 }
 
 // NewPriorityCachingClient creates a new VPA client with Redis caching
+// protocolState and dataMarket are used for Redis key building
+// newProtocolState is used for getPriorities() contract calls (if empty, falls back to protocolState)
 func NewPriorityCachingClient(rpcURL, contractAddr, validatorAddr string,
-	redisClient *redis.Client, protocolState, dataMarket string) (*PriorityCachingClient, error) {
+	redisClient *redis.Client, protocolState, dataMarket, newProtocolState string) (*PriorityCachingClient, error) {
 
 	vpaClient, err := NewValidatorPriorityAssigner(rpcURL, contractAddr, validatorAddr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create VPA client: %w", err)
 	}
 
+	// Use passed addresses for Redis keys
 	keyBuilder := rediskeys.NewKeyBuilder(protocolState, dataMarket)
+
+	// Load ProtocolState ABI for getPriorities() calls
+	protocolStateABI, err := abiloader.LoadABI("PowerloomProtocolState.abi.json")
+	if err != nil {
+		return nil, fmt.Errorf("failed to load ProtocolState ABI: %w", err)
+	}
+
+	// Use newProtocolState for contract calls if provided, otherwise fall back to protocolState
+	contractProtocolState := newProtocolState
+	if contractProtocolState == "" {
+		contractProtocolState = protocolState
+	}
+
+	protocolStateAddr := common.HexToAddress(contractProtocolState)
+	if protocolStateAddr == (common.Address{}) {
+		return nil, fmt.Errorf("invalid ProtocolState address: %s", contractProtocolState)
+	}
 
 	return &PriorityCachingClient{
 		ValidatorPriorityAssigner: vpaClient,
@@ -87,6 +112,8 @@ func NewPriorityCachingClient(rpcURL, contractAddr, validatorAddr string,
 		keyBuilder:                keyBuilder,
 		cacheTTL:                  24 * time.Hour, // Cache for 24 hours
 		logger:                    logrus.WithField("component", "vpa-caching-client"),
+		protocolStateAddr:         protocolStateAddr,
+		protocolStateABI:          protocolStateABI,
 	}, nil
 }
 
@@ -304,6 +331,141 @@ func (vpa *ValidatorPriorityAssigner) callValidatorStateGetNodeId(ctx context.Co
 	return nodeId.Uint64(), nil
 }
 
+// getCachedValidatorID gets the validator nodeId with caching (only queries once)
+// Returns 0-based validatorIndex (nodeId - 1) since getPriorities() uses 0-based indices
+func (pcc *PriorityCachingClient) getCachedValidatorID(ctx context.Context) (uint64, error) {
+	// Check cache first
+	pcc.nodeIdMutex.RLock()
+	if pcc.cachedNodeId != nil {
+		// Convert 1-based nodeId to 0-based validatorIndex
+		validatorIndex := *pcc.cachedNodeId - 1
+		pcc.nodeIdMutex.RUnlock()
+		return validatorIndex, nil
+	}
+	pcc.nodeIdMutex.RUnlock()
+
+	// Cache miss - query and cache
+	pcc.nodeIdMutex.Lock()
+	defer pcc.nodeIdMutex.Unlock()
+
+	// Double-check after acquiring write lock (another goroutine might have cached it)
+	if pcc.cachedNodeId != nil {
+		// Convert 1-based nodeId to 0-based validatorIndex
+		return *pcc.cachedNodeId - 1, nil
+	}
+
+	// Query validator ID from contract (returns 1-based nodeId)
+	nodeId, err := pcc.ValidatorPriorityAssigner.getValidatorID(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	// Cache the 1-based nodeId
+	pcc.cachedNodeId = &nodeId
+	pcc.logger.WithFields(logrus.Fields{
+		"nodeId":         nodeId,
+		"validatorIndex": nodeId - 1, // Show 0-based index in logs
+		"validatorAddr":  pcc.validator.Hex(),
+	}).Info("Cached validator nodeId (stable for runtime)")
+
+	// Return 0-based validatorIndex
+	return nodeId - 1, nil
+}
+
+// getPriorityFromProtocolState calls ProtocolState.getPriorities() and looks up priority by validatorIndex
+// validatorIndex is already 0-based (converted in getCachedValidatorID)
+// NOTE: pcc.protocolStateAddr is the NEW ProtocolState contract (VPA only exists there)
+//
+//	dataMarketAddr must be the NEW DataMarket address (matching the new protocol state)
+func (pcc *PriorityCachingClient) getPriorityFromProtocolState(ctx context.Context, dataMarketAddr string, epochID uint64, validatorIndex uint64) (int, error) {
+	// Call ProtocolState.getPriorities(dataMarket, epochId) on NEW ProtocolState contract
+	// dataMarketAddr must be the NEW DataMarket address
+	data, err := pcc.protocolStateABI.Pack("getPriorities",
+		common.HexToAddress(dataMarketAddr),
+		big.NewInt(int64(epochID)))
+	if err != nil {
+		return 0, fmt.Errorf("failed to pack getPriorities call: %w", err)
+	}
+
+	msg := ethereum.CallMsg{
+		To:   &pcc.protocolStateAddr,
+		From: pcc.validator,
+		Data: data,
+	}
+	result, err := pcc.client.CallContract(ctx, msg, nil)
+	if err != nil {
+		pcc.logger.WithError(err).WithFields(logrus.Fields{
+			"epochID":           epochID,
+			"validatorIndex":    validatorIndex,
+			"dataMarketAddr":    dataMarketAddr,
+			"protocolStateAddr": pcc.protocolStateAddr.Hex(),
+		}).Error("ProtocolState.getPriorities() call reverted - check contract addresses and parameters")
+		return 0, fmt.Errorf("failed to call ProtocolState.getPriorities: %w", err)
+	}
+
+	// Unpack the result - array of ValidatorIndexPriority structs
+	var priorities []struct {
+		ValidatorIndex *big.Int `json:"validatorIndex"`
+		Priority       *big.Int `json:"priority"`
+	}
+	err = pcc.protocolStateABI.UnpackIntoInterface(&priorities, "getPriorities", result)
+	if err != nil {
+		return 0, fmt.Errorf("failed to unpack getPriorities result: %w", err)
+	}
+
+	// Log what we got from the contract
+	pcc.logger.WithFields(logrus.Fields{
+		"epochID":           epochID,
+		"validatorIndex":    validatorIndex,
+		"dataMarketAddr":    dataMarketAddr,
+		"protocolStateAddr": pcc.protocolStateAddr.Hex(),
+		"prioritiesCount":   len(priorities),
+	}).Debug("getPriorities() returned priorities array")
+
+	// Log all priorities for debugging
+	if len(priorities) > 0 {
+		priorityList := make([]map[string]interface{}, 0, len(priorities))
+		for _, p := range priorities {
+			if p.ValidatorIndex != nil && p.Priority != nil {
+				priorityList = append(priorityList, map[string]interface{}{
+					"validatorIndex": p.ValidatorIndex.Int64(),
+					"priority":       p.Priority.Int64(),
+				})
+			}
+		}
+		pcc.logger.WithFields(logrus.Fields{
+			"epochID":    epochID,
+			"priorities": priorityList,
+		}).Debug("All priorities returned from contract")
+	}
+
+	// Look up our validatorIndex (0-based) in the priorities array
+	validatorIndexBig := big.NewInt(int64(validatorIndex))
+	for _, p := range priorities {
+		if p.ValidatorIndex != nil && p.ValidatorIndex.Cmp(validatorIndexBig) == 0 {
+			if p.Priority != nil {
+				priority := int(p.Priority.Int64())
+				pcc.logger.WithFields(logrus.Fields{
+					"epochID":        epochID,
+					"validatorIndex": validatorIndex,
+					"priority":       priority,
+					"dataMarketAddr": dataMarketAddr,
+				}).Info("Found priority for validator")
+				return priority, nil
+			}
+		}
+	}
+
+	// ValidatorIndex not found in priorities array = no priority assigned
+	pcc.logger.WithFields(logrus.Fields{
+		"epochID":         epochID,
+		"validatorIndex":  validatorIndex,
+		"dataMarketAddr":  dataMarketAddr,
+		"prioritiesCount": len(priorities),
+	}).Warn("ValidatorIndex not found in priorities array - returning priority 0")
+	return 0, nil
+}
+
 // GetPriorityInfo gets comprehensive priority information for the validator
 func (vpa *ValidatorPriorityAssigner) GetPriorityInfo(ctx context.Context, dataMarketAddr string, epochID uint64) (*PriorityInfo, error) {
 	canSubmit, err := vpa.CanValidatorSubmit(ctx, dataMarketAddr, epochID)
@@ -455,8 +617,8 @@ func (pcc *PriorityCachingClient) CacheEpochPriorities(ctx context.Context, data
 // GetMyPriority gets this validator's priority with caching (cache-first)
 // This wraps the base GetMyPriority() method with Redis caching
 func (pcc *PriorityCachingClient) GetMyPriority(ctx context.Context, dataMarketAddr string, epochID uint64) (int, error) {
-	// Get validator ID (same logic as base client)
-	validatorID, err := pcc.getValidatorID(ctx)
+	// Get validator ID (cached, doesn't change at runtime)
+	validatorID, err := pcc.getCachedValidatorID(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get validator ID: %w", err)
 	}
@@ -465,21 +627,32 @@ func (pcc *PriorityCachingClient) GetMyPriority(ctx context.Context, dataMarketA
 
 	// Try cache first
 	if priority, err := pcc.getValidatorPriorityFromCache(ctx, epochID, validatorIDStr); err == nil {
-		pcc.logger.WithFields(logrus.Fields{
-			"epochID":     epochID,
-			"validatorID": validatorIDStr,
-			"priority":    priority,
-		}).Debug("VPA priority retrieved from cache")
-		return priority, nil
+		// Priority 0 is ambiguous - could mean "not assigned yet" or "no priority"
+		// Since priorities are assigned synchronously on epoch release, priority 0 likely means
+		// the validator doesn't have priority OR there's a validator ID mapping mismatch.
+		// Force contract re-query to ensure we have fresh data and correct mapping.
+		if priority == 0 {
+			pcc.logger.WithFields(logrus.Fields{
+				"epochID":     epochID,
+				"validatorID": validatorIDStr,
+			}).Debug("Cached priority is 0, re-querying contract to verify (could be stale or mapping issue)")
+		} else {
+			pcc.logger.WithFields(logrus.Fields{
+				"epochID":     epochID,
+				"validatorID": validatorIDStr,
+				"priority":    priority,
+			}).Debug("VPA priority retrieved from cache")
+			return priority, nil
+		}
 	}
 
-	// Cache miss - fallback to base contract call
+	// Cache miss - call ProtocolState.getPriorities() to get all priorities for this epoch
 	pcc.logger.WithFields(logrus.Fields{
 		"epochID":     epochID,
 		"validatorID": validatorIDStr,
-	}).Debug("Cache miss, calling VPA contract")
+	}).Debug("Cache miss, calling ProtocolState.getPriorities()")
 
-	priority, err := pcc.ValidatorPriorityAssigner.GetMyPriority(ctx, dataMarketAddr, epochID)
+	priority, err := pcc.getPriorityFromProtocolState(ctx, dataMarketAddr, epochID, validatorID)
 	if err != nil {
 		return 0, err
 	}
@@ -490,11 +663,17 @@ func (pcc *PriorityCachingClient) GetMyPriority(ctx context.Context, dataMarketA
 	if cacheErr := pcc.redisClient.Set(ctx, validatorKey, priority, pcc.cacheTTL).Err(); cacheErr != nil {
 		pcc.logger.WithError(cacheErr).Warn("Failed to cache validator priority")
 	} else {
+		logLevel := logrus.DebugLevel
+		if priority == 0 {
+			// Log priority 0 at info level since it's unusual and might indicate an issue
+			logLevel = logrus.InfoLevel
+		}
 		pcc.logger.WithFields(logrus.Fields{
 			"epochID":     epochID,
 			"validatorID": validatorIDStr,
 			"priority":    priority,
-		}).Debug("Cached VPA priority")
+			"cacheKey":    validatorKey,
+		}).Log(logLevel, "Cached VPA priority")
 	}
 
 	return priority, nil
