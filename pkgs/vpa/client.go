@@ -374,7 +374,6 @@ func (pcc *PriorityCachingClient) getCachedValidatorID(ctx context.Context) (uin
 
 // getPriorityFromProtocolState calls ProtocolState.getPriorities() and looks up priority by validatorIndex
 // validatorIndex is already 0-based (converted in getCachedValidatorID)
-// If priorities aren't assigned yet, the call succeeds but returns empty array (priority 0).
 // NOTE: pcc.protocolStateAddr is the NEW ProtocolState contract (VPA only exists there)
 //
 //	dataMarketAddr must be the NEW DataMarket address (matching the new protocol state)
@@ -395,8 +394,6 @@ func (pcc *PriorityCachingClient) getPriorityFromProtocolState(ctx context.Conte
 	}
 	result, err := pcc.client.CallContract(ctx, msg, nil)
 	if err != nil {
-		// "execution reverted" typically means wrong contract/parameters, not timing issue
-		// Log with more context to help debug
 		pcc.logger.WithError(err).WithFields(logrus.Fields{
 			"epochID":           epochID,
 			"validatorIndex":    validatorIndex,
@@ -416,17 +413,56 @@ func (pcc *PriorityCachingClient) getPriorityFromProtocolState(ctx context.Conte
 		return 0, fmt.Errorf("failed to unpack getPriorities result: %w", err)
 	}
 
+	// Log what we got from the contract
+	pcc.logger.WithFields(logrus.Fields{
+		"epochID":           epochID,
+		"validatorIndex":    validatorIndex,
+		"dataMarketAddr":    dataMarketAddr,
+		"protocolStateAddr": pcc.protocolStateAddr.Hex(),
+		"prioritiesCount":   len(priorities),
+	}).Debug("getPriorities() returned priorities array")
+
+	// Log all priorities for debugging
+	if len(priorities) > 0 {
+		priorityList := make([]map[string]interface{}, 0, len(priorities))
+		for _, p := range priorities {
+			if p.ValidatorIndex != nil && p.Priority != nil {
+				priorityList = append(priorityList, map[string]interface{}{
+					"validatorIndex": p.ValidatorIndex.Int64(),
+					"priority":       p.Priority.Int64(),
+				})
+			}
+		}
+		pcc.logger.WithFields(logrus.Fields{
+			"epochID":    epochID,
+			"priorities": priorityList,
+		}).Debug("All priorities returned from contract")
+	}
+
 	// Look up our validatorIndex (0-based) in the priorities array
 	validatorIndexBig := big.NewInt(int64(validatorIndex))
 	for _, p := range priorities {
 		if p.ValidatorIndex != nil && p.ValidatorIndex.Cmp(validatorIndexBig) == 0 {
 			if p.Priority != nil {
-				return int(p.Priority.Int64()), nil
+				priority := int(p.Priority.Int64())
+				pcc.logger.WithFields(logrus.Fields{
+					"epochID":        epochID,
+					"validatorIndex": validatorIndex,
+					"priority":       priority,
+					"dataMarketAddr": dataMarketAddr,
+				}).Info("Found priority for validator")
+				return priority, nil
 			}
 		}
 	}
 
 	// ValidatorIndex not found in priorities array = no priority assigned
+	pcc.logger.WithFields(logrus.Fields{
+		"epochID":         epochID,
+		"validatorIndex":  validatorIndex,
+		"dataMarketAddr":  dataMarketAddr,
+		"prioritiesCount": len(priorities),
+	}).Warn("ValidatorIndex not found in priorities array - returning priority 0")
 	return 0, nil
 }
 
