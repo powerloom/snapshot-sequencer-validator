@@ -76,14 +76,17 @@ type PriorityCachingClient struct {
 }
 
 // NewPriorityCachingClient creates a new VPA client with Redis caching
+// protocolState and dataMarket are used for Redis key building
+// newProtocolState is used for getPriorities() contract calls (if empty, falls back to protocolState)
 func NewPriorityCachingClient(rpcURL, contractAddr, validatorAddr string,
-	redisClient *redis.Client, protocolState, dataMarket string) (*PriorityCachingClient, error) {
+	redisClient *redis.Client, protocolState, dataMarket, newProtocolState string) (*PriorityCachingClient, error) {
 
 	vpaClient, err := NewValidatorPriorityAssigner(rpcURL, contractAddr, validatorAddr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create VPA client: %w", err)
 	}
 
+	// Use passed addresses for Redis keys
 	keyBuilder := rediskeys.NewKeyBuilder(protocolState, dataMarket)
 
 	// Load ProtocolState ABI for getPriorities() calls
@@ -92,9 +95,15 @@ func NewPriorityCachingClient(rpcURL, contractAddr, validatorAddr string,
 		return nil, fmt.Errorf("failed to load ProtocolState ABI: %w", err)
 	}
 
-	protocolStateAddr := common.HexToAddress(protocolState)
+	// Use newProtocolState for contract calls if provided, otherwise fall back to protocolState
+	contractProtocolState := newProtocolState
+	if contractProtocolState == "" {
+		contractProtocolState = protocolState
+	}
+
+	protocolStateAddr := common.HexToAddress(contractProtocolState)
 	if protocolStateAddr == (common.Address{}) {
-		return nil, fmt.Errorf("invalid ProtocolState address: %s", protocolState)
+		return nil, fmt.Errorf("invalid ProtocolState address: %s", contractProtocolState)
 	}
 
 	return &PriorityCachingClient{
@@ -365,8 +374,13 @@ func (pcc *PriorityCachingClient) getCachedValidatorID(ctx context.Context) (uin
 
 // getPriorityFromProtocolState calls ProtocolState.getPriorities() and looks up priority by validatorIndex
 // validatorIndex is already 0-based (converted in getCachedValidatorID)
+// If priorities aren't assigned yet, the call succeeds but returns empty array (priority 0).
+// NOTE: pcc.protocolStateAddr is the NEW ProtocolState contract (VPA only exists there)
+//
+//	dataMarketAddr must be the NEW DataMarket address (matching the new protocol state)
 func (pcc *PriorityCachingClient) getPriorityFromProtocolState(ctx context.Context, dataMarketAddr string, epochID uint64, validatorIndex uint64) (int, error) {
-	// Call ProtocolState.getPriorities(dataMarket, epochId)
+	// Call ProtocolState.getPriorities(dataMarket, epochId) on NEW ProtocolState contract
+	// dataMarketAddr must be the NEW DataMarket address
 	data, err := pcc.protocolStateABI.Pack("getPriorities",
 		common.HexToAddress(dataMarketAddr),
 		big.NewInt(int64(epochID)))
@@ -381,6 +395,14 @@ func (pcc *PriorityCachingClient) getPriorityFromProtocolState(ctx context.Conte
 	}
 	result, err := pcc.client.CallContract(ctx, msg, nil)
 	if err != nil {
+		// "execution reverted" typically means wrong contract/parameters, not timing issue
+		// Log with more context to help debug
+		pcc.logger.WithError(err).WithFields(logrus.Fields{
+			"epochID":           epochID,
+			"validatorIndex":    validatorIndex,
+			"dataMarketAddr":    dataMarketAddr,
+			"protocolStateAddr": pcc.protocolStateAddr.Hex(),
+		}).Error("ProtocolState.getPriorities() call reverted - check contract addresses and parameters")
 		return 0, fmt.Errorf("failed to call ProtocolState.getPriorities: %w", err)
 	}
 

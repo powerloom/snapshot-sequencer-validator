@@ -130,7 +130,7 @@ func NewAggregator(cfg *config.Settings) (*Aggregator, error) {
 			rpcURL := cfg.RPCNodes[0]
 			vpaClient, err = vpa.NewPriorityCachingClient(
 				rpcURL, vpaContractAddr.Hex(), cfg.VPAValidatorAddress,
-				redisClient, protocolState, dataMarket)
+				redisClient, protocolState, dataMarket, cfg.NewProtocolStateContract)
 			if err != nil {
 				cancel()
 				return nil, fmt.Errorf("failed to initialize VPA caching client: %w", err)
