@@ -279,10 +279,12 @@ class DSVComparison:
         Compare on-chain commitments between legacy and new contracts.
         
         Compares:
-        1. Batch CIDs for the epoch
-        2. Projects in each batch
-        3. Merkle roots (finalizedCidsRootHash) for each batch
-        4. Individual project snapshot CIDs
+        1. Project IDs (all projects should be present in both)
+        2. Individual project snapshot CIDs (should match for each project)
+        
+        Note: Batch CIDs are NOT compared as they may differ due to:
+        - CIDv0 vs CIDv1 format differences
+        - Different payload structures between legacy and new contracts
         
         Returns: (match, differences)
         """
@@ -310,57 +312,47 @@ class DSVComparison:
         if not new_commitment or not legacy_commitment:
             return False, differences
 
-        # 1. Compare batch CIDs
-        new_batch_cids = set(new_commitment.get("batch_cids", []))
-        legacy_batch_cids = set(legacy_commitment.get("batch_cids", []))
+        # Extract all project IDs from both contracts
+        # Get all unique project IDs from all batches
+        new_project_ids = set()
+        legacy_project_ids = set()
         
-        if new_batch_cids != legacy_batch_cids:
-            missing_in_new = legacy_batch_cids - new_batch_cids
-            missing_in_legacy = new_batch_cids - legacy_batch_cids
-            if missing_in_new:
-                differences.append(f"Batch CIDs in legacy but not in new: {missing_in_new}")
-            if missing_in_legacy:
-                differences.append(f"Batch CIDs in new but not in legacy: {missing_in_legacy}")
-
-        # 2. Compare batches (projects submitted in each batch)
         new_batches = new_commitment.get("batches", {})
         legacy_batches = legacy_commitment.get("batches", {})
         
-        # Compare batches that exist in both
-        common_batch_cids = new_batch_cids & legacy_batch_cids
-        for batch_cid in common_batch_cids:
-            new_batch = new_batches.get(batch_cid, {})
-            legacy_batch = legacy_batches.get(batch_cid, {})
-            
-            # Compare projects in batch (from submitSubmissionBatch call)
-            new_projects = set(new_batch.get("project_ids", []))
-            legacy_projects = set(legacy_batch.get("project_ids", []))
-            
-            if new_projects != legacy_projects:
-                missing_in_new = legacy_projects - new_projects
-                missing_in_legacy = new_projects - legacy_projects
-                if missing_in_new:
-                    differences.append(
-                        f"Batch {batch_cid}: Projects in legacy but not in new: {missing_in_new}"
-                    )
-                if missing_in_legacy:
-                    differences.append(
-                        f"Batch {batch_cid}: Projects in new but not in legacy: {missing_in_legacy}"
-                    )
+        for batch_data in new_batches.values():
+            new_project_ids.update(batch_data.get("project_ids", []))
+        
+        for batch_data in legacy_batches.values():
+            legacy_project_ids.update(batch_data.get("project_ids", []))
 
-        # 3. Compare individual project snapshot CIDs
+        # 1. Compare project IDs (all projects should be present in both)
+        if new_project_ids != legacy_project_ids:
+            missing_in_new = legacy_project_ids - new_project_ids
+            missing_in_legacy = new_project_ids - legacy_project_ids
+            if missing_in_new:
+                differences.append(f"Projects in legacy but not in new: {missing_in_new}")
+            if missing_in_legacy:
+                differences.append(f"Projects in new but not in legacy: {missing_in_legacy}")
+
+        # 2. Compare individual project snapshot CIDs (should match for each project)
         new_project_cids = new_commitment.get("project_cids", {})
         legacy_project_cids = legacy_commitment.get("project_cids", {})
         
-        all_projects = set(new_project_cids.keys()) | set(legacy_project_cids.keys())
+        # Compare CIDs for projects that exist in both
+        common_projects = new_project_ids & legacy_project_ids
         
-        for project_id in all_projects:
+        for project_id in common_projects:
             new_cid = new_project_cids.get(project_id)
             legacy_cid = legacy_project_cids.get(project_id)
             
-            if new_cid != legacy_cid:
+            if not new_cid:
+                differences.append(f"Project {project_id}: Missing CID in new contract")
+            elif not legacy_cid:
+                differences.append(f"Project {project_id}: Missing CID in legacy contract")
+            elif new_cid != legacy_cid:
                 differences.append(
-                    f"Project {project_id}: CID mismatch - "
+                    f"Project {project_id}: Snapshot CID mismatch - "
                     f"New={new_cid}, Legacy={legacy_cid}"
                 )
 
@@ -388,137 +380,185 @@ class DSVComparison:
         # Return empty list as we'll use ProtocolState to access DataMarket
         return []
 
-    def run_comparison(self, epoch_id: str) -> Dict:
-        """Run complete comparison for an epoch."""
-        print(f"\n{'='*80}")
-        print(f"Comparing DSV vs Centralized Sequencer for Epoch {epoch_id}")
-        print(f"{'='*80}\n")
-
-        results = {
-            "epoch_id": epoch_id,
-            "submission_verification": {},
-            "onchain_verification": {},
-        }
-
-        # 1. Get Level 2 aggregated batch (this contains all submissions including full node)
-        print("📦 Extracting Level 2 aggregated batch from Redis...")
-        level2_batch = self.get_level2_aggregated_batch(epoch_id)
+    def run_comparison(self, epoch_id: str, num_epochs: int = 1) -> Dict:
+        """
+        Run complete comparison for one or more epochs.
         
-        if not level2_batch:
-            print("   ⚠️  Level 2 batch not found - cannot verify submissions")
-            results["submission_verification"] = {
-                "all_present": False,
-                "missing_submissions": ["Level 2 batch not found"],
-                "error": "Level 2 batch not found in Redis",
-            }
-        else:
-            project_count = len(level2_batch.get("ProjectIds") or level2_batch.get("project_ids", []))
-            print(f"   Level 2 batch found with {project_count} projects")
-            print(f"   IPFS CID: {level2_batch.get('BatchIPFSCID') or level2_batch.get('batch_ipfs_cid', 'N/A')}")
-            print(f"   Merkle Root: {level2_batch.get('MerkleRoot') or level2_batch.get('merkle_root', 'N/A')}")
+        Args:
+            epoch_id: Starting epoch ID (will check epochs from epoch_id down to epoch_id - num_epochs + 1)
+            num_epochs: Number of epochs to check (default: 1)
+        
+        Returns: Dict with results for each epoch
+        """
+        start_epoch = int(epoch_id)
+        all_results = {}
+        
+        if num_epochs > 1:
+            print(f"\n{'='*80}")
+            print(f"Comparing DSV vs Centralized Sequencer for {num_epochs} epochs")
+            print(f"Starting from epoch {start_epoch} down to {start_epoch - num_epochs + 1}")
+            print(f"{'='*80}\n")
+        
+        for i in range(num_epochs):
+            current_epoch = start_epoch - i
+            if current_epoch < 0:
+                break
             
-            # 2. Extract full node submissions from Level 2 batch
-            print("\n🔍 Extracting full node submissions from Level 2 batch...")
-            full_node_submissions = self.extract_full_node_submissions_from_level2(level2_batch)
-            print(f"   Found {len(full_node_submissions)} projects with submissions")
-            
-            total_full_node_cids = sum(len(cids) for cids in full_node_submissions.values())
-            print(f"   Total submission CIDs: {total_full_node_cids}")
-            
-            for project_id, cids in list(full_node_submissions.items())[:5]:
-                print(f"   - {project_id}: {len(cids)} CIDs")
-            if len(full_node_submissions) > 5:
-                print(f"   ... and {len(full_node_submissions) - 5} more projects")
+            epoch_str = str(current_epoch)
+            print(f"\n{'='*80}")
+            print(f"Epoch {current_epoch} ({i+1}/{num_epochs})")
+            print(f"{'='*80}\n")
 
-        # 3. Verify submissions are in Level 2 batch
-        if level2_batch:
-            print("\n🔬 Verifying submissions are present in Level 2 batch...")
-            all_present, missing = self.compare_submissions_in_level2(
-                full_node_submissions,
-                level2_batch,
-            )
-            
-            results["submission_verification"] = {
-                "all_present": all_present,
-                "missing_submissions": missing,
-                "full_node_projects": len(full_node_submissions),
-                "full_node_total_cids": total_full_node_cids,
+            results = {
+                "epoch_id": epoch_str,
+                "submission_verification": {},
+                "onchain_verification": {},
             }
+
+            # 1. Get Level 2 aggregated batch (this contains all submissions including full node)
+            print("📦 Extracting Level 2 aggregated batch from Redis...")
+            level2_batch = self.get_level2_aggregated_batch(epoch_str)
             
-            if all_present:
-                print("   ✅ All submissions present in Level 2 batch")
+            if not level2_batch:
+                print("   ⚠️  Level 2 batch not found - cannot verify submissions")
+                results["submission_verification"] = {
+                    "all_present": False,
+                    "missing_submissions": ["Level 2 batch not found"],
+                    "error": "Level 2 batch not found in Redis",
+                }
             else:
-                print(f"   ❌ {len(missing)} missing submissions:")
-                for msg in missing[:10]:  # Show first 10
-                    print(f"      - {msg}")
-                if len(missing) > 10:
-                    print(f"      ... and {len(missing) - 10} more")
+                project_count = len(level2_batch.get("ProjectIds") or level2_batch.get("project_ids", []))
+                print(f"   Level 2 batch found with {project_count} projects")
+                print(f"   IPFS CID: {level2_batch.get('BatchIPFSCID') or level2_batch.get('batch_ipfs_cid', 'N/A')}")
+                print(f"   Merkle Root: {level2_batch.get('MerkleRoot') or level2_batch.get('merkle_root', 'N/A')}")
+                
+                # 2. Extract full node submissions from Level 2 batch
+                print("\n🔍 Extracting full node submissions from Level 2 batch...")
+                full_node_submissions = self.extract_full_node_submissions_from_level2(level2_batch)
+                print(f"   Found {len(full_node_submissions)} projects with submissions")
+                
+                total_full_node_cids = sum(len(cids) for cids in full_node_submissions.values())
+                print(f"   Total submission CIDs: {total_full_node_cids}")
+                
+                for project_id, cids in list(full_node_submissions.items())[:5]:
+                    print(f"   - {project_id}: {len(cids)} CIDs")
+                if len(full_node_submissions) > 5:
+                    print(f"   ... and {len(full_node_submissions) - 5} more projects")
 
-        # 5. Compare on-chain commitments
-        print("\n⛓️  Comparing on-chain commitments...")
-        try:
-            epoch_id_int = int(epoch_id)
+            # 3. Verify submissions are in Level 2 batch
+            if level2_batch:
+                print("\n🔬 Verifying submissions are present in Level 2 batch...")
+                all_present, missing = self.compare_submissions_in_level2(
+                    full_node_submissions,
+                    level2_batch,
+                )
+                
+                results["submission_verification"] = {
+                    "all_present": all_present,
+                    "missing_submissions": missing,
+                    "full_node_projects": len(full_node_submissions),
+                    "full_node_total_cids": total_full_node_cids,
+                }
+                
+                if all_present:
+                    print("   ✅ All submissions present in Level 2 batch")
+                else:
+                    print(f"   ❌ {len(missing)} missing submissions:")
+                    for msg in missing[:10]:  # Show first 10
+                        print(f"      - {msg}")
+                    if len(missing) > 10:
+                        print(f"      ... and {len(missing) - 10} more")
+
+            # 5. Compare on-chain commitments
+            print("\n⛓️  Comparing on-chain commitments...")
+            try:
+                epoch_id_int = current_epoch
+                
+                # Query commitments
+                print("   Querying new contract...")
+                new_commitment = self.query_onchain_commitment(
+                    self.protocol_state,
+                    self.data_market,
+                    epoch_id_int,
+                )
+                
+                print("   Querying legacy contract...")
+                legacy_commitment = self.query_onchain_commitment(
+                    self.legacy_protocol_state,
+                    self.legacy_data_market,
+                    epoch_id_int,
+                )
+                
+                if new_commitment:
+                    print(f"   New contract: {len(new_commitment.get('batch_cids', []))} batch(es), "
+                          f"{len(new_commitment.get('project_cids', {}))} projects")
+                if legacy_commitment:
+                    print(f"   Legacy contract: {len(legacy_commitment.get('batch_cids', []))} batch(es), "
+                          f"{len(legacy_commitment.get('project_cids', {}))} projects")
+                
+                commitments_match, differences = self.compare_onchain_commitments(
+                    epoch_id_int,
+                    level2_batch,
+                )
+                
+                results["onchain_verification"] = {
+                    "commitments_match": commitments_match,
+                    "differences": differences,
+                    "new_commitment": new_commitment,
+                    "legacy_commitment": legacy_commitment,
+                }
+                
+                if commitments_match:
+                    print("   ✅ On-chain commitments match between legacy and new contracts")
+                else:
+                    print(f"   ❌ {len(differences)} differences found:")
+                    for diff in differences[:20]:  # Show first 20
+                        print(f"      - {diff}")
+                    if len(differences) > 20:
+                        print(f"      ... and {len(differences) - 20} more differences")
+            except Exception as e:
+                print(f"   ⚠️  Failed to compare on-chain commitments: {e}")
+                import traceback
+                traceback.print_exc()
+                results["onchain_verification"] = {
+                    "error": str(e),
+                }
+
+            # Summary for this epoch
+            all_present = results.get("submission_verification", {}).get("all_present", False)
+            commitments_match = results.get("onchain_verification", {}).get("commitments_match", False)
             
-            # Query commitments
-            print("   Querying new contract...")
-            new_commitment = self.query_onchain_commitment(
-                self.protocol_state,
-                self.data_market,
-                epoch_id_int,
-            )
+            print(f"\n{'='*80}")
+            print(f"SUMMARY - Epoch {current_epoch}")
+            print(f"{'='*80}")
+            print(f"Submission Verification: {'✅ PASS' if all_present else '❌ FAIL'}")
+            print(f"On-Chain Verification: {'✅ PASS' if commitments_match else '❌ FAIL'}")
+            print(f"{'='*80}\n")
             
-            print("   Querying legacy contract...")
-            legacy_commitment = self.query_onchain_commitment(
-                self.legacy_protocol_state,
-                self.legacy_data_market,
-                epoch_id_int,
-            )
+            all_results[epoch_str] = results
+        
+        # Overall summary if multiple epochs
+        if num_epochs > 1:
+            print(f"\n{'='*80}")
+            print("OVERALL SUMMARY")
+            print(f"{'='*80}")
+            total_epochs = len(all_results)
+            passed_submission = sum(1 for r in all_results.values() if r.get("submission_verification", {}).get("all_present", False))
+            passed_onchain = sum(1 for r in all_results.values() if r.get("onchain_verification", {}).get("commitments_match", False))
             
-            if new_commitment:
-                print(f"   New contract: {len(new_commitment.get('batch_cids', []))} batch(es), "
-                      f"{len(new_commitment.get('project_cids', {}))} projects")
-            if legacy_commitment:
-                print(f"   Legacy contract: {len(legacy_commitment.get('batch_cids', []))} batch(es), "
-                      f"{len(legacy_commitment.get('project_cids', {}))} projects")
+            print(f"Total Epochs Checked: {total_epochs}")
+            print(f"Submission Verification: {passed_submission}/{total_epochs} passed")
+            print(f"On-Chain Verification: {passed_onchain}/{total_epochs} passed")
+            print(f"{'='*80}\n")
             
-            commitments_match, differences = self.compare_onchain_commitments(
-                epoch_id_int,
-                level2_batch,
-            )
-            
-            results["onchain_verification"] = {
-                "commitments_match": commitments_match,
-                "differences": differences,
-                "new_commitment": new_commitment,
-                "legacy_commitment": legacy_commitment,
+            return {
+                "epochs_checked": total_epochs,
+                "submission_pass_count": passed_submission,
+                "onchain_pass_count": passed_onchain,
+                "results": all_results
             }
-            
-            if commitments_match:
-                print("   ✅ On-chain commitments match between legacy and new contracts")
-            else:
-                print(f"   ❌ {len(differences)} differences found:")
-                for diff in differences[:20]:  # Show first 20
-                    print(f"      - {diff}")
-                if len(differences) > 20:
-                    print(f"      ... and {len(differences) - 20} more differences")
-        except Exception as e:
-            print(f"   ⚠️  Failed to compare on-chain commitments: {e}")
-            import traceback
-            traceback.print_exc()
-            results["onchain_verification"] = {
-                "error": str(e),
-            }
-
-        # Summary
-        print(f"\n{'='*80}")
-        print("SUMMARY")
-        print(f"{'='*80}")
-        print(f"Epoch ID: {epoch_id}")
-        print(f"Submission Verification: {'✅ PASS' if all_present else '❌ FAIL'}")
-        print(f"On-Chain Verification: {'✅ PASS' if results['onchain_verification'].get('commitments_match', False) else '❌ FAIL'}")
-        print(f"{'='*80}\n")
-
-        return results
+        
+        return all_results.get(epoch_id, {})
 
 
     def query_recent_batch_submissions(
@@ -585,6 +625,7 @@ def main():
     parser.add_argument("--legacy-market", required=True, help="Legacy data market contract address")
     parser.add_argument("--rpc-url", required=True, help="Ethereum RPC URL")
     parser.add_argument("--check-recent", action="store_true", help="Check recent batch submissions before comparison")
+    parser.add_argument("--num-epochs", type=int, default=1, help="Number of epochs to check (starting from --epoch-id and going backwards)")
 
     args = parser.parse_args()
 
@@ -633,7 +674,7 @@ def main():
         
         print()
 
-    results = comparator.run_comparison(args.epoch_id)
+    results = comparator.run_comparison(args.epoch_id, num_epochs=args.num_epochs)
     
     # Output JSON results
     print("\n📄 JSON Results:")
