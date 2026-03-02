@@ -1,16 +1,27 @@
+# syntax=docker/dockerfile:1.4
+# Build stage
 FROM golang:1.25-alpine AS builder
-
-WORKDIR /app
 
 RUN apk add --no-cache git
 
-COPY go.mod go.sum ./
-RUN go mod download
+WORKDIR /app
 
+# Copy go mod files
+COPY go.mod go.sum ./
+
+# Download dependencies with cache mount
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
+
+# Copy source code
 COPY . .
 
-RUN go build -o /monitor-api ./cmd/monitor-api
+# Build the Monitor API binary with cache mounts
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux go build -o /monitor-api ./cmd/monitor-api
 
+# Runtime stage
 FROM alpine:latest
 
 RUN apk --no-cache add ca-certificates
