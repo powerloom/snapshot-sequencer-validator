@@ -265,6 +265,10 @@ start_services() {
     if [ "$enable_vpa" = true ]; then
         profile_args+=(--profile vpa)
     fi
+    # Spam aggregator only when ENABLE_SPAM_PROTECTION=true (avoids crash loop when false)
+    if [ "${ENABLE_SPAM_PROTECTION:-true}" = "true" ]; then
+        profile_args+=(--profile spam-protection)
+    fi
 
     # Check for code changes if not forcing rebuild
     if [ "$force_rebuild" = false ]; then
@@ -321,7 +325,9 @@ start_services() {
         print_color "$CYAN" "Components:"
         echo "  • P2P Gateway (port ${P2P_PORT:-9001})"
         echo "  • Aggregator (consensus)"
-        echo "  • Spam Aggregator (DDoS protection)"
+        if [ "${ENABLE_SPAM_PROTECTION:-true}" = "true" ]; then
+            echo "  • Spam Aggregator (DDoS protection)"
+        fi
         echo "  • Finalizer (batch creation)"
         echo "  • Dequeuer (submission processing)"
         echo "  • Event Monitor (epoch tracking)"
@@ -347,8 +353,8 @@ start_services() {
 stop_services() {
     print_color "$YELLOW" "Stopping all services..."
     if is_separated_running; then
-        # Stop all services including monitoring, ipfs, and vpa profiles
-        $DOCKER_COMPOSE_CMD -f docker-compose.separated.yml --profile monitoring --profile ipfs --profile vpa down
+        # Stop all services including monitoring, ipfs, vpa, and spam-protection profiles
+        $DOCKER_COMPOSE_CMD -f docker-compose.separated.yml --profile monitoring --profile ipfs --profile vpa --profile spam-protection down
     else
         # Try to stop any running containers
         $DOCKER_COMPOSE_CMD down 2>/dev/null || true
