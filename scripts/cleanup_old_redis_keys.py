@@ -633,10 +633,11 @@ class RedisCleanup:
                     else:
                         unknown_keys.append((key, key_type))
                     
-                    # Extract protocol:market patterns
+                    # Extract protocol:market patterns (only for namespaced keys)
+                    # Protocol and market are Ethereum addresses (0x + 40 hex chars)
                     if ':' in key and len(key.split(':')) >= 2:
                         parts = key.split(':')
-                        if len(parts) >= 2:
+                        if len(parts) >= 2 and re.match(r'^0x[a-fA-F0-9]{40}$', parts[0]) and re.match(r'^0x[a-fA-F0-9]{40}$', parts[1]):
                             proto_market = f"{parts[0]}:{parts[1]}"
                             self.discovered_keys[proto_market].append(key)
                 
@@ -864,7 +865,7 @@ def main():
 
         # Discovery mode
         if args.discover:
-            discovery_results = cleanup.discover_all_keys()
+            cleanup.discover_all_keys()
             print("\n💡 Discovery complete. Use cleanup options to clean up keys.")
             return 0
 
@@ -890,7 +891,7 @@ def main():
         # Handle all-markets mode
         if args.all_markets:
             # Discover all protocol:market combinations
-            discovery_results = cleanup.discover_all_keys(max_keys=10000)
+            cleanup.discover_all_keys(max_keys=10000)
             proto_markets = list(cleanup.discovered_keys.keys())
             
             if not proto_markets:
