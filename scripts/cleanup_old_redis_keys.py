@@ -816,6 +816,8 @@ def main():
                         help='Maximum length for queues after cleanup (default: 1000)')
     parser.add_argument('--all-markets', action='store_true',
                         help='Clean up keys for all protocol:market combinations found (ignores --protocol and --market)')
+    parser.add_argument('--force', action='store_true',
+                        help='Force cleanup without confirmation prompts')
     parser.add_argument('--protocol', type=str,
                         help='Protocol state address (e.g., 0x1234...)')
     parser.add_argument('--market', type=str,
@@ -903,6 +905,8 @@ def main():
             
             if args.dry_run:
                 print("\n💡 DRY RUN: Would clean up keys for all markets above")
+            elif args.force:
+                print("\n⚠️ Force mode enabled: Proceeding with cleanup for ALL markets without confirmation.")
             else:
                 confirm = input("\n⚠ Proceed with cleanup for ALL markets? (yes/no): ")
                 if confirm.lower() != 'yes':
