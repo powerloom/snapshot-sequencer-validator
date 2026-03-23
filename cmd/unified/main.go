@@ -303,12 +303,10 @@ func main() {
 			if err != nil {
 				log.Errorf("Failed to create public multiaddr: %v", err)
 			} else {
-				opts = append(opts, libp2p.AddrsFactory(func(addrs []multiaddr.Multiaddr) []multiaddr.Multiaddr {
-					// Filter out internal/reserved addresses - Docker IPs must not be advertised
-					filtered, _ := p2p.FilterReservedMultiaddrs(addrs)
-					return append(filtered, publicAddr)
+				opts = append(opts, libp2p.AddrsFactory(func(_ []multiaddr.Multiaddr) []multiaddr.Multiaddr {
+					return []multiaddr.Multiaddr{publicAddr}
 				}))
-				log.Infof("Advertising public IP: %s (internal addresses filtered)", cfg.P2PPublicIP)
+				log.Infof("DHT advertises only /ip4/%s/tcp/%s (P2P public; no merged local/observed addrs)", cfg.P2PPublicIP, p2pPort)
 			}
 		}
 
