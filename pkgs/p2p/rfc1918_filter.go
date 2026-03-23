@@ -39,6 +39,21 @@ func IsReservedIP(ip net.IP) bool {
 		rfc6598Range.Contains(ipv4) || rfc2544Range.Contains(ipv4)
 }
 
+// isIPv4UnsuitableForPublicMesh is true for loopback, link-local, and reserved WAN-invalid ranges.
+func isIPv4UnsuitableForPublicMesh(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	ipv4 := ip.To4()
+	if ipv4 == nil {
+		return false
+	}
+	if ipv4.IsLoopback() || ipv4.IsLinkLocalUnicast() {
+		return true
+	}
+	return IsReservedIP(ipv4)
+}
+
 // HasReservedIPAddress checks if a multiaddr contains a reserved IP address
 func HasReservedIPAddress(addr ma.Multiaddr) bool {
 	var ip net.IP
@@ -54,7 +69,7 @@ func HasReservedIPAddress(addr ma.Multiaddr) bool {
 		return false
 	}
 
-	return IsReservedIP(ip)
+	return isIPv4UnsuitableForPublicMesh(ip)
 }
 
 // FilterReservedMultiaddrs filters out multiaddrs with reserved IP addresses
@@ -74,7 +89,7 @@ func FilterReservedMultiaddrs(addrs []ma.Multiaddr) ([]ma.Multiaddr, int) {
 			return true // Continue iteration
 		})
 
-		if ip != nil && IsReservedIP(ip) {
+		if ip != nil && isIPv4UnsuitableForPublicMesh(ip) {
 			filteredCount++
 			continue
 		}
