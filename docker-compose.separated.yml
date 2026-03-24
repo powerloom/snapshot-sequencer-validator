@@ -54,6 +54,7 @@ services:
       - SPAM_CACHE_TTL_HOURS=${SPAM_CACHE_TTL_HOURS:-24}
       - ENABLE_SPAM_REPORT_BROADCAST=${ENABLE_SPAM_REPORT_BROADCAST:-true}
       - SPAM_REPORT_TOPIC=${SPAM_REPORT_TOPIC:-}
+      - DOCKER_BRIDGE_GATEWAY_IPS=${DOCKER_BRIDGE_GATEWAY_IPS:-}
     depends_on:
       redis:
         condition: service_healthy

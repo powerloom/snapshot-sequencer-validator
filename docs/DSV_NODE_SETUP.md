@@ -163,6 +163,8 @@ REDIS_HOST=redis
 REDIS_PASSWORD=secure_password_here
 PRIVATE_KEY=your_hex_private_key_here
 DEBUG_MODE=false
+# Required for Docker bridge mode: docker network inspect sequencer-net | grep Gateway
+DOCKER_BRIDGE_GATEWAY_IPS=172.18.0.1
 ```
 
 ---
@@ -469,6 +471,25 @@ curl http://localhost:9001/debug/peers
 # Verify public IP is accessible
 curl ifconfig.me
 ```
+
+#### 2a. Docker Bridge NAT Breaks Inbound P2P Connections
+
+When running in Docker bridge networking mode (the default), Docker NAT rewrites the source IP of all inbound TCP connections to the bridge gateway IP (e.g. `172.18.0.1`). The RFC1918 connection gater sees this private IP and rejects the connection at `InterceptAccept`, before the libp2p security handshake. Remote peers see `failed to negotiate security protocol: EOF` or `dial backoff`.
+
+**Diagnosis:**
+```bash
+# Check for inbound rejections from Docker gateway
+docker logs p2p-gateway 2>&1 | grep "reject inbound"
+
+# Find your Docker bridge gateway IP
+docker network inspect sequencer-net | grep Gateway
+```
+
+**Fix:** Set `DOCKER_BRIDGE_GATEWAY_IPS` in `.env` to the Docker bridge gateway IP:
+```bash
+DOCKER_BRIDGE_GATEWAY_IPS=172.18.0.1
+```
+This whitelists the gateway for inbound connections only. Outbound blocking of private IPs (Hetzner requirement) is unaffected.
 
 #### 3. Redis Connection Issues
 

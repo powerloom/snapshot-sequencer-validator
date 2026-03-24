@@ -58,7 +58,7 @@ func NewP2PHost(ctx context.Context, cfg *config.Settings) (*P2PHost, error) {
 
 	// Create RFC1918 connection gater to block reserved IP connections
 	// This is required by Hetzner to prevent scanning of internal networks
-	reservedIPGater := &RFC1918ConnectionGater{}
+	reservedIPGater := NewRFC1918ConnectionGater()
 
 	// Build libp2p options (EXACT copy from working implementation)
 	opts := []libp2p.Option{
