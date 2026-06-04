@@ -13,6 +13,7 @@ This comprehensive guide walks you through deploying and configuring a DSV node 
 7. [Monitoring and Operations](#monitoring-and-operations)
 8. [Troubleshooting](#troubleshooting)
 9. [Advanced Configuration](#advanced-configuration)
+10. [VPA (Validator Priority Assigner) Integration](#vpa-validator-priority-assigner-integration)
 
 ---
 
@@ -80,6 +81,12 @@ sudo chmod -R 755 /data/ipfs
 
 # Or start with IPFS support
 ./dsv.sh start --with-ipfs
+
+# Or start with VPA (Validator Priority Assigner) support
+./dsv.sh start --with-vpa
+
+# Or start with both IPFS and VPA
+./dsv.sh start --with-ipfs --with-vpa
 ```
 
 ### Option 2: Development Mode (Single Container)
@@ -156,6 +163,8 @@ REDIS_HOST=redis
 REDIS_PASSWORD=secure_password_here
 PRIVATE_KEY=your_hex_private_key_here
 DEBUG_MODE=false
+# Required for Docker bridge mode: docker network inspect sequencer-net | grep Gateway
+DOCKER_BRIDGE_GATEWAY_IPS=172.18.0.1
 ```
 
 ---
@@ -233,6 +242,11 @@ docker compose -f docker-compose.separated.yml up -d --scale dequeuer=3
 - IPFS Node (port 5001 API, 8080 Gateway)
 - Automatic cleanup and management
 
+#### VPA Profile
+- relayer-py service (port 8080)
+- Multi-signer transaction relayer for new contracts
+- Automatic repository cloning and configuration
+
 ### Environment Variables for Deployment
 
 ```bash
@@ -246,8 +260,10 @@ FINALIZER_WORKERS=8
 FINALIZATION_BATCH_SIZE=50
 
 # P2P networking
-CONN_MANAGER_LOW_WATER=100
-CONN_MANAGER_HIGH_WATER=400
+# CRITICAL: DSV nodes serve thousands of snapshotter peers (local collectors)
+# These limits must be high enough to prevent pruning publishers
+CONN_MANAGER_LOW_WATER=2000   # Minimum connections (was 100 - too low for DSV)
+CONN_MANAGER_HIGH_WATER=5000  # Maximum before pruning (was 400 - way too low for DSV)
 
 # Storage
 STORAGE_PROVIDER=ipfs
@@ -274,8 +290,60 @@ The system uses libp2p with gossipsub for peer discovery:
 
 - **Discovery Topic**: `RENDEZVOUS_POINT` (default: `powerloom-snapshot-sequencer-network`)
 - **Message Topics**:
-  - `/powerloom/snapshot-submissions/all` - Actual submissions
+  - `/powerloom/{prefix}/snapshot-submissions/0` - Discovery topic (peer discovery)
+  - `/powerloom/{prefix}/snapshot-submissions/all` - Actual submissions
   - `/powerloom/finalized-batches/all` - Batch consensus
+
+### Heartbeat Message Handling
+
+The DSV node recognizes and handles heartbeat messages from local collectors to prevent unnecessary processing overhead. Local collectors publish two types of heartbeat messages:
+
+#### Type 1: Discovery Topic Heartbeat
+
+**Format:**
+```json
+{
+  "epoch_id": 0,
+  "submissions": null,
+  "snapshotter_id": "...",
+  "signature": "..."
+}
+```
+
+**DSV Processing:**
+- **Detection**: `epoch_id == 0 && submissions == null` (unified/main.go line 731)
+- **Action**: Skipped immediately at queue level (no processing overhead)
+- **Logging**: Debug level: `💓 Heartbeat received from {peer} (skipping queue)`
+
+#### Type 2: Submissions Topic Heartbeat
+
+**Format:**
+```json
+{
+  "epoch_id": 0,
+  "submissions": [{
+    "request": {
+      "epoch_id": 0,
+      "project_id": "test:mesh-formation:local-collector",
+      "snapshot_cid": ""
+    }
+  }],
+  "snapshotter_id": "...",
+  "signature": "..."
+}
+```
+
+**DSV Processing:**
+- **Detection**: `EpochId == 0 && SnapshotCid == ""` (dequeuer.go line 229)
+- **Action**: Queued but skipped during validation (recognized as heartbeat)
+- **Error Handling**: Validation returns `"epoch 0 heartbeat: skipping"` error, caught and logged as debug (unified/main.go line 1023)
+- **Logging**: Debug level: `Skipped epoch 0 heartbeat (P2P mesh maintenance)`
+
+**Why Two Types?**
+- Discovery topic uses `null` submissions for minimal overhead
+- Submissions topic uses non-nil array with empty CID to help mesh formation while still being recognized as heartbeat
+
+Both heartbeat types help maintain mesh connectivity and prevent pruning, but are automatically skipped by the DSV node to avoid processing overhead.
 
 ### Network Testing
 
@@ -404,6 +472,25 @@ curl http://localhost:9001/debug/peers
 curl ifconfig.me
 ```
 
+#### 2a. Docker Bridge NAT Breaks Inbound P2P Connections
+
+When running in Docker bridge networking mode (the default), Docker NAT rewrites the source IP of all inbound TCP connections to the bridge gateway IP (e.g. `172.18.0.1`). The RFC1918 connection gater sees this private IP and rejects the connection at `InterceptAccept`, before the libp2p security handshake. Remote peers see `failed to negotiate security protocol: EOF` or `dial backoff`.
+
+**Diagnosis:**
+```bash
+# Check for inbound rejections from Docker gateway
+docker logs p2p-gateway 2>&1 | grep "reject inbound"
+
+# Find your Docker bridge gateway IP
+docker network inspect sequencer-net | grep Gateway
+```
+
+**Fix:** Set `DOCKER_BRIDGE_GATEWAY_IPS` in `.env` to the Docker bridge gateway IP:
+```bash
+DOCKER_BRIDGE_GATEWAY_IPS=172.18.0.1
+```
+This whitelists the gateway for inbound connections only. Outbound blocking of private IPs (Hetzner requirement) is unaffected.
+
 #### 3. Redis Connection Issues
 
 ```bash
@@ -445,6 +532,8 @@ DEBUG_MODE=true
 
 ### Resource Cleanup
 
+#### Quick Cleanup (dsv.sh commands)
+
 ```bash
 # Clean Redis cache (stale keys)
 ./dsv.sh clean-cache
@@ -458,6 +547,42 @@ DEBUG_MODE=true
 # Remove all containers and volumes
 ./dsv.sh clean
 ```
+
+#### Advanced Cleanup (cleanup_old_redis_keys.py)
+
+For comprehensive Redis key cleanup, especially after refactoring or when dealing with memory pressure:
+
+**Discovery** (see what keys exist):
+```bash
+python3 scripts/cleanup_old_redis_keys.py --discover
+```
+
+**Clean all markets automatically** (recommended for multi-market deployments):
+```bash
+# Dry run first
+python3 scripts/cleanup_old_redis_keys.py --all-markets --keep-hours 24 --cleanup-queues --dry-run
+
+# Actually clean
+python3 scripts/cleanup_old_redis_keys.py --all-markets --keep-hours 24 --cleanup-queues
+```
+
+**Clean queues/streams** (no protocol/market needed):
+```bash
+python3 scripts/cleanup_old_redis_keys.py --cleanup-queues --queue-max-length 1000
+python3 scripts/cleanup_old_redis_keys.py --cleanup-streams --stream-max-length 10000
+```
+
+**Clean non-namespaced timelines** (no protocol/market needed):
+```bash
+python3 scripts/cleanup_old_redis_keys.py --keep-hours 24
+```
+
+**Clean specific protocol/market** (requires protocol/market addresses):
+```bash
+python3 scripts/cleanup_old_redis_keys.py --keep-epochs 60 --protocol 0x1234... --market 0x5678...
+```
+
+See [REDIS_KEYS.md](./REDIS_KEYS.md#manual-redis-key-cleanup) for detailed cleanup documentation and troubleshooting.
 
 ---
 
@@ -559,6 +684,149 @@ IPFS_DATA_DIR=/mnt/storage/ipfs
 sudo mkdir -p /mnt/storage/ipfs
 sudo chown -R 1000:1000 /mnt/storage/ipfs
 ```
+
+---
+
+## VPA (Validator Priority Assigner) Integration
+
+The VPA system enables priority-based batch submission to protocol contracts using a multi-signer approach.
+
+### VPA Architecture Overview
+
+The VPA integration adds a Python-based relayer service that handles transaction submission:
+
+1. **relayer-py Service**: Multi-signer transaction relayer
+2. **Priority Caching**: Redis-based validator priority storage
+3. **Automatic Setup**: Repository cloning and configuration via dsv.sh
+
+### VPA Environment Configuration
+
+Add these variables to your `.env` file:
+
+```bash
+# Protocol contract addresses
+PROTOCOL_STATE_CONTRACT=0xC9e7304f719D35919b0371d8B242ab59E0966d63
+DATA_MARKET_ADDRESSES=0xb6c1392944a335b72b9e34f9D4b8c0050cdb511f
+
+# relayer-py service endpoint
+RELAYER_PY_ENDPOINT=http://relayer-py:8080
+
+# VPA validator address (for priority checking)
+VPA_VALIDATOR_ADDRESS=0xYourValidatorAddress
+
+# Multi-signer configuration (comma-separated)
+VPA_SIGNER_ADDRESSES=0xSIGNER1_ADDRESS,0xSIGNER2_ADDRESS
+VPA_SIGNER_PRIVATE_KEYS=0xSIGNER1_PRIVATE_KEY,0xSIGNER2_PRIVATE_KEY
+
+# RPC timeouts and connection pooling (relayer-py, mitigates "Timeout on reading data from socket")
+# Precedence: RPC_SOCK_READ_TIMEOUT_S overrides RPC_REQUEST_TIMEOUT_S when both set
+RPC_REQUEST_TIMEOUT_S=60
+RPC_SOCK_READ_TIMEOUT_S=60
+RPC_MAX_CONNECTIONS=100
+RPC_MAX_KEEPALIVE_CONNECTIONS=50
+RPC_KEEPALIVE_EXPIRY_S=300
+```
+
+### VPA Deployment
+
+#### Option 1: Quick Start with VPA
+
+```bash
+# Start with VPA support
+./dsv.sh start --with-vpa
+
+# Start with both IPFS and VPA
+./dsv.sh start --with-ipfs --with-vpa
+
+# Start with monitoring and VPA
+./dsv.sh start --with-monitoring --with-vpa
+```
+
+#### Option 2: Manual VPA Setup
+
+```bash
+# Clone relayer-py repository (done automatically by dsv.sh)
+git clone git@github.com:powerloom/relayer-py.git
+
+# Generate settings.json from environment variables
+python3 ./test_relayer_config.py
+
+# Copy settings to relayer-py
+cp /tmp/test_relayer_settings.json ./relayer-py/settings/settings.json
+
+# Build and start relayer-py
+cd relayer-py
+docker build -t relayer-py .
+docker run -p 8080:8080 relayer-py
+```
+
+### VPA Service Management
+
+```bash
+# Check VPA service status
+docker ps | grep relayer-py
+
+# View VPA service logs
+docker logs dsv-relayer-py
+
+# Test VPA health
+curl http://localhost:8080/health
+
+# Restart VPA service
+./dsv.sh stop && ./dsv.sh start --with-vpa
+```
+
+### VPA Contract Behavior
+
+- Submits to ProtocolState and DataMarket contracts
+- Priority-based submission via VPA authorization
+- Multi-signer support for higher throughput
+- Automatic priority assignment and window timing
+
+### Multi-Signer Configuration
+
+The VPA system supports multiple authorized signers per validator for parallel batch submission:
+
+```bash
+# Example: 2 signers for load balancing
+VPA_SIGNER_ADDRESSES=0x123...,0x456...
+VPA_SIGNER_PRIVATE_KEYS=0xabc...,0xdef...
+
+# Each signer can submit independently
+# Load balancing handled by relayer-py PM2 workers
+```
+
+### VPA Testing and Validation
+
+Use the built-in test suite to validate VPA configuration:
+
+```bash
+# Run VPA deployment test
+./test_vpa_deployment.sh
+
+# Test validates:
+# - Environment variable loading
+# - Settings.json generation
+# - Repository access
+# - Docker build requirements
+# - Complete workflow end-to-end
+```
+
+### VPA Monitoring
+
+The VPA service integrates with the DSV monitoring system:
+
+- **Health Endpoint**: `http://localhost:8080/health`
+- **Service Logs**: Available via `./dsv.sh logs`
+- **Redis Metrics**: Priority caching statistics
+- **Contract Events**: Priority assignments tracked in EventMonitor
+
+### Security Considerations
+
+- **SSH Access**: Ensure SSH keys are configured for `git@github.com:powerloom/relayer-py.git`
+- **Key Management**: Private keys are stored in environment variables, not in code
+- **Network Isolation**: VPA service runs in isolated Docker container
+- **Rate Limiting**: Built-in rate limiting prevents abuse
 
 ---
 

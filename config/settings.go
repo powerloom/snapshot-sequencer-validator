@@ -24,7 +24,7 @@ type Settings struct {
 	// Ethereum RPC Configuration
 	RPCNodes              []string // Primary RPC nodes for load balancing
 	ArchiveRPCNodes       []string // Archive nodes for historical queries
-	ProtocolStateContract string   // Protocol state contract address (manages identities)
+	ProtocolStateContract string   // Protocol state contract address (manages identities, VPA-enabled)
 	ChainID               int64
 
 	// Data Market Configuration
@@ -53,10 +53,23 @@ type Settings struct {
 	GossipsubHeartbeat time.Duration
 	GossipsubParams    map[string]interface{} // Additional gossipsub parameters
 
-	// Submission Window Configuration
-	SubmissionWindowDuration time.Duration
-	MaxConcurrentWindows     int
-	WindowCleanupInterval    time.Duration
+	// Level 1 Finalization Delay Configuration
+	// Used when snapshot commit/reveal windows are disabled (both zero).
+	// When commit/reveal is enabled, Level 1 finalization triggers when snapshot reveal closes.
+	// When commit/reveal is disabled, Level 1 finalization triggers after this delay.
+	Level1FinalizationDelay time.Duration
+	MaxConcurrentWindows    int
+	WindowCleanupInterval   time.Duration
+
+	// Spam Report Collection Window Configuration
+	// Duration to wait after epoch release before sending batched spam reports
+	// Default: Level1FinalizationDelay + 10 seconds
+	SpamReportCollectionWindow time.Duration
+
+	// Spam Report Consensus Delay Configuration
+	// Additional delay after sending local reports to wait for other validators' reports before checking consensus
+	// Default: 10 seconds (gives other validators time to send their reports after their collection window)
+	SpamReportConsensusDelay time.Duration
 
 	// Event Monitoring
 	EventPollInterval   time.Duration
@@ -72,6 +85,19 @@ type Settings struct {
 	FlaggedSnapshottersCheck bool
 	VerificationCacheTTL     time.Duration
 
+	// Spam Protection Configuration
+	EnableSpamProtection      bool     // Master switch for spam protection
+	EnableSpamReportBroadcast bool     // Enable validator coordination via spam reports
+	SpamReportTopic           string   // Dedicated topic for spam reports (empty = auto-construct from validator presence prefix + "/spam-reports")
+	SpamCacheTTLHours         int      // Redis cache TTL in hours (onchain is source of truth)
+	FullNodePeerIDs           []string // Full node Peer IDs (comma-separated) - whitelisted for rate limit bypass
+	BulkServicePeerIDs        []string // Bulk service snapshotter Peer IDs (comma-separated) - whitelisted for rate limit bypass
+	// NOTE: The following fields are for FUTURE onchain implementation (not yet used in code):
+	SpamFlagExpiryDays    int  // Days before flagged peers can be cleared (onchain) - FUTURE
+	SpamFlagExpiryEpochs  int  // Epochs before flagged peers can be cleared (onchain) - FUTURE
+	SpamSyncOnStartup     bool // Sync flagged state from onchain on node startup - FUTURE
+	SpamSyncIntervalHours int  // Periodic sync interval in hours - FUTURE
+
 	// Dequeuer Configuration
 	DequeueWorkers         int
 	DequeueBatchSize       int
@@ -84,11 +110,11 @@ type Settings struct {
 	DedupTTL            time.Duration
 
 	// Component Toggles
-	EnableListener        bool
-	EnableDequeuer        bool
-	EnableFinalizer       bool
-	EnableBatchAggregation bool  // P2P exchange of finalized batches for aggregation
-	EnableEventMonitor    bool
+	EnableListener         bool
+	EnableDequeuer         bool
+	EnableFinalizer        bool
+	EnableBatchAggregation bool // P2P exchange of finalized batches for aggregation
+	EnableEventMonitor     bool
 
 	// Finalizer Configuration
 	FinalizerWorkers      int
@@ -97,15 +123,36 @@ type Settings struct {
 	// Aggregation Configuration
 	AggregationWindowDuration time.Duration // Time to wait for validator batches before aggregating (Level 2)
 
+	// Validator Priority Assignment (VPA) Configuration
+	ValidatorAddress        string // This validator's address for priority checking
+	EnableOnChainSubmission bool   // Enable submission to ProtocolState contract
+
+	// VPA Event Monitoring Configuration
+	VPAContractAddress   string // VPA contract address for priority monitoring
+	VPAValidatorAddress  string // This validator's address for VPA client
+	VPAValidatorNodeID   uint64 // This validator's node ID (required; no chain lookup)
+
+	// VPA Contract Submission Configuration
+	RelayerPyEndpoint string // relayer-py service endpoint for VPA-based contract submissions
+
 	// Stream Configuration for Deterministic Aggregation
-	StreamConsumerGroup       string        // Consumer group name for aggregator
-	StreamConsumerName        string        // Consumer instance name
-	StreamReadBlock           time.Duration // Block timeout for stream reads
-	StreamBatchSize           int           // Batch size for stream reads
-	StreamIdleTimeout         time.Duration // Idle timeout for stream consumers
+	StreamConsumerGroup string        // Consumer group name for aggregator
+	StreamConsumerName  string        // Consumer instance name
+	StreamReadBlock     time.Duration // Block timeout for stream reads
+	StreamBatchSize     int           // Batch size for stream reads
+	StreamIdleTimeout   time.Duration // Idle timeout for stream consumers
 
 	// Slot Validation Configuration
-	EnableSlotValidation bool // Validate snapshotter addresses against protocol state cache (requires protocol-state-cacher)
+	EnableSlotValidation bool
+
+	// Protocol State Cacher Configuration
+	EnableProtocolStateCacher bool
+	SlotSyncInterval          time.Duration // Interval for periodic node count check
+	SlotSyncBatchSize         int           // Batch size for slot fetching
+
+	// Smart Sync Configuration
+	EventGapThresholdBlocks uint64 // Block gap beyond which a full cold sync is triggered on startup (default: 5000)
+	ForceFullColdSync       bool   // If true, fallback to old hourly full cold sync behavior
 
 	// IPFS Configuration
 	IPFSAPI string // IPFS API endpoint (e.g., "/ip4/127.0.0.1/tcp/5001")
@@ -116,11 +163,11 @@ type Settings struct {
 	APIAuthToken string
 
 	// Gossipsub Topic Configuration
-	GossipsubSnapshotSubmissionPrefix string   // Base prefix for snapshot submission topics
-	GossipsubFinalizedBatchPrefix     string   // Base prefix for finalized batch topics
-	GossipsubValidatorPresenceTopic   string   // Validator presence/heartbeat topic
-	GossipsubConsensusVotesTopic      string   // Consensus voting topic
-	GossipsubConsensusProposalsTopic  string   // Consensus proposals topic
+	GossipsubSnapshotSubmissionPrefix string // Base prefix for snapshot submission topics
+	GossipsubFinalizedBatchPrefix     string // Base prefix for finalized batch topics
+	GossipsubValidatorPresenceTopic   string // Validator presence/heartbeat topic
+	GossipsubConsensusVotesTopic      string // Consensus voting topic
+	GossipsubConsensusProposalsTopic  string // Consensus proposals topic
 
 	// Monitoring & Debugging
 	SlackWebhookURL string
@@ -132,6 +179,10 @@ type Settings struct {
 	// Performance Tuning
 	BatchProcessingTimeout time.Duration
 	ContractQueryTimeout   time.Duration
+
+	// P2P Gateway Submission Processing Configuration
+	P2PGatewaySubmissionWorkers  int // Number of worker goroutines for async message processing
+	P2PGatewaySubmissionChanSize int // Buffer size for submission message channel
 }
 
 var (
@@ -161,17 +212,34 @@ func LoadConfig() error {
 		Rendezvous:    getEnv("RENDEZVOUS_POINT", "powerloom-snapshot-sequencer-network"),
 
 		// Connection Manager
-		ConnManagerLowWater:  getEnvAsInt("CONN_MANAGER_LOW_WATER", 100),
-		ConnManagerHighWater: getEnvAsInt("CONN_MANAGER_HIGH_WATER", 400),
+		// CRITICAL: DSV nodes serve thousands of snapshotter peers (local collectors)
+		// Default limits are too low - need much higher limits to prevent pruning publishers
+		// LowWater: minimum connections to maintain (should be high enough for all active publishers)
+		// HighWater: maximum before pruning starts (should accommodate peak load)
+		ConnManagerLowWater:  getEnvAsInt("CONN_MANAGER_LOW_WATER", 2000),  // Default: 2000 (was 100)
+		ConnManagerHighWater: getEnvAsInt("CONN_MANAGER_HIGH_WATER", 5000), // Default: 5000 (was 400)
 
 		// Gossipsub Configuration
 		GossipsubHeartbeat: time.Duration(getEnvAsInt("GOSSIPSUB_HEARTBEAT_MS", 700)) * time.Millisecond,
 		GossipsubParams:    make(map[string]interface{}),
 
-		// Submission Window Configuration
-		SubmissionWindowDuration: time.Duration(getEnvAsInt("SUBMISSION_WINDOW_DURATION", 60)) * time.Second,
-		MaxConcurrentWindows:     getEnvAsInt("MAX_CONCURRENT_WINDOWS", 100),
-		WindowCleanupInterval:    5 * time.Minute,
+		// Level 1 Finalization Delay Configuration
+		// NOTE: This is used when snapshot commit/reveal windows are disabled (both zero).
+		// When commit/reveal is enabled, Level 1 finalization triggers when snapshot reveal closes.
+		// When commit/reveal is disabled, Level 1 finalization triggers after this delay.
+		// This delay must be BEFORE P1 window closes to allow time for:
+		//   - Level 1 local finalization to complete
+		//   - Level 2 network-wide aggregation to complete
+		//   - Priority 1 validator to commit on-chain during P1 window
+		Level1FinalizationDelay: time.Duration(getEnvAsInt("LEVEL1_FINALIZATION_DELAY_SECONDS", 10)) * time.Second,
+		MaxConcurrentWindows:    getEnvAsInt("MAX_CONCURRENT_WINDOWS", 100),
+		WindowCleanupInterval:   5 * time.Minute,
+
+		// Spam Report Collection Window: level1_delay + 10 seconds
+		SpamReportCollectionWindow: time.Duration(getEnvAsInt("LEVEL1_FINALIZATION_DELAY_SECONDS", 10))*time.Second + 10*time.Second,
+		// Spam Report Consensus Delay: Additional delay after sending reports for other validators' reports to arrive
+		// Default: 10 seconds
+		SpamReportConsensusDelay: time.Duration(getEnvAsInt("SPAM_REPORT_CONSENSUS_DELAY_SECONDS", 10)) * time.Second,
 
 		// Event Monitoring
 		EventPollInterval:   time.Duration(getEnvAsInt("EVENT_POLL_INTERVAL", 12)) * time.Second,
@@ -185,6 +253,17 @@ func LoadConfig() error {
 		FlaggedSnapshottersCheck: getBoolEnv("CHECK_FLAGGED_SNAPSHOTTERS", true),
 		VerificationCacheTTL:     time.Duration(getEnvAsInt("VERIFICATION_CACHE_TTL", 600)) * time.Second,
 
+		// Spam Protection Configuration
+		EnableSpamProtection:      getBoolEnv("ENABLE_SPAM_PROTECTION", true),
+		EnableSpamReportBroadcast: getBoolEnv("ENABLE_SPAM_REPORT_BROADCAST", true),
+		SpamReportTopic:           getEnv("SPAM_REPORT_TOPIC", ""), // Empty = auto-construct from validator presence prefix + "/spam-reports"
+		SpamCacheTTLHours:         getEnvAsInt("SPAM_CACHE_TTL_HOURS", 24),
+		// NOTE: The following configs are for FUTURE onchain implementation (not yet used):
+		// SpamFlagExpiryDays:        getEnvAsInt("SPAM_FLAG_EXPIRY_DAYS", 7),
+		// SpamFlagExpiryEpochs:      getEnvAsInt("SPAM_FLAG_EXPIRY_EPOCHS", 100),
+		// SpamSyncOnStartup:         getBoolEnv("SPAM_SYNC_ON_STARTUP", true),
+		// SpamSyncIntervalHours:     getEnvAsInt("SPAM_SYNC_INTERVAL_HOURS", 1),
+
 		// Dequeuer Configuration
 		DequeueWorkers:         getEnvAsInt("DEQUEUER_WORKERS", 5),
 		DequeueBatchSize:       getEnvAsInt("DEQUEUE_BATCH_SIZE", 10),
@@ -197,28 +276,49 @@ func LoadConfig() error {
 		DedupTTL:            time.Duration(getEnvAsInt("DEDUP_TTL_SECONDS", 7200)) * time.Second,
 
 		// Component Toggles
-		EnableListener:        getBoolEnv("ENABLE_LISTENER", true),
-		EnableDequeuer:        getBoolEnv("ENABLE_DEQUEUER", true),
-		EnableFinalizer:       getBoolEnv("ENABLE_FINALIZER", true),
+		EnableListener:         getBoolEnv("ENABLE_LISTENER", true),
+		EnableDequeuer:         getBoolEnv("ENABLE_DEQUEUER", true),
+		EnableFinalizer:        getBoolEnv("ENABLE_FINALIZER", true),
 		EnableBatchAggregation: getBoolEnv("ENABLE_BATCH_AGGREGATION", true),
-		EnableEventMonitor:    getBoolEnv("ENABLE_EVENT_MONITOR", false),
+		EnableEventMonitor:     getBoolEnv("ENABLE_EVENT_MONITOR", false),
 
 		// Finalizer Configuration
 		FinalizerWorkers:      getEnvAsInt("FINALIZER_WORKERS", 5),
 		FinalizationBatchSize: getEnvAsInt("FINALIZATION_BATCH_SIZE", 20),
 
 		// Aggregation Configuration
-		AggregationWindowDuration: time.Duration(getEnvAsInt("AGGREGATION_WINDOW_SECONDS", 30)) * time.Second,
+		AggregationWindowDuration: time.Duration(getEnvAsInt("AGGREGATION_WINDOW_SECONDS", 20)) * time.Second,
+
+		// Validator Priority Assignment (VPA) Configuration
+		ValidatorAddress:        getEnv("VALIDATOR_ADDRESS", ""),
+		EnableOnChainSubmission: getBoolEnv("ENABLE_ONCHAIN_SUBMISSION", false),
+
+		// VPA Event Monitoring Configuration
+		VPAContractAddress:  getEnv("VPA_CONTRACT_ADDRESS", ""),
+		VPAValidatorAddress: getEnv("VPA_VALIDATOR_ADDRESS", ""),
+		VPAValidatorNodeID:   getEnvAsUint64("VPA_VALIDATOR_NODE_ID", 0),
+
+		// VPA Contract Submission Configuration
+		RelayerPyEndpoint: getEnv("RELAYER_PY_ENDPOINT", ""),
 
 		// Stream Configuration for Deterministic Aggregation
 		StreamConsumerGroup: getEnv("STREAM_CONSUMER_GROUP", "aggregator-group"),
 		StreamConsumerName:  getEnv("STREAM_CONSUMER_NAME", "aggregator-instance"),
-				StreamReadBlock:     time.Duration(getEnvAsInt("STREAM_READ_BLOCK_MS", 2000)) * time.Millisecond,
+		StreamReadBlock:     time.Duration(getEnvAsInt("STREAM_READ_BLOCK_MS", 2000)) * time.Millisecond,
 		StreamBatchSize:     getEnvAsInt("STREAM_BATCH_SIZE", 10),
 		StreamIdleTimeout:   time.Duration(getEnvAsInt("STREAM_IDLE_TIMEOUT_MS", 30000)) * time.Millisecond,
 
 		// Slot Validation Configuration
 		EnableSlotValidation: getBoolEnv("ENABLE_SLOT_VALIDATION", false),
+
+		// Protocol State Cacher Configuration
+		EnableProtocolStateCacher: getBoolEnv("ENABLE_PROTOCOL_STATE_CACHER", false),
+		SlotSyncInterval:          time.Duration(getEnvAsInt("SLOT_SYNC_INTERVAL_SECONDS", 3600)) * time.Second,
+		SlotSyncBatchSize:         getEnvAsInt("SLOT_SYNC_BATCH_SIZE", 20),
+
+		// Smart Sync Configuration
+		EventGapThresholdBlocks: uint64(getEnvAsInt("EVENT_GAP_THRESHOLD_BLOCKS", 5000)),
+		ForceFullColdSync:       getBoolEnv("FORCE_FULL_COLD_SYNC", false),
 
 		// API Configuration
 		APIHost:      getEnv("API_HOST", "0.0.0.0"),
@@ -248,6 +348,10 @@ func LoadConfig() error {
 
 		// Contract Addresses
 		ProtocolStateContract: getEnv("PROTOCOL_STATE_CONTRACT", ""),
+
+		// P2P Gateway Submission Processing Configuration
+		P2PGatewaySubmissionWorkers:  getEnvAsInt("P2P_GATEWAY_SUBMISSION_WORKERS", 10),
+		P2PGatewaySubmissionChanSize: getEnvAsInt("P2P_GATEWAY_SUBMISSION_CHAN_SIZE", 1000),
 	}
 
 	// Load complex configurations that require additional parsing
@@ -261,6 +365,7 @@ func LoadConfig() error {
 
 	loadBootstrapPeers()
 	loadFullNodeAddresses()
+	loadPeerIDWhitelists()
 
 	// DATA_SOURCES removed - project IDs generated directly from contract addresses
 
@@ -413,6 +518,35 @@ func loadFullNodeAddresses() {
 	}
 }
 
+// loadPeerIDWhitelists loads Peer ID whitelists for spam protection
+func loadPeerIDWhitelists() {
+	// Load full node Peer IDs
+	fullNodePeerIDsStr := getEnv("FULL_NODE_PEER_IDS", "")
+	if strings.HasPrefix(fullNodePeerIDsStr, "[") {
+		json.Unmarshal([]byte(fullNodePeerIDsStr), &SettingsObj.FullNodePeerIDs)
+	} else if fullNodePeerIDsStr != "" {
+		SettingsObj.FullNodePeerIDs = strings.Split(fullNodePeerIDsStr, ",")
+	}
+
+	// Clean Peer IDs
+	for i := range SettingsObj.FullNodePeerIDs {
+		SettingsObj.FullNodePeerIDs[i] = strings.TrimSpace(SettingsObj.FullNodePeerIDs[i])
+	}
+
+	// Load bulk service Peer IDs
+	bulkServicePeerIDsStr := getEnv("BULK_SERVICE_PEER_IDS", "")
+	if strings.HasPrefix(bulkServicePeerIDsStr, "[") {
+		json.Unmarshal([]byte(bulkServicePeerIDsStr), &SettingsObj.BulkServicePeerIDs)
+	} else if bulkServicePeerIDsStr != "" {
+		SettingsObj.BulkServicePeerIDs = strings.Split(bulkServicePeerIDsStr, ",")
+	}
+
+	// Clean Peer IDs
+	for i := range SettingsObj.BulkServicePeerIDs {
+		SettingsObj.BulkServicePeerIDs[i] = strings.TrimSpace(SettingsObj.BulkServicePeerIDs[i])
+	}
+}
+
 // configureLogging sets up the logger based on configuration
 func configureLogging() {
 	// Set log level
@@ -544,6 +678,15 @@ func getEnvAsInt(key string, defaultValue int) int {
 	return defaultValue
 }
 
+func getEnvAsUint64(key string, defaultValue uint64) uint64 {
+	if value := os.Getenv(key); value != "" {
+		if u, err := strconv.ParseUint(value, 10, 64); err == nil {
+			return u
+		}
+	}
+	return defaultValue
+}
+
 func getBoolEnv(key string, defaultValue bool) bool {
 	if value := os.Getenv(key); value != "" {
 		value = strings.ToLower(value)
@@ -636,4 +779,18 @@ func (s *Settings) GetSnapshotSubmissionTopics() (discoveryTopic, submissionsTop
 // GetFinalizedBatchTopics returns the discovery and batch topics
 func (s *Settings) GetFinalizedBatchTopics() (discoveryTopic, batchTopic string) {
 	return s.GossipsubFinalizedBatchPrefix + "/0", s.GossipsubFinalizedBatchPrefix + "/all"
+}
+
+// GetSpamReportTopic returns the spam report topic, constructed from validator presence prefix
+// Format: {validator_presence_prefix_base}/spam-reports
+// Example: /powerloom/validator/spam-reports (if GOSSIPSUB_VALIDATOR_PRESENCE_TOPIC=/powerloom/validator/presence)
+// If SPAM_REPORT_TOPIC is explicitly set, use it; otherwise construct from prefix
+func (s *Settings) GetSpamReportTopic() string {
+	// If explicitly set, use it
+	if s.SpamReportTopic != "" {
+		return s.SpamReportTopic
+	}
+	// Extract base prefix from validator presence topic (remove /presence suffix if present)
+	basePrefix := strings.TrimSuffix(s.GossipsubValidatorPresenceTopic, "/presence")
+	return basePrefix + "/spam-reports"
 }

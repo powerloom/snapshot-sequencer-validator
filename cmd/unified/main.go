@@ -13,7 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/redis/go-redis/v9"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
@@ -26,19 +26,24 @@ import (
 	"github.com/multiformats/go-multiaddr"
 	rpchelper "github.com/powerloom/go-rpc-helper"
 	"github.com/powerloom/snapshot-sequencer-validator/config"
+	"github.com/powerloom/snapshot-sequencer-validator/pkgs/blockpoller"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/consensus"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/deduplication"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/eventmonitor"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/gossipconfig"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/ipfs"
+	"github.com/powerloom/snapshot-sequencer-validator/pkgs/p2p"
+	"github.com/powerloom/snapshot-sequencer-validator/pkgs/protocolstate"
 	rediskeys "github.com/powerloom/snapshot-sequencer-validator/pkgs/redis"
+	"github.com/powerloom/snapshot-sequencer-validator/pkgs/spam"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/submissions"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/workers"
+	"github.com/redis/go-redis/v9"
 	log "github.com/sirupsen/logrus"
 )
 
 // detectPrimaryComponent identifies the main component role for logging purposes
-func detectPrimaryComponent(enableListener, enableDequeuer, enableFinalizer, enableBatchAggregation, enableEventMonitor bool) string {
+func detectPrimaryComponent(enableListener, enableDequeuer, enableFinalizer, enableBatchAggregation, enableEventMonitor, enableProtocolStateCacher bool) string {
 	// Count enabled components
 	enabledCount := 0
 	primaryComponent := "unknown"
@@ -63,6 +68,10 @@ func detectPrimaryComponent(enableListener, enableDequeuer, enableFinalizer, ena
 		enabledCount++
 		primaryComponent = "event-monitor"
 	}
+	if enableProtocolStateCacher {
+		enabledCount++
+		primaryComponent = "protocol-state-cacher"
+	}
 
 	// If multiple components are enabled, return "multi-component"
 	if enabledCount > 1 {
@@ -85,6 +94,8 @@ func getComponentEmoji(component string) string {
 		return "📡"
 	case "batch-aggregator":
 		return "🔄"
+	case "protocol-state-cacher":
+		return "💾"
 	case "multi-component":
 		return "🔧"
 	default:
@@ -114,13 +125,15 @@ type UnifiedSequencer struct {
 	dequeuer     *submissions.Dequeuer
 	batchGen     *consensus.DummyBatchGenerator
 	eventMonitor *eventmonitor.EventMonitor
-	p2pConsensus *consensus.P2PConsensus // P2P consensus handler
+	p2pConsensus *consensus.P2PConsensus   // P2P consensus handler
+	cacher       *protocolstate.Cacher     // Protocol state cacher for accessing SlotManager
+	blockPoll    *blockpoller.BlockPoller  // Shared block poller for all event consumers
 
 	// Configuration
-	config          *config.Settings
-	sequencerID     string
+	config           *config.Settings
+	sequencerID      string
 	primaryComponent string
-	wg              sync.WaitGroup
+	wg               sync.WaitGroup
 }
 
 // parseEpochID parses epoch ID from various formats (string, scientific notation)
@@ -169,7 +182,7 @@ func main() {
 	enableEventMonitor := cfg.EnableEventMonitor
 
 	// Detect primary component for clear identification
-	primaryComponent := detectPrimaryComponent(enableListener, enableDequeuer, enableFinalizer, enableBatchAggregation, enableEventMonitor)
+	primaryComponent := detectPrimaryComponent(enableListener, enableDequeuer, enableFinalizer, enableBatchAggregation, enableEventMonitor, cfg.EnableProtocolStateCacher)
 	componentEmoji := getComponentEmoji(primaryComponent)
 
 	// Component-specific startup banner
@@ -178,11 +191,24 @@ func main() {
 		log.Infof("🔧 MULTI-COMPONENT SEQUENCER STARTING")
 		log.Infof("========================================")
 		log.Infof("Components enabled:")
-		if enableListener { log.Infof("  - Listener: %v", enableListener) }
-		if enableDequeuer { log.Infof("  - Dequeuer: %v", enableDequeuer) }
-		if enableFinalizer { log.Infof("  - Finalizer: %v", enableFinalizer) }
-		if enableBatchAggregation { log.Infof("  - Batch Aggregation: %v", enableBatchAggregation) }
-		if enableEventMonitor { log.Infof("  - Event Monitor: %v", enableEventMonitor) }
+		if enableListener {
+			log.Infof("  - Listener: %v", enableListener)
+		}
+		if enableDequeuer {
+			log.Infof("  - Dequeuer: %v", enableDequeuer)
+		}
+		if enableFinalizer {
+			log.Infof("  - Finalizer: %v", enableFinalizer)
+		}
+		if enableBatchAggregation {
+			log.Infof("  - Batch Aggregation: %v", enableBatchAggregation)
+		}
+		if enableEventMonitor {
+			log.Infof("  - Event Monitor: %v", enableEventMonitor)
+		}
+		if cfg.EnableProtocolStateCacher {
+			log.Infof("  - Protocol State Cacher: %v", cfg.EnableProtocolStateCacher)
+		}
 	} else {
 		componentName := strings.ToUpper(strings.ReplaceAll(primaryComponent, "-", " "))
 		log.Infof("========================================")
@@ -196,7 +222,7 @@ func main() {
 
 	// Initialize Redis if any component needs it
 	var redisClient *redis.Client
-	if enableListener || enableDequeuer || enableFinalizer || enableEventMonitor {
+	if enableListener || enableDequeuer || enableFinalizer || enableEventMonitor || cfg.EnableProtocolStateCacher {
 		redisAddr := fmt.Sprintf("%s:%s", cfg.RedisHost, cfg.RedisPort)
 		componentPrefix := strings.ToUpper(primaryComponent)
 		log.Infof("[%s] Connecting to Redis at %s (DB: %d)", componentPrefix, redisAddr, cfg.RedisDB)
@@ -233,7 +259,8 @@ func main() {
 		log.Infof("Deduplicator initialized with local cache size %d and TTL %v", localCacheSize, dedupTTL)
 	}
 
-	// Initialize P2P if listener or consensus is enabled
+	// Initialize P2P if listener or batch aggregation is enabled
+	// Note: Spam protection P2P is handled by separate spam-aggregator component
 	var h host.Host
 	var ps *pubsub.PubSub
 	if enableListener || enableBatchAggregation {
@@ -256,25 +283,30 @@ func main() {
 		}
 		log.Infof("Connection manager configured: LowWater=%d, HighWater=%d", cfg.ConnManagerLowWater, cfg.ConnManagerHighWater)
 
+		// Create RFC1918 connection gater to block reserved IP connections
+		// This is required by Hetzner to prevent scanning of internal networks
+		reservedIPGater := &p2p.RFC1918ConnectionGater{}
+
 		// Build libp2p options
 		opts := []libp2p.Option{
 			libp2p.Identity(privKey),
 			libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/0.0.0.0/tcp/%s", p2pPort)),
 			libp2p.EnableNATService(),
 			libp2p.ConnectionManager(connMgr),
+			libp2p.ConnectionGater(reservedIPGater), // Block reserved IP connections at dial/accept level
 		}
 
 		// Add public IP address if configured
+		// CRITICAL: Filter out internal Docker IPs - never advertise these to DHT/gossipsub
 		if cfg.P2PPublicIP != "" {
 			publicAddr, err := multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%s", cfg.P2PPublicIP, p2pPort))
 			if err != nil {
 				log.Errorf("Failed to create public multiaddr: %v", err)
 			} else {
-				opts = append(opts, libp2p.AddrsFactory(func(addrs []multiaddr.Multiaddr) []multiaddr.Multiaddr {
-					// Add the public address to the list
-					return append(addrs, publicAddr)
+				opts = append(opts, libp2p.AddrsFactory(func(_ []multiaddr.Multiaddr) []multiaddr.Multiaddr {
+					return []multiaddr.Multiaddr{publicAddr}
 				}))
-				log.Infof("Advertising public IP: %s", cfg.P2PPublicIP)
+				log.Infof("DHT advertises only /ip4/%s/tcp/%s (P2P public; no merged local/observed addrs)", cfg.P2PPublicIP, p2pPort)
 			}
 		}
 
@@ -296,9 +328,17 @@ func main() {
 			log.Fatalf("Failed to bootstrap DHT: %v", err)
 		}
 
-		// Connect to bootstrap if configured
+		// Connect to bootstrap if configured (filter reserved IPs)
 		if len(cfg.BootstrapPeers) > 0 {
-			connectToBootstrap(ctx, h, cfg.BootstrapPeers[0])
+			for i, bootstrapAddr := range cfg.BootstrapPeers {
+				// Filter out bootstrap peers with reserved IP addresses
+				maddr, err := multiaddr.NewMultiaddr(bootstrapAddr)
+				if err == nil && p2p.HasReservedIPAddress(maddr) {
+					log.Warnf("Skipping bootstrap peer %d with reserved IP: %s", i+1, bootstrapAddr)
+					continue
+				}
+				connectToBootstrap(ctx, h, bootstrapAddr)
+			}
 		}
 
 		// Start discovery on rendezvous point
@@ -373,6 +413,39 @@ func main() {
 
 		log.Infof("🔑 Gossipsub parameter hash: %s (unified sequencer)", paramHash)
 		log.Info("Initialized gossipsub with standardized snapshot submissions mesh parameters")
+
+		// Periodically tag only mesh peers to protect them from connection manager pruning
+		// This prevents DSV nodes from pruning legitimate publishers (local collectors) in the mesh
+		go func() {
+			ticker := time.NewTicker(10 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					if connMgr := h.ConnManager(); connMgr != nil && ps != nil {
+						meshPeers := make(map[peer.ID]bool)
+
+						// Collect mesh peers from both topics
+						for _, peerID := range ps.ListPeers(discoveryTopic) {
+							meshPeers[peerID] = true
+							connMgr.TagPeer(peerID, "mesh-peer", 50) // Medium priority
+						}
+						for _, peerID := range ps.ListPeers(submissionsTopic) {
+							if !meshPeers[peerID] {
+								meshPeers[peerID] = true
+								connMgr.TagPeer(peerID, "mesh-peer", 50) // Medium priority
+							}
+						}
+
+						if len(meshPeers) > 0 {
+							log.Debugf("Tagged %d mesh peers to protect from pruning", len(meshPeers))
+						}
+					}
+				}
+			}
+		}()
 	}
 
 	// Initialize IPFS client if finalizer is enabled
@@ -429,9 +502,179 @@ func main() {
 		primaryComponent:       primaryComponent,
 	}
 
+	// Wait for cold sync completion if slot validation is enabled
+	// This applies to ALL components, not just dequeuer, since slot validation
+	// affects the entire node's ability to process submissions correctly
+	var snapshotterStateAddr common.Address
+	if cfg.EnableSlotValidation && redisClient != nil {
+		if !cfg.EnableProtocolStateCacher {
+			log.Fatal("ENABLE_PROTOCOL_STATE_CACHER must be true when ENABLE_SLOT_VALIDATION is true")
+		}
+
+		// Get SnapshotterState address from ProtocolState contract (needed for Redis key)
+		rpcConfig := cfg.ToRPCConfig()
+		if rpcConfig == nil || len(rpcConfig.Nodes) == 0 {
+			log.Fatal("POWERLOOM_RPC_NODES must be configured for slot validation")
+		}
+
+		rpcHelper := rpchelper.NewRPCHelper(rpcConfig)
+		if err := rpcHelper.Initialize(context.Background()); err != nil {
+			log.Fatalf("Failed to initialize RPC helper for slot validation: %v", err)
+		}
+
+		var err error
+		snapshotterStateAddr, err = protocolstate.GetSnapshotterStateAddress(
+			context.Background(),
+			rpcHelper,
+			cfg.ProtocolStateContract,
+			cfg.ContractABIPath,
+		)
+		if err != nil {
+			log.Fatalf("Failed to get SnapshotterState address: %v", err)
+		}
+
+		// Wait for cacher service to complete cold sync (max 10 minutes)
+		if err := protocolstate.WaitForColdSyncCompletion(
+			context.Background(),
+			redisClient,
+			cfg.ProtocolStateContract,
+			snapshotterStateAddr.Hex(),
+			cfg.SlotSyncInterval,
+			10*time.Minute,
+		); err != nil {
+			log.Fatalf("Failed to wait for cold sync completion: %v", err)
+		}
+	}
+
+	// --- Shared RPC Helper ---
+	// Create a single RPC helper shared by cacher, event monitor, and BlockPoller.
+	var sharedRPCHelper *rpchelper.RPCHelper
+	needsRPC := (cfg.EnableProtocolStateCacher || enableEventMonitor) && redisClient != nil
+	if needsRPC {
+		rpcConfig := cfg.ToRPCConfig()
+		if rpcConfig == nil || len(rpcConfig.Nodes) == 0 {
+			log.Fatal("POWERLOOM_RPC_NODES must be configured for protocol state cacher / event monitor")
+		}
+		if rpcConfig.RequestTimeout == 0 {
+			rpcConfig.RequestTimeout = 30 * time.Second
+		}
+		if rpcConfig.MaxRetries == 0 {
+			rpcConfig.MaxRetries = 3
+		}
+		sharedRPCHelper = rpchelper.NewRPCHelper(rpcConfig)
+		if err := sharedRPCHelper.Initialize(context.Background()); err != nil {
+			log.Fatalf("Failed to initialize shared RPC helper: %v", err)
+		}
+		log.Info("✅ Shared RPC helper initialized")
+	}
+
+	// --- BlockPoller ---
+	// Create single BlockPoller when either cacher or event monitor is enabled.
+	if needsRPC {
+		bp, err := blockpoller.New(&blockpoller.Config{
+			RPCHelper:     sharedRPCHelper,
+			RedisClient:   redisClient,
+			PollInterval:  1 * time.Second,
+			MaxBlockRange: 1000,
+		})
+		if err != nil {
+			log.Fatalf("Failed to create BlockPoller: %v", err)
+		}
+		sequencer.blockPoll = bp
+		log.Info("✅ BlockPoller created (1s interval)")
+	}
+
+	// --- Protocol State Cacher ---
+	if cfg.EnableProtocolStateCacher && redisClient != nil {
+		var err error
+		if snapshotterStateAddr == (common.Address{}) {
+			snapshotterStateAddr, err = protocolstate.GetSnapshotterStateAddress(
+				context.Background(),
+				sharedRPCHelper,
+				cfg.ProtocolStateContract,
+				cfg.ContractABIPath,
+			)
+			if err != nil {
+				log.Fatalf("Failed to get SnapshotterState address: %v", err)
+			}
+		}
+		log.Infof("✅ SnapshotterState contract address: %s", snapshotterStateAddr.Hex())
+
+		cacherCfg := &protocolstate.Config{
+			RPCHelper:                sharedRPCHelper,
+			ProtocolStateContract:    cfg.ProtocolStateContract,
+			SnapshotterStateContract: snapshotterStateAddr.Hex(),
+			ContractABIPath:          cfg.ContractABIPath,
+			RedisClient:              redisClient,
+			SlotSyncInterval:         cfg.SlotSyncInterval,
+			SlotSyncBatchSize:        cfg.SlotSyncBatchSize,
+			EventGapThresholdBlocks:  cfg.EventGapThresholdBlocks,
+			ForceFullColdSync:        cfg.ForceFullColdSync,
+		}
+
+		cacher, err := protocolstate.NewCacher(cacherCfg)
+		if err != nil {
+			log.Fatalf("Failed to create protocol state cacher: %v", err)
+		}
+		sequencer.cacher = cacher
+
+		log.Info("🔄 Starting protocol state cacher cold sync...")
+		if err := cacher.WaitForColdSync(context.Background()); err != nil {
+			log.Fatalf("Cold sync failed: %v", err)
+		}
+
+		// Register slot event processor as BlockPoller consumer
+		ep := cacher.GetEventProcessor()
+		snapshotterChangedSig, nodeMintedSig, nodeBurnedSig := ep.EventSignatures()
+		slotQueries := []blockpoller.FilterQuery{
+			{Addresses: []common.Address{ep.ContractAddress()}, Topics: [][]common.Hash{{snapshotterChangedSig}}},
+			{Addresses: []common.Address{ep.ContractAddress()}, Topics: [][]common.Hash{{nodeMintedSig}}},
+			{Addresses: []common.Address{ep.ContractAddress()}, Topics: [][]common.Hash{{nodeBurnedSig}}},
+		}
+		slotConsumer := sequencer.blockPoll.RegisterConsumer(
+			"SlotEvents", slotQueries, ep.HandleBlockPollerLogs, 1,
+			cacher.RedisKeyPrefix(),
+		)
+
+		// Initialize consumer start block if no persisted value
+		if currentBlock, err := sharedRPCHelper.BlockNumber(context.Background()); err == nil && currentBlock > 0 {
+			sequencer.blockPoll.InitializeConsumerBlock(slotConsumer, currentBlock-1)
+		}
+
+		sequencer.wg.Add(1)
+		go func() {
+			defer sequencer.wg.Done()
+			cacher.Start(sequencer.ctx)
+		}()
+		log.Info("✅ Protocol state cacher started")
+	}
+
+	// Initialize spam protection components (if enabled)
+	// Dequeuer only needs local components (tracker, rateLimiter, flagging) - no P2P needed
+	// Spam-aggregator component handles all P2P functionality (aggregator, reporter)
+	var spamComponents *spam.SpamComponents
+	if cfg.EnableSpamProtection && redisClient != nil {
+		var err error
+		// Pass nil for pubsub - dequeuer doesn't need P2P, spam-aggregator component handles it
+		spamComponents, err = spam.InitializeSpamProtection(ctx, cfg, redisClient, keyBuilder, nil, sequencerID)
+		if err != nil {
+			log.Errorf("Failed to initialize spam protection: %v (continuing without spam protection)", err)
+			spamComponents = nil
+		} else {
+			log.Info("✅ Spam protection components initialized (local tracking only - P2P handled by spam-aggregator component)")
+		}
+	}
+
 	// Initialize components based on flags
 	if enableDequeuer && redisClient != nil {
-		dequeuer, err := submissions.NewDequeuer(redisClient, keyBuilder, sequencerID, cfg.ChainID, cfg.ProtocolStateContract, cfg.EnableSlotValidation)
+		// Get SlotManager from cacher if available (for on-demand slot fetching)
+		var slotManager *protocolstate.SlotManager
+		if sequencer.cacher != nil {
+			slotManager = sequencer.cacher.GetSlotManager()
+			log.Debug("SlotManager available for on-demand slot fetching")
+		}
+
+		dequeuer, err := submissions.NewDequeuer(redisClient, keyBuilder, sequencerID, cfg.ChainID, cfg.ProtocolStateContract, snapshotterStateAddr, cfg.EnableSlotValidation, spamComponents, slotManager)
 		if err != nil {
 			log.Fatalf("Failed to create dequeuer: %v", err)
 		}
@@ -456,45 +699,60 @@ func main() {
 	}
 
 	if enableEventMonitor && redisClient != nil {
-		// Initialize RPC Helper with Powerloom chain config
-		rpcConfig := cfg.ToRPCConfig()
-		if rpcConfig == nil || len(rpcConfig.Nodes) == 0 {
-			log.Fatal("POWERLOOM_RPC_NODES must be configured for event monitoring")
-		}
-
-		// Set default timeouts if not configured
-		if rpcConfig.RequestTimeout == 0 {
-			rpcConfig.RequestTimeout = 30 * time.Second
-		}
-		if rpcConfig.MaxRetries == 0 {
-			rpcConfig.MaxRetries = 3
-		}
-
-		rpcHelper := rpchelper.NewRPCHelper(rpcConfig)
-		if err := rpcHelper.Initialize(context.Background()); err != nil {
-			log.Fatalf("Failed to initialize RPC helper: %v", err)
-		}
-
-		// Create event monitor config
 		monitorCfg := &eventmonitor.Config{
-			RPCHelper:             rpcHelper,
+			RPCHelper:             sharedRPCHelper,
 			ContractAddress:       cfg.ProtocolStateContract,
 			ContractABIPath:       cfg.ContractABIPath,
 			RedisClient:           redisClient,
-			WindowDuration:        cfg.SubmissionWindowDuration, // Use configured duration
+			WindowDuration:        cfg.Level1FinalizationDelay,
 			StartBlock:            cfg.EventStartBlock,
 			PollInterval:          cfg.EventPollInterval,
 			DataMarkets:           cfg.DataMarketAddresses,
 			MaxWindows:            cfg.MaxConcurrentWindows,
 			FinalizationBatchSize: cfg.FinalizationBatchSize,
+
+			// VPA Configuration
+			VPAContractAddress:   cfg.VPAContractAddress,
+			VPAValidatorAddress:  cfg.VPAValidatorAddress,
+			VPAValidatorNodeID:   cfg.VPAValidatorNodeID,
+			VPARPCURL:            strings.Join(cfg.RPCNodes, ","),
+			ProtocolState:       cfg.ProtocolStateContract,
+
+			// Window Config Configuration
+			WindowConfigCacheTTL: 5 * time.Minute,
+			EstimatedMaxPriority: 10,
+
+			// Spam protection components
+			SpamComponents: spamComponents,
 		}
 
 		var err error
 		sequencer.eventMonitor, err = eventmonitor.NewEventMonitor(monitorCfg)
 		if err != nil {
 			log.Errorf("Failed to create event monitor: %v", err)
-			// Don't fail completely, just disable event monitor
 			sequencer.enableEventMonitor = false
+		} else if sequencer.blockPoll != nil {
+			// Register event monitor as BlockPoller consumer
+			bpQueries := sequencer.eventMonitor.GetBlockPollerQueries()
+			pollerQueries := make([]blockpoller.FilterQuery, 0, len(bpQueries))
+			for _, q := range bpQueries {
+				pollerQueries = append(pollerQueries, blockpoller.FilterQuery{
+					Addresses: q.Addresses,
+					Topics:    q.Topics,
+				})
+			}
+
+			redisPrefix := cfg.ProtocolStateContract
+			emConsumer := sequencer.blockPoll.RegisterConsumer(
+				"EventMonitor", pollerQueries, sequencer.eventMonitor.HandleBlockPollerLogs, 1,
+				redisPrefix,
+			)
+
+			// Initialize consumer start block if no persisted value
+			if currentBlock, err := sharedRPCHelper.BlockNumber(context.Background()); err == nil && currentBlock > 0 {
+				sequencer.blockPoll.InitializeConsumerBlock(emConsumer, currentBlock-1)
+			}
+			log.Info("✅ Event monitor registered as BlockPoller consumer")
 		}
 	}
 
@@ -508,6 +766,9 @@ func main() {
 
 	componentPrefix := strings.ToUpper(sequencer.primaryComponent)
 	log.Infof("[%s] Shutting down %s component", componentPrefix, componentPrefix)
+	if sequencer.blockPoll != nil {
+		sequencer.blockPoll.Stop()
+	}
 	cancel()
 	sequencer.wg.Wait()
 }
@@ -572,13 +833,35 @@ func (s *UnifiedSequencer) Start() {
 		}()
 	}
 
-	// Start event monitor component
+	// Start BlockPoller (shared by cacher + event monitor)
+	if s.blockPoll != nil {
+		log.Infof("[%s] Starting BlockPoller...", componentPrefix)
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			s.blockPoll.Start()
+		}()
+	}
+
+	// Start event monitor component (log dispatch handled by BlockPoller)
 	if s.enableEventMonitor && s.eventMonitor != nil {
 		log.Infof("[%s] Starting Event Monitor component...", componentPrefix)
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
-			s.runEventMonitor()
+			if err := s.eventMonitor.Start(); err != nil {
+				log.Errorf("Event monitor startup error: %v", err)
+			}
+			<-s.ctx.Done()
+		}()
+	}
+
+	// Start monitoring timeline cleanup (removes old entries from simulation/heartbeat timelines)
+	if s.redisClient != nil && s.keyBuilder != nil {
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			s.cleanupMonitoringTimelines()
 		}()
 	}
 
@@ -858,36 +1141,36 @@ func (s *UnifiedSequencer) queueSubmissionFromP2P(data []byte, topic string, pee
 				// Pipeline for monitoring metrics
 				pipe := s.redisClient.Pipeline()
 
-			// 1. Add to timeline (sorted set, no TTL - pruned daily)
-			pipe.ZAdd(s.ctx, s.keyBuilder.MetricsSubmissionsTimeline(), redis.Z{
-				Score:  float64(timestamp),
-				Member: submissionID,
-			})
+				// 1. Add to timeline (sorted set, no TTL - pruned daily)
+				pipe.ZAdd(s.ctx, s.keyBuilder.MetricsSubmissionsTimeline(), redis.Z{
+					Score:  float64(timestamp),
+					Member: submissionID,
+				})
 
-			// 2. Store submission details with TTL (1 hour)
-			submissionData := map[string]interface{}{
-				"epoch_id":    epochID,
-				"project_id":  projectID,
-				"peer_id":     peerID[:16],
-				"timestamp":   timestamp,
-				"data_market": s.config.DataMarketAddresses[0],
-			}
-			jsonData, _ := json.Marshal(submissionData)
-			pipe.SetEx(s.ctx, fmt.Sprintf("metrics:submission:%s", submissionID), string(jsonData), time.Hour)
+				// 2. Store submission details with TTL (1 hour)
+				submissionData := map[string]interface{}{
+					"epoch_id":    epochID,
+					"project_id":  projectID,
+					"peer_id":     peerID[:16],
+					"timestamp":   timestamp,
+					"data_market": s.config.DataMarketAddresses[0],
+				}
+				jsonData, _ := json.Marshal(submissionData)
+				pipe.SetEx(s.ctx, fmt.Sprintf("metrics:submission:%s", submissionID), string(jsonData), time.Hour)
 
-			// 3. Update hourly counter
-			pipe.HIncrBy(s.ctx, fmt.Sprintf("metrics:hourly:%s:submissions", hour), "total", 1)
-			pipe.Expire(s.ctx, fmt.Sprintf("metrics:hourly:%s:submissions", hour), 2*time.Hour)
+				// 3. Update hourly counter
+				pipe.HIncrBy(s.ctx, fmt.Sprintf("metrics:hourly:%s:submissions", hour), "total", 1)
+				pipe.Expire(s.ctx, fmt.Sprintf("metrics:hourly:%s:submissions", hour), 2*time.Hour)
 
-			// 4. Add to submissions timeline
-			timestamp = time.Now().Unix()
-			pipe.ZAdd(s.ctx, s.keyBuilder.MetricsSubmissionsTimeline(), redis.Z{
-				Score:  float64(timestamp),
-				Member: fmt.Sprintf("received:%s:%d", submissionID, timestamp),
-			})
+				// 4. Add to submissions timeline
+				timestamp = time.Now().Unix()
+				pipe.ZAdd(s.ctx, s.keyBuilder.MetricsSubmissionsTimeline(), redis.Z{
+					Score:  float64(timestamp),
+					Member: fmt.Sprintf("received:%s:%d", submissionID, timestamp),
+				})
 
-			// 5. Publish state change event
-			pipe.Publish(s.ctx, "state:change", fmt.Sprintf("submission:received:%s", submissionID))
+				// 5. Publish state change event
+				pipe.Publish(s.ctx, "state:change", fmt.Sprintf("submission:received:%s", submissionID))
 
 				// Execute pipeline (ignore errors - monitoring is non-critical)
 				if _, err := pipe.Exec(s.ctx); err != nil {
@@ -953,10 +1236,29 @@ func (s *UnifiedSequencer) runDequeuerWorker(workerID int) {
 				}
 				if dataStr, ok := wrappedSubmission["data"].(string); ok {
 					submissionData = []byte(dataStr)
+				} else if dataMap, ok := wrappedSubmission["data"].(map[string]interface{}); ok {
+					var err error
+					submissionData, err = json.Marshal(dataMap)
+					if err != nil {
+						log.Warnf("Worker %d: Failed to marshal data map: %v", workerID, err)
+						submissionData = rawSubmissionData
+					}
+				} else if dataArray, ok := wrappedSubmission["data"].([]interface{}); ok {
+					var err error
+					submissionData, err = json.Marshal(dataArray)
+					if err != nil {
+						log.Warnf("Worker %d: Failed to marshal data array: %v", workerID, err)
+						submissionData = rawSubmissionData
+					}
 				} else if data, ok := wrappedSubmission["data"].([]byte); ok {
 					submissionData = data
 				} else {
-					submissionData = rawSubmissionData // fallback to raw data
+					var err error
+					submissionData, err = json.Marshal(wrappedSubmission["data"])
+					if err != nil {
+						log.Warnf("Worker %d: Unexpected data type in wrapped submission, using raw data: %T", workerID, wrappedSubmission["data"])
+						submissionData = rawSubmissionData
+					}
 				}
 			} else {
 				// Legacy format - no wrapper
@@ -965,13 +1267,37 @@ func (s *UnifiedSequencer) runDequeuerWorker(workerID int) {
 
 			// First try to parse as P2P batch submission
 			var p2pSubmission submissions.P2PSnapshotSubmission
-			if err := json.Unmarshal(submissionData, &p2pSubmission); err == nil && p2pSubmission.Submissions != nil {
+			unmarshalErr := json.Unmarshal(submissionData, &p2pSubmission)
+			if unmarshalErr == nil && p2pSubmission.Submissions != nil {
 				// This is a P2P batch submission
 				log.Debugf("Worker %d: Processing P2P batch with %d submissions for epoch %d",
 					workerID, len(p2pSubmission.Submissions), p2pSubmission.EpochID)
 
+				// Detect heartbeat BEFORE data market validation
+				// Heartbeats are epoch 0 messages with empty CID (not EIP-712 signed, peer ID only)
+				if p2pSubmission.EpochID == 0 {
+					isHeartbeat := false
+					if len(p2pSubmission.Submissions) == 0 {
+						isHeartbeat = true
+					} else if len(p2pSubmission.Submissions) == 1 && p2pSubmission.Submissions[0].Request.SnapshotCid == "" {
+						isHeartbeat = true
+					}
+
+					if isHeartbeat {
+						s.cacheHeartbeat(peerID)
+						log.Debugf("Worker %d: Cached heartbeat from peer %s (epoch=0, batch)", workerID, peerID[:min(16, len(peerID))])
+						continue // Skip further processing of this heartbeat
+					}
+				}
+
 				// Process each submission in the batch
 				for _, submission := range p2pSubmission.Submissions {
+					// Validate data market address - reject if not configured
+					if !s.isValidDataMarket(submission.DataMarket) {
+						log.Debugf("Worker %d: Rejected submission for unconfigured data market: Epoch=%d, Market=%s", workerID, submission.Request.EpochId, submission.DataMarket)
+						continue
+					}
+
 					// Generate submission ID
 					submissionID := fmt.Sprintf("%d-%s-%d-%s",
 						submission.Request.EpochId,
@@ -979,38 +1305,60 @@ func (s *UnifiedSequencer) runDequeuerWorker(workerID int) {
 						submission.Request.SlotId,
 						submission.Request.SnapshotCid)
 
-					// Log processing
-					log.Infof("Worker %d processing: Epoch=%d, Project=%s, Slot=%d, Market=%s, CID=%s",
-						workerID, submission.Request.EpochId, submission.Request.ProjectId,
-						submission.Request.SlotId, submission.DataMarket, submission.Request.SnapshotCid)
-
 					// Prepare metadata for dequeuer
 					metaData := map[string]interface{}{
 						"peer_id": peerID,
 					}
 
-					// Process and store the submission
+					// Process the submission
 					if s.dequeuer != nil {
-						if err := s.dequeuer.ProcessSubmission(submission, submissionID, metaData); err != nil {
+						snapshotterAddr, err := s.dequeuer.ProcessSubmission(submission, submissionID, metaData)
+						if err != nil {
 							// Epoch 0 heartbeats are expected to fail validation - log as debug, not error
 							if strings.Contains(err.Error(), "epoch 0 heartbeat") {
 								log.Debugf("Worker %d: Skipped epoch 0 heartbeat (P2P mesh maintenance)", workerID)
 							} else {
-								log.Errorf("Worker %d: Failed to process submission %s: %v", workerID, submissionID, err)
+								log.Errorf("Worker %d: Failed to process submission: Epoch=%d, Project=%s, Slot=%d, Market=%s, CID=%s, Peer=%s, Snapshotter=%s: %v", workerID, submission.Request.EpochId, submission.Request.ProjectId,
+									submission.Request.SlotId, submission.DataMarket, submission.Request.SnapshotCid, peerID, snapshotterAddr, err)
 							}
 						} else {
-							log.Debugf("Worker %d: Successfully processed and stored submission %s", workerID, submissionID)
+							// Log with snapshotter address extracted from EIP-712 signature
+							log.Infof("Worker %d processed submission: Epoch=%d, Project=%s, Slot=%d, Market=%s, CID=%s, Peer=%s, Snapshotter=%s",
+								workerID, submission.Request.EpochId, submission.Request.ProjectId,
+								submission.Request.SlotId, submission.DataMarket, submission.Request.SnapshotCid, peerID, snapshotterAddr)
 						}
 					}
 				}
 			} else {
+				// P2P batch unmarshalling failed or Submissions was nil - log and try single submission format
+				if unmarshalErr != nil {
+					log.Warnf("Worker %d: Failed to unmarshal as P2P batch submission: %v", workerID, unmarshalErr)
+					log.Debugf("Worker %d: Raw submission data (first 500 bytes): %s", workerID, string(submissionData[:min(500, len(submissionData))]))
+				} else if p2pSubmission.Submissions == nil {
+					// Check if this is a heartbeat (epoch 0 with nil submissions = discovery heartbeat)
+					if p2pSubmission.EpochID == 0 {
+						s.cacheHeartbeat(peerID)
+						log.Debugf("Worker %d: Cached heartbeat from peer %s (epoch=0, nil submissions)", workerID, peerID[:min(16, len(peerID))])
+						continue // Skip further processing
+					}
+					log.Debugf("Worker %d: P2P batch submission has nil Submissions array, trying single submission format", workerID)
+				}
+
 				// Try parsing as single submission (fallback)
 				var submission submissions.SnapshotSubmission
 				if err := json.Unmarshal(submissionData, &submission); err != nil {
-					log.Errorf("Worker %d: Failed to parse submission: %v", workerID, err)
+					log.Errorf("Worker %d: Failed to parse submission (both P2P batch and single formats failed): %v", workerID, err)
 					log.Debugf("Worker %d: Raw submission data: %s", workerID, string(submissionData[:min(200, len(submissionData))]))
 					continue
 				}
+
+				// Validate data market address - reject if not configured
+				if !s.isValidDataMarket(submission.DataMarket) {
+					log.Debugf("Worker %d: Rejected submission for unconfigured data market: Epoch=%d, Market=%s", workerID, submission.Request.EpochId, submission.DataMarket)
+					continue
+				}
+
+				log.Debugf("Worker %d: Parsed single submission: Epoch=%d, Project=%s, Market=%s", workerID, submission.Request.EpochId, submission.Request.ProjectId, submission.DataMarket)
 
 				// Generate submission ID
 				submissionID := fmt.Sprintf("%d-%s-%d-%s",
@@ -1019,33 +1367,118 @@ func (s *UnifiedSequencer) runDequeuerWorker(workerID int) {
 					submission.Request.SlotId,
 					submission.Request.SnapshotCid)
 
-				// Log processing
-				log.Infof("Worker %d processing: Epoch=%d, Project=%s, Slot=%d, Market=%s, CID=%s",
-					workerID, submission.Request.EpochId, submission.Request.ProjectId,
-					submission.Request.SlotId, submission.DataMarket, submission.Request.SnapshotCid)
-
 				// Prepare metadata for dequeuer
 				metaData := map[string]interface{}{
 					"peer_id": peerID,
 				}
 
-				// Process and store the submission
+				// Process the submission
 				if s.dequeuer != nil {
-					if err := s.dequeuer.ProcessSubmission(&submission, submissionID, metaData); err != nil {
+					snapshotterAddr, err := s.dequeuer.ProcessSubmission(&submission, submissionID, metaData)
+					if err != nil {
 						// Epoch 0 heartbeats are expected to fail validation - log as debug, not error
 						if strings.Contains(err.Error(), "epoch 0 heartbeat") {
 							log.Debugf("Worker %d: Skipped epoch 0 heartbeat (P2P mesh maintenance)", workerID)
 						} else {
-							log.Errorf("Worker %d: Failed to process submission %s: %v", workerID, submissionID, err)
+							log.Errorf("Worker %d: Failed to process submission: Epoch=%d, Project=%s, Slot=%d, Market=%s, CID=%s, Peer=%s, Snapshotter=%s: %v", workerID, submission.Request.EpochId, submission.Request.ProjectId,
+								submission.Request.SlotId, submission.DataMarket, submission.Request.SnapshotCid, peerID, snapshotterAddr, err)
 						}
 					} else {
-						log.Debugf("Worker %d: Successfully processed and stored submission %s", workerID, submissionID)
+						// Log with snapshotter address extracted from EIP-712 signature
+						log.Infof("Worker %d processed submission: Epoch=%d, Project=%s, Slot=%d, Market=%s, CID=%s, Peer=%s, Snapshotter=%s",
+							workerID, submission.Request.EpochId, submission.Request.ProjectId,
+							submission.Request.SlotId, submission.DataMarket, submission.Request.SnapshotCid, peerID, snapshotterAddr)
 					}
 				} else {
 					log.Warnf("Worker %d: Dequeuer not initialized, skipping storage", workerID)
 				}
 			}
 		}
+	}
+}
+
+// cacheHeartbeat stores heartbeat messages (epoch 0 with empty CID) in Redis for monitoring.
+// Heartbeats are P2P mesh maintenance messages from local-collector - NOT EIP-712 signed.
+// Only peer ID is available (no snapshotter address). To correlate peer ID with snapshotter,
+// use simulation or submission data from other endpoints.
+func (s *UnifiedSequencer) cacheHeartbeat(peerID string) {
+	if s.redisClient == nil || s.keyBuilder == nil {
+		return // Redis not available
+	}
+
+	timestamp := time.Now().Unix()
+	entityID := fmt.Sprintf("hb:%s:%d", peerID, timestamp)
+
+	pipe := s.redisClient.Pipeline()
+
+	// Add to heartbeats timeline (ZSET sorted by timestamp)
+	pipe.ZAdd(s.ctx, s.keyBuilder.HeartbeatsTimeline(), redis.Z{
+		Score:  float64(timestamp),
+		Member: entityID,
+	})
+
+	// Add to peer index with 24h TTL (ZSET to track heartbeat frequency per peer)
+	peerKey := s.keyBuilder.HeartbeatsByPeer(peerID)
+	pipe.ZAdd(s.ctx, peerKey, redis.Z{
+		Score:  float64(timestamp),
+		Member: entityID,
+	})
+	pipe.Expire(s.ctx, peerKey, 24*time.Hour)
+
+	// Execute pipeline (ignore errors - heartbeat caching is non-critical)
+	pipe.Exec(s.ctx)
+}
+
+// cleanupMonitoringTimelines periodically removes old entries from simulation and heartbeat timelines.
+// This prevents unbounded growth of ZSET keys that don't have TTLs.
+// Retention periods: simulations=7 days (matches metadata TTL), heartbeats=24 hours (matches per-peer TTL)
+func (s *UnifiedSequencer) cleanupMonitoringTimelines() {
+	if s.redisClient == nil || s.keyBuilder == nil {
+		return
+	}
+
+	// Run initial cleanup immediately at startup
+	log.Info("Running initial monitoring timeline cleanup...")
+	s.doTimelineCleanup()
+
+	ticker := time.NewTicker(1 * time.Hour) // Run cleanup every hour
+	defer ticker.Stop()
+
+	log.Info("Started monitoring timeline cleanup goroutine (hourly)")
+
+	for {
+		select {
+		case <-s.ctx.Done():
+			log.Info("Stopping monitoring timeline cleanup")
+			return
+		case <-ticker.C:
+			s.doTimelineCleanup()
+		}
+	}
+}
+
+// doTimelineCleanup removes entries older than retention period from monitoring timelines
+func (s *UnifiedSequencer) doTimelineCleanup() {
+	ctx := context.Background()
+
+	// Simulation timeline: keep 7 days (matches metadata TTL)
+	simulationCutoff := time.Now().Add(-7 * 24 * time.Hour).Unix()
+	simRemoved, err := s.redisClient.ZRemRangeByScore(ctx, s.keyBuilder.SimulationsTimeline(),
+		"-inf", fmt.Sprintf("%d", simulationCutoff)).Result()
+	if err != nil {
+		log.Warnf("Failed to cleanup simulations timeline: %v", err)
+	} else if simRemoved > 0 {
+		log.Infof("Cleaned up %d old entries from simulations timeline (older than 7 days)", simRemoved)
+	}
+
+	// Heartbeat timeline: keep 24 hours (matches per-peer TTL)
+	heartbeatCutoff := time.Now().Add(-24 * time.Hour).Unix()
+	hbRemoved, err := s.redisClient.ZRemRangeByScore(ctx, s.keyBuilder.HeartbeatsTimeline(),
+		"-inf", fmt.Sprintf("%d", heartbeatCutoff)).Result()
+	if err != nil {
+		log.Warnf("Failed to cleanup heartbeats timeline: %v", err)
+	} else if hbRemoved > 0 {
+		log.Infof("Cleaned up %d old entries from heartbeats timeline (older than 24 hours)", hbRemoved)
 	}
 }
 
@@ -1134,6 +1567,20 @@ func (s *UnifiedSequencer) runFinalizationWorker(workerID int) {
 			batchID := int(batchPart["batch_id"].(float64))
 			totalBatches := int(batchPart["total_batches"].(float64))
 
+			// Extract data_market (mandatory field)
+			dataMarketRaw, ok := batchPart["data_market"]
+			if !ok {
+				log.Warnf("Worker %d: Skipping batch part without data_market field - old format not supported: epoch=%d, batch=%d", workerID, epochID, batchID)
+				continue
+			}
+			dataMarketStr, ok := dataMarketRaw.(string)
+			if !ok || dataMarketStr == "" {
+				log.Warnf("Worker %d: Skipping batch part without data_market field - old format not supported: epoch=%d, batch=%d", workerID, epochID, batchID)
+				continue
+			}
+			// Normalize to checksummed format
+			dataMarket := common.HexToAddress(dataMarketStr).Hex()
+
 			// Extract projects map (not project_ids array)
 			projects, ok := batchPart["projects"].(map[string]interface{})
 			if !ok {
@@ -1149,7 +1596,7 @@ func (s *UnifiedSequencer) runFinalizationWorker(workerID int) {
 			monitor.ProcessingStarted(batchInfo)
 
 			// Process this batch part with projects map
-			if err := s.processBatchPart(epochID, batchID, totalBatches, projects, monitor); err != nil {
+			if err := s.processBatchPart(epochID, batchID, totalBatches, projects, dataMarket, monitor); err != nil {
 				log.Errorf("Worker %d: Failed to process batch part %d for epoch %d: %v",
 					workerID, batchID, epochID, err)
 				monitor.ProcessingFailed(err)
@@ -1162,7 +1609,7 @@ func (s *UnifiedSequencer) runFinalizationWorker(workerID int) {
 	}
 }
 
-func (s *UnifiedSequencer) processBatchPart(epochID uint64, batchID int, totalBatches int, projects map[string]interface{}, _ *workers.WorkerMonitor) error {
+func (s *UnifiedSequencer) processBatchPart(epochID uint64, batchID int, totalBatches int, projects map[string]interface{}, dataMarket string, _ *workers.WorkerMonitor) error {
 	ctx := context.Background()
 
 	// Track batch part as processing
@@ -1245,9 +1692,15 @@ func (s *UnifiedSequencer) processBatchPart(epochID uint64, batchID int, totalBa
 		}
 	}
 
-	// Store batch part results
-	partKey := s.keyBuilder.BatchPart(fmt.Sprintf("%d", epochID), batchID)
-	partData, err := json.Marshal(partResults)
+	// Store batch part results with data_market
+	partResultsWithMeta := map[string]interface{}{
+		"data_market": dataMarket,
+		"projects":    partResults,
+	}
+	// Use KeyBuilder for the correct data market to ensure correct Redis key namespace
+	partKeyBuilder := rediskeys.NewKeyBuilder(s.config.ProtocolStateContract, dataMarket)
+	partKey := partKeyBuilder.BatchPart(fmt.Sprintf("%d", epochID), batchID)
+	partData, err := json.Marshal(partResultsWithMeta)
 	if err != nil {
 		return fmt.Errorf("failed to marshal batch part: %w", err)
 	}
@@ -1276,12 +1729,12 @@ func (s *UnifiedSequencer) processBatchPart(epochID uint64, batchID int, totalBa
 	// 2. Store part details with TTL
 	partMetricsKey := fmt.Sprintf("metrics:part:%s", partID)
 	partMetricsData := map[string]interface{}{
-		"epoch_id":       epochID,
-		"batch_id":       batchID,
-		"total_batches":  totalBatches,
-		"project_count":  len(projects),
-		"finalizer_id":   s.config.SequencerID,
-		"timestamp":      timestamp,
+		"epoch_id":      epochID,
+		"batch_id":      batchID,
+		"total_batches": totalBatches,
+		"project_count": len(projects),
+		"finalizer_id":  s.config.SequencerID,
+		"timestamp":     timestamp,
 	}
 	jsonData, _ := json.Marshal(partMetricsData)
 	pipe.SetEx(ctx, partMetricsKey, string(jsonData), time.Hour)
@@ -1300,12 +1753,13 @@ func (s *UnifiedSequencer) processBatchPart(epochID uint64, batchID int, totalBa
 		log.Debugf("Failed to write monitoring metrics: %v", err)
 	}
 
-	// Update progress tracking using keyBuilder
-	completedKey := s.keyBuilder.EpochPartsCompleted(fmt.Sprintf("%d", epochID))
+	// Update progress tracking - use the same KeyBuilder for the correct data market
+	completedKey := partKeyBuilder.EpochPartsCompleted(fmt.Sprintf("%d", epochID))
 	completed, _ := s.redisClient.Incr(ctx, completedKey).Result()
 
 	// Check if all parts are complete
-	if err := workers.UpdateBatchPartsProgress(s.redisClient, s.config.ProtocolStateContract, s.config.DataMarketAddresses[0], epochStr, int(completed), totalBatches); err != nil {
+	// Use the dataMarket from the batch part, not the first configured data market
+	if err := workers.UpdateBatchPartsProgress(s.redisClient, s.config.ProtocolStateContract, dataMarket, epochStr, int(completed), totalBatches); err != nil {
 		log.WithError(err).Error("Failed to update batch parts progress")
 	}
 
@@ -1754,17 +2208,22 @@ func connectToBootstrap(ctx context.Context, h host.Host, bootstrapAddr string) 
 	log.Infof("✅ Connected to bootstrap node: %s", peerInfo.ID)
 }
 
-func (s *UnifiedSequencer) runEventMonitor() {
-	log.Info("🔍 Starting event monitor for EpochReleased events")
-
-	// Start monitoring - this will handle submission windows
-	if err := s.eventMonitor.Start(); err != nil {
-		log.Errorf("Event monitor failed: %v", err)
-		return
+// isValidDataMarket checks if a data market address is in the configured list
+func (s *UnifiedSequencer) isValidDataMarket(dataMarketAddr string) bool {
+	if dataMarketAddr == "" {
+		return false
 	}
 
-	// Wait for context cancellation
-	<-s.ctx.Done()
-	s.eventMonitor.Stop()
-	log.Info("Event monitor stopped")
+	// Normalize to checksummed format for comparison
+	checksummedAddr := common.HexToAddress(dataMarketAddr).Hex()
+
+	// Check against configured data markets
+	for _, configuredMarket := range s.config.DataMarketAddresses {
+		if common.HexToAddress(configuredMarket).Hex() == checksummedAddr {
+			return true
+		}
+	}
+
+	return false
 }
+

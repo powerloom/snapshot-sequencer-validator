@@ -4,6 +4,13 @@
 
 The monitoring system provides comprehensive visibility into the batch processing pipeline, tracking data flow from submission collection through final aggregation.
 
+**Key Features:**
+- **Epoch-Centered Observability**: Complete state tracking for each epoch through all phases
+- **Gap Detection**: Automatic identification of epochs with missing finalizations
+- **Phase Tracking**: Real-time visibility into submission, finalization, aggregation, and on-chain phases
+- **Relayer-Py Integration**: Automatic transaction status tracking - relayer-py writes `onchain_status`, `onchain_tx_hash`, and `onchain_block_number` directly to Redis (no log parsing needed)
+- **Sorted Responses**: All timeline endpoints return epochs sorted by ID (most recent first)
+
 The system supports both P2PSnapshotSubmission batch format (multiple submissions per message) and single SnapshotSubmission format, with proper Redis key patterns for data organization.
 
 ## RESTful Monitor API
@@ -23,20 +30,75 @@ http://localhost:9091/swagger/index.html
 # - Protocol/market query parameter support
 ```
 
-### All 10 Monitoring Endpoints
+### All Monitoring Endpoints
 
 | Endpoint | Purpose | Query Parameters |
 |----------|---------|-----------------|
 | `/api/v1/health` | Service health check | None |
 | `/api/v1/dashboard/summary` | Real-time dashboard metrics | protocol, market |
-| `/api/v1/epochs/timeline` | Epoch progression timeline | protocol, market |
-| `/api/v1/batches/finalized` | Recently finalized batches | protocol, market |
+| `/api/v1/epochs/timeline` | Epoch progression timeline (sorted by epoch ID) | protocol, market, limit |
+| `/api/v1/epochs/{epochId}/status` | Complete epoch state with all phase information | protocol, market |
+| `/api/v1/epochs/{epochId}/submissions` | All submissions for an epoch (slot ID, peer ID, project ID, CID) | protocol, market |
+| `/api/v1/epochs/active` | Epochs currently in progress (queries timeline directly for accuracy) | protocol, market |
+| `/api/v1/epochs/gaps` | Identify epochs with missing finalizations | protocol, market, window_minutes |
+| `/api/v1/batches/finalized` | Recently finalized batches (with phase and onchain status) | protocol, market, level, epoch_id, limit |
 | `/api/v1/aggregation/results` | Network aggregation results | protocol, market |
 | `/api/v1/timeline/recent` | Recent activity feed | protocol, market |
 | `/api/v1/queues/status` | Queue monitoring | protocol, market |
 | `/api/v1/pipeline/overview` | Pipeline status summary | protocol, market |
 | `/api/v1/stats/daily` | Daily aggregated statistics | protocol, market |
 | `/api/v1/stats/hourly` | Hourly performance metrics | protocol, market |
+
+### Simulation and Heartbeat Tracking
+
+The monitoring system tracks simulation messages and heartbeat messages from snapshotters and local-collectors.
+
+**Key Distinction:**
+- **Simulation Messages**: Epoch 0 with real CID, EIP-712 signed - sent by snapshotters at startup to verify connectivity
+- **Heartbeat Messages**: Epoch 0 with empty CID, NOT EIP-712 signed - sent by local-collectors for P2P mesh maintenance
+
+#### Simulation Endpoints
+| Endpoint | Purpose |
+|----------|---------|
+| `/api/v1/simulations/recent` | Recent simulation messages (has snapshotter address from EIP-712 signature) |
+| `/api/v1/simulations/peer/:peerID` | Simulations from a specific peer |
+| `/api/v1/simulations/snapshotter/:address` | Simulations from a specific snapshotter address |
+
+#### Heartbeat Endpoints
+| Endpoint | Purpose |
+|----------|---------|
+| `/api/v1/heartbeats/recent` | Recent heartbeat messages (peer ID only, no snapshotter address) |
+| `/api/v1/heartbeats/peer/:peerID` | Heartbeats from a specific peer |
+
+**Important Note:** Heartbeat messages are NOT EIP-712 signed, so only peer ID is available. To correlate peer ID with snapshotter address, use simulation or submission data.
+
+#### Correlating Peer IDs with Snapshotter Addresses
+
+Since heartbeats don't contain EIP-712 signatures, use this workflow to correlate peer IDs:
+
+```bash
+# Step 1: Get simulations to find peer ID -> snapshotter address mapping
+curl "http://localhost:9091/api/v1/simulations/recent" | jq '.simulations[] | {peer_id, snapshotter_address}'
+
+# Alternative: Find peer ID from epoch submissions (also EIP-712 signed)
+curl "http://localhost:9091/api/v1/epochs/12345/submissions" | jq '.submissions[] | {peer_id, snapshotter}'
+
+# Step 2: Query heartbeats for the discovered peer ID
+curl "http://localhost:9091/api/v1/heartbeats/peer/12D3KooWxyz..."
+```
+
+**Example Monitoring Workflow:**
+
+```bash
+# Check if a peer is actively sending heartbeats
+curl "http://localhost:9091/api/v1/heartbeats/peer/12D3KooWExample" | jq '.count, .heartbeats[0:3]'
+
+# Find all peers that have sent simulations (and their snapshotter addresses)
+curl "http://localhost:9091/api/v1/simulations/recent?minutes=60" | jq '.simulations | group_by(.peer_id) | .[] | {peer_id: .[0].peer_id, snapshotter: .[0].snapshotter_address, count: length}'
+
+# Check heartbeat frequency for a known peer
+curl "http://localhost:9091/api/v1/heartbeats/peer/12D3KooWExample?limit=50" | jq '.heartbeats | [.[0].timestamp, .[-1].timestamp] | "\(.[0]) to \(.[1])"'
+```
 
 ### Using Query Parameters
 
@@ -55,11 +117,14 @@ curl "http://localhost:9091/api/v1/aggregation/results?market=[\"0x21cb57C1f2352
 
 ### Working Endpoints Status
 
-All 10 endpoints are operational with real data:
+All endpoints are operational with real data:
 - **Health Check**: Shows `data_fresh: true` with actual pipeline data
-- **Dashboard**: Real metrics with participation rates, current epoch status
-- **Epoch Timeline**: Actual epoch progression with correct status reading
-- **Finalized Batches**: Batch data with validator attribution and IPFS CIDs
+- **Dashboard**: Real metrics with participation rates, current epoch status, gap detection
+- **Epoch Timeline**: Actual epoch progression with correct status reading, sorted by epoch ID
+- **Epoch Status**: Complete epoch state with all phase transitions and on-chain status
+- **Active Epochs**: Real-time view of epochs currently in progress
+- **Epoch Gaps**: Identifies epochs with missing finalizations for troubleshooting
+- **Finalized Batches**: Batch data with validator attribution, IPFS CIDs, phase, and onchain status
 - **Aggregation Results**: Network-wide consensus with validator counting
 - **Timeline Activity**: Recent submissions and batch completions
 - **Queue Status**: Real-time queue depths and processing rates with accurate monitoring
@@ -106,10 +171,16 @@ curl "http://localhost:9091/api/v1/dashboard/summary"
 # 3. View recent epochs
 curl "http://localhost:9091/api/v1/epochs/timeline"
 
-# 4. Check finalized batches
+# 4. Check a specific epoch's status
+curl "http://localhost:9091/api/v1/epochs/23875280/status?protocol=0x3B5A0FB70ef68B5dd677C7d614dFB89961f97401&market=0xb5cE2F9B71e785e3eC0C45EDE06Ad95c3bb71a4d"
+
+# 5. Get all submissions for an epoch (with slot ID, peer ID, project ID, CID)
+curl "http://localhost:9091/api/v1/epochs/23875280/submissions?protocol=0x3B5A0FB70ef68B5dd677C7d614dFB89961f97401&market=0xb5cE2F9B71e785e3eC0C45EDE06Ad95c3bb71a4d"
+
+# 6. Check finalized batches
 curl "http://localhost:9091/api/v1/batches/finalized"
 
-# 5. Monitor network aggregation
+# 7. Monitor network aggregation
 curl "http://localhost:9091/api/v1/aggregation/results"
 ```
 
@@ -318,19 +389,28 @@ curl "http://localhost:9091/api/v1/health"
 # 2. Get dashboard summary
 curl "http://localhost:9091/api/v1/dashboard/summary"
 
-# 3. View recent epochs
+# 3. View recent epochs (sorted by epoch ID)
 curl "http://localhost:9091/api/v1/epochs/timeline"
 
-# 4. Check finalized batches
+# 4. Get complete status for specific epoch
+curl "http://localhost:9091/api/v1/epochs/23847425/status?protocol=0x3B5A0FB70ef68B5dd677C7d614dFB89961f97401&market=0xb5cE2F9B71e785e3eC0C45EDE06Ad95c3bb71a4d"
+
+# 5. View active epochs (currently processing)
+curl "http://localhost:9091/api/v1/epochs/active"
+
+# 6. Check for epoch gaps (missing finalizations)
+curl "http://localhost:9091/api/v1/epochs/gaps?window_minutes=5"
+
+# 7. Check finalized batches (with phase and onchain status)
 curl "http://localhost:9091/api/v1/batches/finalized"
 
-# 5. Monitor network aggregation
+# 8. Monitor network aggregation
 curl "http://localhost:9091/api/v1/aggregation/results"
 
-# 6. Check queue status
+# 9. Check queue status
 curl "http://localhost:9091/api/v1/queues/status"
 
-# 7. View pipeline overview
+# 10. View pipeline overview
 curl "http://localhost:9091/api/v1/pipeline/overview"
 ```
 
@@ -707,6 +787,196 @@ The combined log commands are particularly useful for debugging cross-component 
 | Missing projects | `aggregator-logs` | Ensure JSON parsing matches data structure |
 | Queue buildup | `curl api/v1/queues/status` | Increase worker count or check for errors |
 
+## New Epoch-Centered Endpoints
+
+### GET /api/v1/epochs/{epochId}/submissions
+
+**Purpose**: Get all submissions received for a specific epoch with detailed metadata (slot ID, peer ID, project ID, snapshot CID).
+
+**How It Works**:
+1. Queries `{protocol}:{market}:metrics:submissions:timeline` (ZSET) for last 24 hours
+2. Filters entity IDs matching the epoch ID
+3. For each matching submission:
+   - Fetches detailed metadata from `{protocol}:{market}:metrics:submissions:metadata:{entityId}`
+   - Falls back to parsing entity ID format if metadata missing
+4. Returns array of submissions sorted by timestamp (most recent first)
+
+**Entity ID Formats**:
+- **Enhanced**: `received:{epochId}:{slotId}:{projectId}:{timestamp}:{peerId}`
+- **Legacy**: `{epochId}-{projectId}-{timestamp}`
+
+**Response Fields**:
+- `entity_id`: The entity ID from timeline
+- `epoch_id`: Epoch ID
+- `slot_id`: Snapshotter slot ID
+- `project_id`: Project ID
+- `snapshot_cid`: IPFS CID of snapshot (if available)
+- `peer_id`: Peer ID that sent the submission (if available)
+- `validator_id`: Validator ID (if available)
+- `timestamp`: Unix timestamp
+- `time`: RFC3339 formatted time
+
+**Example**:
+```bash
+curl "http://localhost:9091/api/v1/epochs/23875280/submissions?protocol=0x3B5A0FB70ef68B5dd677C7d614dFB89961f97401&market=0xb5cE2F9B71e785e3eC0C45EDE06Ad95c3bb71a4d" | jq '.submissions[0:3]'
+```
+
+**Use Cases**:
+- Debugging: "Which snapshotter sent what for epoch X?"
+- Analysis: "How many submissions per slot ID for this epoch?"
+- Validation: "Did peer Y send submissions for epoch X?"
+- Monitoring: "What projects submitted data for this epoch?"
+
+### GET /api/v1/epochs/active
+
+**Purpose**: Get epochs currently in progress (window open, level 1/2 in progress).
+
+**⚠️ Important Disclaimer**: This endpoint **excludes** epochs that have completed Level 2 finalization (`level2_status == "completed"`) and/or been committed on-chain (`onchain_status == "confirmed"`). The endpoint only returns epochs that are actively processing, not completed ones. To view completed epochs, use `/api/v1/epochs/{epochId}/status` or `/api/v1/epochs/timeline`.
+
+**How It Works** (Fixed Implementation):
+1. Queries `{protocol}:{market}:metrics:epochs:timeline` (ZSET) for last 100 epochs
+2. For each epoch ID:
+   - Queries `{protocol}:{market}:epoch:{epochId}:state` (HASH) for current state
+   - Checks `window_status`, `level1_status`, `level2_status`, `onchain_status`
+   - Includes epoch if:
+     - `window_status == "open"` OR
+     - `level1_status == "in_progress"` OR `level1_status == "pending"` OR
+     - `level2_status == "collecting"` OR `level2_status == "aggregating"` OR `level2_status == "pending"` OR
+     - `onchain_status == "queued"` OR `onchain_status == "submitted"`
+   - **Excludes** epochs where:
+     - `level2_status == "completed"` (Level 2 finalized)
+     - `onchain_status == "confirmed"` (committed on-chain)
+3. Returns filtered epochs sorted by epoch ID (descending)
+
+**Why This Approach**:
+- **Reliability**: Queries epoch state directly instead of relying on potentially stale `epochs:active` SET
+- **Accuracy**: Always reflects current state from authoritative source (epoch state hash)
+- **Consistency**: Same data source as `/epochs/{epochId}/status` endpoint
+
+**Response Fields**:
+- `epoch_id`: Epoch ID
+- `phase`: Current phase (submission, level1_finalization, level2_aggregation, etc.)
+- `status`: Window status (open, closed)
+- `start_time`: Window open timestamp
+- `duration`: Window duration in seconds
+- `level1_batch_exists`: Whether Level 1 batch exists
+- `level2_batch_exists`: Whether Level 2 batch exists
+
+**Example**:
+```bash
+curl "http://localhost:9091/api/v1/epochs/active?protocol=0x3B5A0FB70ef68B5dd677C7d614dFB89961f97401&market=0xb5cE2F9B71e785e3eC0C45EDE06Ad95c3bb71a4d" | jq '.[] | {epoch_id, phase, status}'
+```
+
+**Use Cases**:
+- Real-time monitoring: "What epochs are currently being processed?"
+- Debugging: "Is epoch X stuck in a phase?"
+- Operations: "Which epochs need attention?"
+
+### GET /api/v1/epochs/{epochId}/status
+
+Get complete epoch state with all phase information.
+
+**⚠️ IMPORTANT**: You **MUST** pass `protocol` and `market` query parameters to see on-chain submission details written by relayer-py. Relayer-py writes using the protocol state contract address (from `PROTOCOL_STATE_CONTRACT` env var) and the data market address from the transaction. If you don't pass these parameters, the endpoint uses default addresses and won't find the relayer-py data.
+
+**Example:**
+```bash
+# CORRECT - Pass protocol and market to match relayer-py's Redis keys
+curl "http://localhost:9091/api/v1/epochs/23847425/status?protocol=0xC9e7304f719D35919b0371d8B242ab59E0966d63&market=0xb6c1392944a335b72b9e34f9D4b8c0050cdb511f"
+
+# WRONG - Missing query params, won't find relayer-py transaction data
+curl "http://localhost:9091/api/v1/epochs/23847425/status"
+```
+
+**Query Parameters**:
+- `protocol` (REQUIRED for relayer-py data): Protocol state contract address (must match `PROTOCOL_STATE_CONTRACT` in relayer-py)
+- `market` (REQUIRED for relayer-py data): Data market address (must match the data market address in the transaction)
+
+**Response:**
+```json
+{
+  "epoch_id": "23847425",
+  "state": {
+    "window_status": "closed",
+    "window_opened_at": 1763798270,
+    "window_closes_at": 1763798290,
+    "phase": "onchain_submission",
+    "submissions_count": 45,
+    "level1_status": "completed",
+    "level1_completed_at": 1763798300,
+    "level2_status": "completed",
+    "level2_completed_at": 1763798400,
+    "onchain_status": "confirmed",
+    "onchain_tx_hash": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+    "onchain_block_number": 12345678,
+    "onchain_submitted_at": 1763798500,
+    "priority": 1,
+    "vpa_submission_attempted": true,
+    "last_updated": 1763798600
+  },
+  "timestamp": "2025-01-22T08:00:00Z"
+}
+```
+
+**Note**: The `onchain_status`, `onchain_tx_hash`, `onchain_block_number`, and `onchain_submitted_at` fields are automatically updated by relayer-py when transactions are submitted and confirmed. No log parsing needed!
+
+### GET /api/v1/epochs/active
+
+Get epochs currently in progress (window open, level 1/2 in progress).
+
+**⚠️ Important Disclaimer**: This endpoint **excludes** epochs that have completed Level 2 finalization (`level2_status == "completed"`) and/or been committed on-chain (`onchain_status == "confirmed"`). The endpoint only returns epochs that are actively processing, not completed ones. To view completed epochs, use `/api/v1/epochs/{epochId}/status` or `/api/v1/epochs/timeline`.
+
+**Example:**
+```bash
+curl "http://localhost:9091/api/v1/epochs/active?protocol=0x3B5A0FB70ef68B5dd677C7d614dFB89961f97401&market=0xb5cE2F9B71e785e3eC0C45EDE06Ad95c3bb71a4d"
+```
+
+**Response:**
+```json
+[
+  {
+    "epoch_id": "23847425",
+    "phase": "level2_aggregation",
+    "status": "closed",
+    "start_time": 1763798270,
+    "duration": 20,
+    "level1_batch": true,
+    "level2_batch": false
+  }
+]
+```
+
+### GET /api/v1/epochs/gaps
+
+Identify epochs that should have finalizations but don't.
+
+**Query Parameters:**
+- `window_minutes`: Time window to check for gaps (default: 5)
+
+**Example:**
+```bash
+curl "http://localhost:9091/api/v1/epochs/gaps?window_minutes=5&protocol=0x3B5A0FB70ef68B5dd677C7d614dFB89961f97401&market=0xb5cE2F9B71e785e3eC0C45EDE06Ad95c3bb71a4d"
+```
+
+**Response:**
+```json
+{
+  "gaps": [
+    {
+      "epoch_id": "23847420",
+      "gap_type": "missing_level1",
+      "diagnostic": "Window closed but Level 1 finalization not started",
+      "state": {
+        "window_status": "closed",
+        "level1_status": "pending",
+        "phase": "level1_finalization"
+      }
+    }
+  ],
+  "count": 1,
+  "timestamp": "2025-01-22T08:00:00Z"
+}
+```
+
 ## Future Enhancements
 
 Potential monitoring improvements:
@@ -715,6 +985,8 @@ Potential monitoring improvements:
 - Grafana dashboards
 - WebSocket real-time updates
 - Historical trend analysis
+- Alert system for persistent gaps
+- ~~On-chain transaction confirmation tracking~~ ✅ **COMPLETE**: Relayer-py now writes transaction status to Redis automatically
 
 ### Consensus Troubleshooting
 
@@ -813,3 +1085,844 @@ For detailed information about entity ID formats, metadata, and how to interpret
 - **Validations**: `{epoch}-baseSnapshot:{validator}:{market}:{slot}-{project}:{ipfs}` - Validator contributions
 - **Batch Events**: `peer_discovery:{count}:{timestamp}`, `local:{epoch}`, `validator:{validator}:{epoch}`, `aggregated:{epoch}`
 - **Epoch Events**: `open:{epoch}`, `close:{epoch}` - Window lifecycle events
+
+## VPA Integration Monitoring
+
+### Overview
+The Validator Priority Assigner (VPA) integration enables priority-based batch submission to on-chain contracts. This section provides comprehensive monitoring guidance for understanding your node's priority assignments and submission status.
+
+### Priority-Based Submission Logic
+
+**Key Concept**: Priority 2+ validators only submit if Priority 1 (and all lower priorities) failed to submit within their windows. This prevents duplicate submissions.
+
+**Submission Flow:**
+1. **Priority Check**: Validator checks if they have priority > 0 for the epoch
+2. **Window Wait**: Validator waits for their submission window to open
+3. **Duplicate Check** (Priority 2+ only): Checks if higher priority validator already submitted
+4. **Submission**: If no duplicate found, submits via relayer-py
+
+### Monitor API Endpoints
+
+The Monitor API provides dedicated endpoints for VPA monitoring, eliminating the need for log grepping:
+
+#### GET /api/v1/vpa/epoch/{epochID}
+
+Get priority assignment and submission status for a specific epoch.
+
+**Example:**
+```bash
+# Get VPA status for epoch 23847425
+curl "http://localhost:9091/api/v1/vpa/epoch/23847425?protocol=0x3B5A0FB70ef68B5dd677C7d614dFB89961f97401&market=0xb6c1392944a335b72b9e34f9D4b8c0050cdb511f"
+```
+
+**Response:**
+```json
+{
+  "epoch_id": "23847425",
+  "status": {
+    "epoch_id": "23847425",
+    "priority": 1,
+    "priority_status": "assigned",
+    "submission_success": true,
+    "submission_tx_hash": "",
+    "submission_timestamp": 1763798276,
+    "data_market": "0xb6c1392944a335b72b9e34f9D4b8c0050cdb511f",
+    "validator": "0x164446B87AbbC0C1A389bD9bAF7F5aE813Cf6aB8",
+    "priority_details": {
+      "epoch_id": "23847425",
+      "priority": 1,
+      "status": "assigned",
+      "timestamp": 1763798270
+    },
+    "submission_details": {
+      "epoch_id": "23847425",
+      "priority": 1,
+      "success": true,
+      "tx_hash": "",
+      "timestamp": 1763798276
+    }
+  },
+  "timestamp": "2025-11-22T08:00:00Z"
+}
+```
+
+#### GET /api/v1/vpa/timeline
+
+Get priority assignment and submission timeline.
+
+**Query Parameters:**
+- `type`: `priority`, `submission`, or `both` (default: `both`)
+- `limit`: Number of entries (default: 50, max: 1000)
+- `protocol`: Protocol state identifier (optional)
+- `market`: Data market address (optional)
+
+**Example:**
+```bash
+# Get last 20 priority assignments
+curl "http://localhost:9091/api/v1/vpa/timeline?type=priority&limit=20"
+
+# Get last 50 submissions
+curl "http://localhost:9091/api/v1/vpa/timeline?type=submission&limit=50"
+
+# Get both timelines
+curl "http://localhost:9091/api/v1/vpa/timeline?limit=100"
+```
+
+**Response:**
+```json
+{
+  "timeline": {
+    "priority_timeline": [
+      {
+        "epoch_id": "23847425",
+        "priority": "1",
+        "status": "assigned",
+        "timestamp": 1763798270
+      }
+    ],
+    "submission_timeline": [
+      {
+        "epoch_id": "23847425",
+        "priority": "1",
+        "status": "success",
+        "timestamp": 1763798276
+      }
+    ]
+  },
+  "timestamp": "2025-11-22T08:00:00Z"
+}
+```
+
+#### GET /api/v1/vpa/stats
+
+Get aggregated VPA statistics (priority assignments, submissions, success rates).
+
+**Example:**
+```bash
+curl "http://localhost:9091/api/v1/vpa/stats?protocol=0x3B5A0FB70ef68B5dd677C7d614dFB89961f97401&market=0xb6c1392944a335b72b9e34f9D4b8c0050cdb511f"
+```
+
+**Response:**
+```json
+{
+  "stats": {
+    "total_priority_assignments": 150,
+    "priority_1_count": 50,
+    "priority_2_count": 50,
+    "priority_3_count": 50,
+    "no_priority_count": 10,
+    "total_submissions_success": 140,
+    "total_submissions_failed": 10,
+    "priority_1_submissions_success": 48,
+    "priority_2_submissions_success": 47,
+    "priority_3_submissions_success": 45,
+    "submission_success_rate": 93.33,
+    "priority_assignments_24h": 25,
+    "submissions_24h": 23
+  },
+  "timestamp": "2025-11-22T08:00:00Z"
+}
+```
+
+#### Dashboard Summary (includes VPA metrics)
+
+The `/api/v1/dashboard/summary` endpoint now includes VPA metrics in the `vpa_metrics` section:
+
+**Example:**
+```bash
+curl "http://localhost:9091/api/v1/dashboard/summary"
+```
+
+**Response includes:**
+```json
+{
+  "system_metrics": {
+    "vpa_priority_assignments_total": 150,
+    "vpa_submissions_success": 140,
+    "vpa_submissions_failed": 10,
+    "vpa_submission_success_rate": 93.33,
+    "vpa_priority_assignments_24h": 25,
+    "vpa_submissions_24h": 23
+  },
+  "vpa_metrics": {
+    "priority_assignments_total": 150,
+    "submissions_success": 140,
+    "submissions_failed": 10,
+    "submission_success_rate": 93.33,
+    "priority_assignments_24h": 25,
+    "submissions_24h": 23
+  }
+}
+```
+
+### Log-Based Monitoring (Fallback)
+
+If Monitor API is unavailable, you can still use log grepping as a fallback:
+
+**Priority Assignment:**
+```bash
+# Check if your node has priority for recent epochs
+./dsv.sh aggregator-logs | grep -E "(priority|Priority)" | tail -20
+
+# Monitor priority assignment results
+./dsv.sh aggregator-logs | grep -E "No VPA priority|priority assigned"
+
+# Check priority values (1, 2, 3, etc.)
+./dsv.sh aggregator-logs | grep "priority=" | tail -10
+```
+
+**Submission Flow:**
+```bash
+# Track complete submission flow
+./dsv.sh aggregator-logs | grep -E "(⏳|✅|⏭️|🚀)" | tail -30
+
+# Check if waiting for submission window
+./dsv.sh aggregator-logs | grep "⏳ Waiting for submission window"
+
+# Check if submission window opened
+./dsv.sh aggregator-logs | grep "✅ Submission window is open"
+
+# Check if skipped due to higher priority submission
+./dsv.sh aggregator-logs | grep "⏭️.*Epoch already has a submission"
+
+# Check successful submissions (queued to relayer)
+./dsv.sh aggregator-logs | grep "✅ VPA batch submission queued successfully"
+```
+
+**Key Log Patterns:**
+- `No VPA priority assigned, skipping new contract submission` - Your node has priority 0 (no submission)
+- `priority=1` - Priority 1 (first to submit)
+- `priority=2` - Priority 2 (backup, only submits if Priority 1 fails)
+- `priority=3+` - Lower priority (only submits if all higher priorities fail)
+- `⏳ Waiting for submission window to open...` - Waiting for your priority window
+- `✅ Submission window is open, checking if submission already exists...` - Window opened, checking duplicates
+- `⏭️ Epoch already has a submission from a higher priority validator, skipping submission` - Priority 2+ skipped (Priority 1 already submitted)
+- `✅ No existing submission found, proceeding with submission` - No duplicate found, proceeding
+- `🚀 Submitting batch via relayer-py` - Sending to relayer service
+- `✅ VPA batch submission queued successfully - relayer processing asynchronously` - Submission queued (relayer processes async)
+- `✅ Sent batch size to relayer` - Batch size notification sent
+
+### Redis Key Structure (For Direct Access)
+
+**Note**: Direct Redis access is not recommended. Use Monitor API endpoints instead.
+
+The aggregator stores priority and submission metrics in Redis with namespaced keys:
+
+- `{protocol}:{market}:vpa:priority:{epochID}` - Priority assignment per epoch (7-day TTL)
+- `{protocol}:{market}:vpa:submission:{epochID}` - Submission result per epoch (7-day TTL)
+- `{protocol}:{market}:vpa:epoch:{epochID}:status` - Combined epoch status (priority + submission)
+- `{protocol}:{market}:vpa:priority:timeline` - Priority assignment timeline (ZSET)
+- `{protocol}:{market}:vpa:submission:timeline` - Submission timeline (ZSET)
+- `{protocol}:{market}:vpa:stats` - Statistics hash (7-day TTL)
+- `{protocol}:vpa:priority:timeline` - Historical priority assignments (sorted set)
+- `{protocol}:vpa:submission:timeline` - Historical submission attempts (sorted set)
+- `{protocol}:vpa:stats:{dataMarket}` - Aggregated statistics (7-day TTL)
+
+### Understanding Your Node's Priority Status
+
+**Quick Status Check:**
+```bash
+# Check recent priority assignments
+./dsv.sh aggregator-logs | grep -E "priority=" | tail -10 | awk '{print $NF}'
+
+# Count priority assignments by value
+./dsv.sh aggregator-logs | grep "priority=" | grep -o "priority=[0-9]*" | sort | uniq -c
+
+# Check submission success rate (queued successfully)
+./dsv.sh aggregator-logs | grep "✅ VPA batch submission queued successfully" | wc -l
+
+# Verify actual on-chain transactions in relayer logs
+docker logs dsv-relayer-py --tail 100 | grep "Transaction.*submitted with hash" | wc -l
+```
+
+**Priority Status Interpretation:**
+- **Priority 0**: No priority assigned - your node will not submit for this epoch
+- **Priority 1**: Primary submitter - your node submits first (if window opens)
+- **Priority 2+**: Backup submitter - your node only submits if Priority 1 fails
+
+### Monitoring Submission Windows
+
+**Window Timing:**
+```bash
+# Check if waiting for window
+./dsv.sh aggregator-logs | grep "⏳ Waiting for submission window"
+
+# Check window timeout warnings
+./dsv.sh aggregator-logs | grep "Timeout waiting for submission window"
+
+# Check window opened successfully
+./dsv.sh aggregator-logs | grep "✅ Submission window is open"
+```
+
+**Window Status:**
+- Window opens based on: `epochReleaseTime + preSubmissionWindow + (priority-1) * pNSubmissionWindow`
+- Priority 1 window: `epochReleaseTime + preSubmissionWindow` to `epochReleaseTime + preSubmissionWindow + p1SubmissionWindow`
+- Priority 2+ windows: Sequential windows after Priority 1 closes
+
+### Monitoring Duplicate Submission Checks
+
+**Priority 2+ Behavior:**
+```bash
+# Check if duplicate check occurred
+./dsv.sh aggregator-logs | grep "checking if submission already exists"
+
+# Check if skipped due to existing submission
+./dsv.sh aggregator-logs | grep "⏭️.*Epoch already has a submission"
+
+# Check on-chain event log queries
+./dsv.sh aggregator-logs | grep "Checked BatchSubmissionsCompleted event logs"
+```
+
+**Duplicate Check Logic:**
+- Priority 1: No duplicate check (submits first)
+- Priority 2+: Queries `BatchSubmissionsCompleted` event logs
+- If event found: Skips submission (Priority 1 already completed)
+- If no event: Proceeds with submission
+
+### Relayer-PY Integration Monitoring
+
+**Relayer-Py State Tracking:**
+
+Relayer-py now writes epoch state directly to Redis, providing seamless integration with DSV monitoring. Transaction status is automatically updated in the epoch state hash (`{protocol}:{market}:epoch:{epochId}:state`) at two points:
+
+1. **Transaction Submitted**: `onchain_status: "submitted"`, `onchain_tx_hash` set, `onchain_submitted_at` timestamp
+2. **Transaction Confirmed**: `onchain_status: "confirmed"`, `onchain_block_number` set (from receipt)
+
+**Query Transaction Status via Monitor API:**
+```bash
+# Get complete epoch status including transaction details
+EPOCH_ID=23847425
+curl "http://localhost:9091/api/v1/epochs/${EPOCH_ID}/status?protocol=0x3B5A0FB70ef68B5dd677C7d614dFB89961f97401&market=0xb5cE2F9B71e785e3eC0C45EDE06Ad95c3bb71a4d" | jq '.state | {onchain_status, onchain_tx_hash, onchain_block_number, onchain_submitted_at}'
+
+# Check finalized batches with on-chain status
+curl "http://localhost:9091/api/v1/batches/finalized?epoch_id=${EPOCH_ID}" | jq '.batches[] | {epoch_id, onchain_status, onchain_tx_hash, onchain_block_number}'
+```
+
+**Relayer Service Logs (Fallback):**
+```bash
+# Monitor relayer endpoint calls
+./dsv.sh aggregator-logs | grep "🚀 Submitting batch via relayer-py"
+
+# Check relayer response
+./dsv.sh aggregator-logs | grep -E "VPA batch submission|relayer returned"
+
+# Monitor relayer-py service logs (for detailed transaction processing)
+docker logs dsv-relayer-py --tail 50 | grep -E "(submitSubmissionBatch|submitBatchSize|Transaction.*submitted with hash)"
+```
+
+**Relayer Flow:**
+1. `submitBatchSize` - Informs relayer of expected batch count (typically 1 for DSV)
+2. `submitSubmissionBatch` - Submits the actual batch data
+3. Relayer processes and submits on-chain transaction
+4. **Relayer-py writes to Redis**: Updates epoch state with `onchain_status: "submitted"` and `onchain_tx_hash`
+5. Transaction receipt received: Updates epoch state with `onchain_status: "confirmed"` and `onchain_block_number`
+
+### End-to-End Submission Tracking
+
+**Complete Flow Monitoring:**
+```bash
+# Track complete submission flow for specific epoch
+EPOCH_ID=23847425
+./dsv.sh aggregator-logs | grep "$EPOCH_ID" | grep -E "(priority|⏳|✅|⏭️|🚀)"
+```
+
+**Expected Flow (Priority 1):**
+1. `priority=1` - Priority assigned
+2. `⏳ Waiting for submission window to open...` - Waiting for P1 window
+3. `✅ Submission window is open, checking if submission already exists...` - Window opened
+4. `✅ No existing submission found, proceeding with submission` - No duplicate
+5. `✅ Sent batch size to relayer` - Batch size notification sent
+6. `🚀 Submitting batch via relayer-py` - Sending to relayer
+7. `✅ VPA batch submission queued successfully - relayer processing asynchronously` - Queued
+8. **Relayer-py updates Redis**: `onchain_status: "submitted"`, `onchain_tx_hash` set
+9. **Transaction confirmed**: `onchain_status: "confirmed"`, `onchain_block_number` set (query via `/api/v1/epochs/{epochId}/status`)
+
+**Expected Flow (Priority 2+):**
+1. `priority=2` (or higher) - Priority assigned
+2. `⏳ Waiting for submission window to open...` - Waiting for P2+ window
+3. `✅ Submission window is open, checking if submission already exists...` - Window opened
+4. Either:
+   - `⏭️ Epoch already has a submission from a higher priority validator, skipping submission` - Priority 1 already submitted
+   - `✅ No existing submission found, proceeding with submission` - Priority 1 failed, proceeding
+5. `✅ Sent batch size to relayer` - Batch size notification sent
+6. `🚀 Submitting batch via relayer-py` - Sending to relayer (if no duplicate)
+7. `✅ VPA batch submission queued successfully - relayer processing asynchronously` - Queued
+8. **Relayer-py updates Redis**: `onchain_status: "submitted"`, `onchain_tx_hash` set (if submitted)
+9. **Transaction confirmed**: `onchain_status: "confirmed"`, `onchain_block_number` set (query via `/api/v1/epochs/{epochId}/status`)
+
+### VPA Health Indicators
+
+**Healthy VPA Integration:**
+- Regular priority assignments (check logs for `priority=` entries)
+- Priority distribution: Mix of Priority 0, 1, 2+ over time
+- Successful submissions when Priority 1 assigned (query epoch status endpoint for `onchain_status: "confirmed"`)
+- Priority 2+ correctly skipping when Priority 1 submits
+- No timeout errors waiting for submission windows
+- Relayer service responding successfully (200 OK responses)
+- Epoch state shows `onchain_status` progressing: "queued" → "submitted" → "confirmed"
+- Transaction hashes and block numbers available in epoch state (no log parsing needed)
+
+**Warning Signs:**
+- No priority assignments for multiple epochs (check VPA client initialization)
+- All epochs showing Priority 0 (validator not registered in VPA)
+- Frequent "Timeout waiting for submission window" (window timing issues)
+- Priority 2+ submitting when Priority 1 already submitted (duplicate check failing)
+- Relayer service errors or non-200 responses
+
+**Critical Issues:**
+- VPA client not initialized (check `VPA_VALIDATOR_ADDRESS` configuration)
+- Consistent relayer transaction failures
+- Submission window timeouts for all epochs
+- No priority assignments for extended periods
+
+### Querying Priority History
+
+**Redis-Based Queries:**
+```bash
+# Get priority for last 10 epochs
+docker exec redis redis-cli ZREVRANGE "{protocol}:vpa:priority:timeline" 0 9
+
+# Get submission results for last 10 epochs
+docker exec redis redis-cli ZREVRANGE "{protocol}:vpa:submission:timeline" 0 9
+
+# Check specific epoch priority
+EPOCH_ID=23847425
+docker exec redis redis-cli GET "{protocol}:vpa:priority:{dataMarket}:${EPOCH_ID}"
+
+# Check specific epoch submission
+docker exec redis redis-cli GET "{protocol}:vpa:submission:{dataMarket}:${EPOCH_ID}"
+```
+
+**Statistics Summary:**
+```bash
+# Get priority statistics
+docker exec redis redis-cli HGETALL "{protocol}:vpa:stats:{dataMarket}"
+
+# Expected fields:
+# - total_priority_assignments: Total epochs with priority > 0
+# - priority_1_count: Number of Priority 1 assignments
+# - priority_2_count: Number of Priority 2 assignments
+# - no_priority_count: Number of Priority 0 epochs
+# - total_submissions_success: Successful submissions
+# - total_submissions_failed: Failed submission attempts
+# - priority_1_submissions_success: Priority 1 successful submissions
+# - priority_2_submissions_success: Priority 2 successful submissions
+```
+
+### VPA Configuration Verification
+
+**Required Configuration:**
+```bash
+# Check VPA client initialization
+./dsv.sh aggregator-logs | grep -E "(VPA client|VPA caching client initialized)"
+
+# Verify VPA validator address
+docker exec <aggregator-container> printenv | grep VPA_VALIDATOR_ADDRESS
+
+# Check VPA contract address
+docker exec <aggregator-container> printenv | grep VPA_CONTRACT_ADDRESS
+
+# Verify relayer endpoint
+docker exec <aggregator-container> printenv | grep RELAYER_PY_ENDPOINT
+```
+
+**Configuration Checklist:**
+- `VPA_VALIDATOR_ADDRESS` - Your validator's Ethereum address
+- `VPA_CONTRACT_ADDRESS` - VPA contract address (or auto-fetched from ProtocolState)
+- `PROTOCOL_STATE_CONTRACT` - ProtocolState contract address
+- `RELAYER_PY_ENDPOINT` - Relayer service endpoint (e.g., `http://relayer-py:8080`)
+- `ENABLE_ONCHAIN_SUBMISSION=true` - Enable VPA submissions
+
+### Troubleshooting Priority Issues
+
+**No Priority Assignments:**
+```bash
+# Check VPA client initialization
+./dsv.sh aggregator-logs | grep "VPA client not initialized"
+
+# Verify validator address is registered in ValidatorState contract
+# Check on-chain: ValidatorState.getNodeIdForValidator(validatorAddress)
+
+# Check VPA contract connectivity
+./dsv.sh aggregator-logs | grep "Failed to get VPA priority"
+```
+
+**Priority 2+ Submitting When Should Skip:**
+```bash
+# Check duplicate detection logs
+./dsv.sh aggregator-logs | grep "Checked BatchSubmissionsCompleted event logs"
+
+# Verify on-chain event query is working
+./dsv.sh aggregator-logs | grep "has_submission"
+
+# Check if RPC client is initialized
+./dsv.sh aggregator-logs | grep "RPC client initialized for on-chain submission checks"
+```
+
+**Submission Window Timeouts:**
+```bash
+# Check window wait logs
+./dsv.sh aggregator-logs | grep "Timeout waiting for submission window"
+
+# Verify epoch release timing
+./dsv.sh event-logs | grep "Epoch.*released"
+
+# Check if epoch-manager releases epochs to both contracts simultaneously
+```
+
+### Recommended Monitoring Queries
+
+**Daily Priority Summary:**
+```bash
+# Count priority assignments by value for today
+./dsv.sh aggregator-logs | grep "$(date +%Y-%m-%d)" | grep "priority=" | \
+  grep -o "priority=[0-9]*" | sort | uniq -c
+
+# Count successful submissions by priority
+./dsv.sh aggregator-logs | grep "$(date +%Y-%m-%d)" | \
+  grep "✅ VPA batch submission successful" | grep -o "priority=[0-9]*" | sort | uniq -c
+```
+
+**Submission Success Rate:**
+```bash
+# Calculate success rate
+TOTAL=$(./dsv.sh aggregator-logs | grep "🚀 Submitting batch via relayer-py" | wc -l)
+SUCCESS=$(./dsv.sh aggregator-logs | grep "✅ VPA batch submission successful" | wc -l)
+echo "Success rate: $(( SUCCESS * 100 / TOTAL ))%"
+```
+
+**Priority Distribution:**
+```bash
+# View priority distribution over last 100 epochs
+./dsv.sh aggregator-logs | grep "priority=" | tail -100 | \
+  grep -o "priority=[0-9]*" | cut -d= -f2 | sort -n | uniq -c
+```
+
+### Quick Reference: Understanding Your Node's Status
+
+**For each epoch, your node can be in one of these states:**
+
+1. **Priority 0 (No Priority)**
+   - Log: `ℹ️ No VPA priority assigned (Priority 0), skipping new contract submission`
+   - Meaning: Your validator was not assigned priority for this epoch
+   - Action: Normal - priority rotates across validators
+   - Redis: `{protocol}:vpa:priority:{market}:{epoch}` with `status: "no_priority"`
+
+2. **Priority 1 (Primary Submitter)**
+   - Log: `🎯 VPA Priority assigned for epoch` with `priority=1`
+   - Meaning: Your node is the primary submitter for this epoch
+   - Expected Flow: Wait for window → Submit → Success
+   - Redis: `{protocol}:vpa:priority:{market}:{epoch}` with `priority: 1`
+
+3. **Priority 2+ (Backup Submitter)**
+   - Log: `🎯 VPA Priority assigned for epoch` with `priority=2` (or higher)
+   - Meaning: Your node is a backup submitter
+   - Expected Flow: Wait for window → Check if Priority 1 submitted → Either skip or submit
+   - Redis: `{protocol}:vpa:priority:{market}:{epoch}` with `priority: 2+`
+
+**Submission Outcomes:**
+
+- **Success (Queued)**: `✅ VPA batch submission queued successfully - relayer processing asynchronously`
+  - Redis: `{protocol}:vpa:submission:{market}:{epoch}` with `success: true`
+  - **Epoch State**: `{protocol}:{market}:epoch:{epochId}:state` updated by relayer-py:
+    - `onchain_status: "submitted"` (when transaction submitted)
+    - `onchain_tx_hash` set (transaction hash)
+    - `onchain_status: "confirmed"` (when receipt received)
+    - `onchain_block_number` set (block number from receipt)
+  - **Query via API**: Use `/api/v1/epochs/{epochId}/status` to get complete transaction status (no log parsing needed)
+  
+- **Skipped (Priority 2+)**: `⏭️ Epoch already has a submission from a higher priority validator, skipping submission`
+  - Redis: `{protocol}:vpa:submission:{market}:{epoch}` with `success: false` (no tx_hash)
+  - Redis: `{protocol}:vpa:priority:{market}:{epoch}` with `status: "skipped_higher_priority_submitted"`
+  
+- **Window Timeout**: `⏰ Timeout waiting for submission window (10min), skipping submission`
+  - Redis: `{protocol}:vpa:priority:{market}:{epoch}` with `status: "window_timeout"`
+  
+- **Relayer Error**: `❌ VPA relayer returned non-200 status` or `❌ Failed to submit batch to relayer-py`
+  - Redis: `{protocol}:vpa:submission:{market}:{epoch}` with `success: false`
+
+### Node Operator Checklist
+
+**Daily Monitoring:**
+```bash
+# 1. Check priority distribution (should see mix of 0, 1, 2+)
+./dsv.sh aggregator-logs | grep "priority=" | tail -50 | grep -o "priority=[0-9]*" | sort | uniq -c
+
+# 2. Check submission success rate
+SUCCESS=$(./dsv.sh aggregator-logs | grep "✅ VPA batch submission successful" | wc -l)
+ATTEMPTS=$(./dsv.sh aggregator-logs | grep "🚀 Submitting batch via relayer-py" | wc -l)
+echo "Success rate: $(( SUCCESS * 100 / ATTEMPTS ))%"
+
+# 3. Check for Priority 1 assignments
+./dsv.sh aggregator-logs | grep "priority=1" | wc -l
+
+# 4. Check for skipped submissions (Priority 2+)
+./dsv.sh aggregator-logs | grep "⏭️.*Epoch already has a submission" | wc -l
+
+# 5. Check for timeouts
+./dsv.sh aggregator-logs | grep "⏰ Timeout waiting for submission window" | wc -l
+```
+
+**Weekly Analysis:**
+```bash
+# Get priority statistics from Redis
+docker exec redis redis-cli HGETALL "{protocol}:vpa:stats:{dataMarket}"
+
+# View priority timeline for last week
+docker exec redis redis-cli ZREVRANGEBYSCORE "{protocol}:vpa:priority:timeline" \
+  $(date -d '7 days ago' +%s) +inf
+
+# View submission timeline for last week
+docker exec redis redis-cli ZREVRANGEBYSCORE "{protocol}:vpa:submission:timeline" \
+  $(date -d '7 days ago' +%s) +inf
+```
+
+### Additional Tracking Recommendations
+
+**What's Currently Tracked:**
+- ✅ Priority assignments per epoch (Redis: `{protocol}:vpa:priority:{market}:{epoch}`)
+- ✅ Submission attempts and results (Redis: `{protocol}:vpa:submission:{market}:{epoch}`)
+- ✅ Priority timeline (Redis sorted set)
+- ✅ Submission timeline (Redis sorted set)
+- ✅ Aggregated statistics (success/failure counts by priority)
+
+**Recommended Additional Tracking:**
+
+1. **Window Timing Metrics:**
+   - Track when submission windows open/close per priority
+   - Monitor average wait time for window opening
+   - Alert on frequent window timeouts
+
+2. **Priority Distribution Analysis:**
+   - Track priority assignment frequency over time
+   - Monitor if your node consistently gets Priority 0 (indicates registration issue)
+   - Track priority fairness (should be distributed over time)
+
+3. **Submission Success Rate by Priority:**
+   - Track success rate separately for Priority 1 vs Priority 2+
+   - Monitor if Priority 2+ submissions are frequently skipped (indicates healthy Priority 1)
+   - Track relayer response times by priority
+
+4. **Epoch-Level Summary:**
+   - Store complete epoch submission status (priority, window opened, submitted, skipped reason)
+   - Enable quick lookup: "Did I submit epoch X? What was my priority?"
+   - Track epochs where Priority 1 failed and Priority 2+ stepped in
+
+5. **On-Chain Verification:**
+   - Periodically verify on-chain that submissions actually occurred
+   - Cross-reference Redis tracking with on-chain `BatchSubmissionsCompleted` events
+   - Detect discrepancies between Redis tracking and on-chain state
+
+**Example Enhanced Queries:**
+```bash
+# Check your node's priority history for last 24 hours
+docker exec redis redis-cli ZREVRANGEBYSCORE "{protocol}:vpa:priority:timeline" \
+  $(date -d '24 hours ago' +%s) +inf
+
+# Find epochs where you had Priority 1 but didn't submit
+# (Compare priority timeline with submission timeline)
+
+# Check submission success rate by priority
+docker exec redis redis-cli HGETALL "{protocol}:vpa:stats:{dataMarket}" | \
+  grep -E "priority_[0-9]+_submissions"
+```
+
+### Additional Tracking Recommendations
+
+**What's Currently Tracked:**
+- ✅ Priority assignments per epoch (Redis: `{protocol}:vpa:priority:{market}:{epoch}`)
+- ✅ Submission attempts and results (Redis: `{protocol}:vpa:submission:{market}:{epoch}`)
+- ✅ Priority timeline (Redis sorted set)
+- ✅ Submission timeline (Redis sorted set)
+- ✅ Aggregated statistics (success/failure counts by priority)
+
+**Recommended Additional Tracking:**
+
+1. **Window Timing Metrics:**
+   - Track when submission windows open/close per priority
+   - Monitor average wait time for window opening
+   - Alert on frequent window timeouts
+
+2. **Priority Distribution Analysis:**
+   - Track priority assignment frequency over time
+   - Monitor if your node consistently gets Priority 0 (indicates registration issue)
+   - Track priority fairness (should be distributed over time)
+
+3. **Submission Success Rate by Priority:**
+   - Track success rate separately for Priority 1 vs Priority 2+
+   - Monitor if Priority 2+ submissions are frequently skipped (indicates healthy Priority 1)
+   - Track relayer response times by priority
+
+4. **Epoch-Level Summary:**
+   - Store complete epoch submission status (priority, window opened, submitted, skipped reason)
+   - Enable quick lookup: "Did I submit epoch X? What was my priority?"
+   - Track epochs where Priority 1 failed and Priority 2+ stepped in
+
+5. **On-Chain Verification:**
+   - Periodically verify on-chain that submissions actually occurred
+   - Cross-reference Redis tracking with on-chain `BatchSubmissionsCompleted` events
+   - Detect discrepancies between Redis tracking and on-chain state
+
+**Example Enhanced Queries:**
+```bash
+# Check your node's priority history for last 24 hours
+docker exec redis redis-cli ZREVRANGEBYSCORE "{protocol}:vpa:priority:timeline" \
+  $(date -d '24 hours ago' +%s) +inf
+
+# Find epochs where you had Priority 1 but didn't submit
+# (Compare priority timeline with submission timeline)
+
+# Check submission success rate by priority
+docker exec redis redis-cli HGETALL "{protocol}:vpa:stats:{dataMarket}" | \
+  grep -E "priority_[0-9]+_submissions"
+```
+## Automated Epoch Status Analysis
+
+The DSV repository includes automated analysis scripts to verify transaction hash presence and identify issues with epoch processing.
+
+### analyze_epoch_status.py
+
+**Purpose**: Automated analysis of active epochs to verify transaction hash presence and identify processing issues.
+
+**Key Features**:
+- Compares active epochs (queried with OLD/default addresses) with their detailed status (queried with NEW addresses where relayer-py writes)
+- Automatically lowercases addresses to match Redis key format (relayer-py lowercases addresses)
+- Tracks transaction hash presence by on-chain status
+- Identifies epochs with missing transaction hashes
+- Reports failed submissions with error details
+
+**Usage**:
+```bash
+# Basic usage (requires NEW addresses where relayer-py writes)
+python3 scripts/analyze_epoch_status.py \
+  --status-protocol 0xC9e7304f719D35919b0371d8B242ab59E0966d63 \
+  --status-market 0xb6c1392944a335b72b9e34f9D4b8c0050cdb511f
+
+# Full usage with both OLD and NEW addresses
+python3 scripts/analyze_epoch_status.py \
+  --api-url http://localhost:9092 \
+  --active-protocol 0x3B5A0FB70ef68B5dd677C7d614dFB89961f97401 \
+  --active-market 0xb5cE2F9B71e785e3eC0C45EDE06Ad95c3bb71a4d \
+  --status-protocol 0xC9e7304f719D35919b0371d8B242ab59E0966d63 \
+  --status-market 0xb6c1392944a335b72b9e34f9D4b8c0050cdb511f \
+  --output table
+
+# JSON output for programmatic processing
+python3 scripts/analyze_epoch_status.py \
+  --status-protocol 0xC9e7304f719D35919b0371d8B242ab59E0966d63 \
+  --status-market 0xb6c1392944a335b72b9e34f9D4b8c0050cdb511f \
+  --output json | jq '.stats'
+```
+
+**Output Formats**:
+- `summary` (default): Human-readable summary with statistics
+- `table`: Detailed table showing each epoch's status
+- `json`: Machine-readable JSON output
+
+**What It Checks**:
+1. **Transaction Hash Presence**: Verifies that epochs with `onchain_status` of "submitted", "confirmed", or "failed" have transaction hashes
+2. **Status Consistency**: Checks that epochs in "onchain_submission" phase have appropriate on-chain status
+3. **Error Details**: Identifies failed submissions without error details
+4. **VPA Submission Tracking**: Verifies that VPA submission attempts are properly tracked
+
+**Example Output**:
+```
+================================================================================
+SUMMARY
+================================================================================
+Total active epochs: 32
+With status data (NEW addresses): 32
+Without status data: 0
+
+On-chain Status Distribution:
+  confirmed: 15
+  queued: 3
+  submitted: 2
+
+Transaction Hash Analysis:
+  Epochs WITH tx_hash: 17
+  Epochs WITHOUT tx_hash: 3
+
+Failed Submissions: 0
+Failed without error details: 0
+```
+
+**Exit Codes**:
+- `0`: No critical issues found
+- `1`: Critical issues detected (failed epochs without error details, or statuses requiring tx_hash but missing it)
+
+### check_tx_hashes.sh
+
+**Purpose**: Convenient wrapper script for quick transaction hash analysis.
+
+**Usage**:
+```bash
+# Use default addresses
+./scripts/check_tx_hashes.sh
+
+# Specify custom addresses
+./scripts/check_tx_hashes.sh \
+  http://localhost:9092 \
+  0x3B5A0FB70ef68B5dd677C7d614dFB89961f97401 \
+  0xb5cE2F9B71e785e3eC0C45EDE06Ad95c3bb71a4d \
+  0xC9e7304f719D35919b0371d8B242ab59E0966d63 \
+  0xb6c1392944a335b72b9e34f9D4b8c0050cdb511f
+```
+
+**What It Does**:
+1. Runs `analyze_epoch_status.py` with summary output
+2. Runs `analyze_epoch_status.py` with table output
+3. Provides both high-level summary and detailed epoch-by-epoch breakdown
+
+### Understanding Address Normalization
+
+**Important**: The scripts automatically lowercase Ethereum addresses to match Redis key format. Relayer-py lowercases addresses when writing to Redis, so the scripts normalize addresses to ensure correct key matching.
+
+**Why This Matters**:
+- Redis keys use lowercase addresses: `0xc9e7304f719d35919b0371d8b242ab59e0966d63:0xb6c1392944a335b72b9e34f9d4b8c0050cdb511f:epoch:23875427:state`
+- Relayer-py writes using lowercase addresses (from `PROTOCOL_STATE_CONTRACT` env var)
+- The Monitor API accepts addresses in any case, but Redis keys are case-sensitive
+- The scripts normalize addresses to ensure correct key matching
+
+**Verification**:
+```bash
+# Check Redis key format (addresses are lowercase)
+redis-cli KEYS "*c9e7304f719d35919b0371d8b242ab59e0966d63*23875427*"
+
+# Query API with mixed-case addresses (works, but scripts normalize to lowercase)
+curl "http://localhost:9092/api/v1/epochs/23875427/status?protocol=0xC9e7304f719D35919b0371d8B242ab59E0966d63&market=0xb6c1392944a335b72b9e34f9D4b8c0050cdb511f"
+```
+
+### Integration with Monitoring Workflow
+
+**Recommended Workflow**:
+1. **Daily Check**: Run `check_tx_hashes.sh` to verify transaction hash presence
+2. **Issue Investigation**: Use `analyze_epoch_status.py --output table` to see detailed epoch-by-epoch status
+3. **Automated Monitoring**: Integrate `analyze_epoch_status.py --output json` into monitoring systems
+4. **Alerting**: Script exits with code 1 if critical issues detected (can be used in cron jobs)
+
+**Example Cron Job**:
+```bash
+# Run every hour, alert on critical issues
+0 * * * * /path/to/dsv/scripts/check_tx_hashes.sh >> /var/log/dsv/tx_hash_check.log 2>&1 || echo "Critical issues detected" | mail -s "DSV Transaction Hash Check Failed" admin@example.com
+```
+
+### Troubleshooting
+
+**No Transaction Hashes Found**:
+1. Verify relayer-py is running and processing transactions
+2. Check relayer-py logs for "Updated epoch state in Redis" messages
+3. Verify `PROTOCOL_STATE_CONTRACT` env var in relayer-py matches the protocol address used in script
+4. Check Redis connectivity from relayer-py
+5. Verify addresses are correctly normalized (lowercase)
+
+**Status Data Not Found**:
+1. Ensure NEW protocol/market addresses are correct
+2. Verify epochs exist in the active epochs list
+3. Check that relayer-py has written to Redis for these epochs
+4. Verify Redis key format matches expected pattern
+
+**Case Sensitivity Issues**:
+- The scripts automatically handle case normalization
+- If manually querying Redis, use lowercase addresses
+- Monitor API accepts any case, but Redis keys are lowercase

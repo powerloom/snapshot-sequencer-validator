@@ -53,7 +53,7 @@
         },
         "/batches/finalized": {
             "get": {
-                "description": "Get Level 1 (local) or Level 2 (aggregated) finalized batches",
+                "description": "Get Level 1 (local) or Level 2 (aggregated) finalized batches. Queries last 24 hours of data (matches retention period).",
                 "produces": [
                     "application/json"
                 ],
@@ -88,7 +88,7 @@
                     },
                     {
                         "type": "integer",
-                        "description": "Number of batches to retrieve (default 50)",
+                        "description": "Number of batches to retrieve (default 50, max 100)",
                         "name": "limit",
                         "in": "query"
                     }
@@ -121,6 +121,87 @@
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/main.DashboardSummary"
+                        }
+                    }
+                }
+            }
+        },
+        "/epochs/active": {
+            "get": {
+                "description": "Get epochs currently in progress (window open, level 1/2 in progress). Queries epoch state directly for accuracy.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "epochs"
+                ],
+                "summary": "Active epochs",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/main.EpochInfo"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/epochs/gaps": {
+            "get": {
+                "description": "Identify epochs that should have finalizations but don't",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "epochs"
+                ],
+                "summary": "Epoch gaps",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Window minutes to check for gaps (default 5)",
+                        "name": "window_minutes",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": true
+                            }
                         }
                     }
                 }
@@ -169,6 +250,90 @@
                 }
             }
         },
+        "/epochs/{epochId}/status": {
+            "get": {
+                "description": "Get complete epoch state with all phase information",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "epochs"
+                ],
+                "summary": "Epoch status",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Epoch ID",
+                        "name": "epochId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/epochs/{epochId}/submissions": {
+            "get": {
+                "description": "Get all submissions for a specific epoch with detailed metadata (slot ID, peer ID, project ID, CID)",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "epochs"
+                ],
+                "summary": "Epoch submissions",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Epoch ID",
+                        "name": "epochId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
         "/health": {
             "get": {
                 "description": "Check if the API and Redis connection are healthy",
@@ -190,6 +355,102 @@
                 }
             }
         },
+        "/heartbeats/peer/{peerID}": {
+            "get": {
+                "description": "Returns all heartbeat messages from the specified peer ID. Heartbeats are NOT EIP-712 signed.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Heartbeats"
+                ],
+                "summary": "Get heartbeats from a specific peer",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "libp2p Peer ID",
+                        "name": "peerID",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "default": 100,
+                        "description": "Maximum number of heartbeats to return",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Protocol state contract address",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Heartbeats from the specified peer",
+                        "schema": {
+                            "$ref": "#/definitions/main.HeartbeatsResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/heartbeats/recent": {
+            "get": {
+                "description": "Returns heartbeat messages received within the specified time window. Heartbeats are NOT EIP-712 signed - only peer ID is available.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Heartbeats"
+                ],
+                "summary": "Get recent heartbeat messages",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "default": 100,
+                        "description": "Maximum number of heartbeats to return",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "default": 60,
+                        "description": "Time window in minutes",
+                        "name": "minutes",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Protocol state contract address",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Recent heartbeat messages",
+                        "schema": {
+                            "$ref": "#/definitions/main.HeartbeatsResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/pipeline/overview": {
             "get": {
                 "description": "Get pipeline metrics from pre-aggregated data",
@@ -200,6 +461,20 @@
                     "pipeline"
                 ],
                 "summary": "Pipeline overview (legacy support)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -243,6 +518,507 @@
                             "items": {
                                 "$ref": "#/definitions/main.QueueStatus"
                             }
+                        }
+                    }
+                }
+            }
+        },
+        "/simulations/peer/{peerID}": {
+            "get": {
+                "description": "Get all simulation messages from a specific peer (libp2p ID)",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "simulations"
+                ],
+                "summary": "Get simulations by peer ID",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Peer ID (libp2p)",
+                        "name": "peerID",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Simulations from the specified peer",
+                        "schema": {
+                            "$ref": "#/definitions/main.SimulationsResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/simulations/recent": {
+            "get": {
+                "description": "Get recent simulation messages (epoch 0 with real CIDs) from snapshotters. Simulations are sent at startup to verify connectivity and contain EIP-712 signatures.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "simulations"
+                ],
+                "summary": "List recent simulation messages",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Maximum number of simulations to return (default: 50, max: 500)",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Time window in minutes (default: 60)",
+                        "name": "minutes",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "List of recent simulation messages",
+                        "schema": {
+                            "$ref": "#/definitions/main.SimulationsResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/simulations/slot/{slotID}": {
+            "get": {
+                "description": "Get simulation messages for a specific slot ID",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "simulations"
+                ],
+                "summary": "Get simulations by slot ID",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Slot ID",
+                        "name": "slotID",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "default": 10,
+                        "description": "Maximum number of simulations to return",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Simulations from the specified slot ID",
+                        "schema": {
+                            "$ref": "#/definitions/main.SimulationsResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/simulations/snapshotter/{address}": {
+            "get": {
+                "description": "Get all simulation messages from a specific snapshotter (EIP-712 recovered address)",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "simulations"
+                ],
+                "summary": "Get simulations by snapshotter address",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Snapshotter address (Ethereum address)",
+                        "name": "address",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Simulations from the specified snapshotter",
+                        "schema": {
+                            "$ref": "#/definitions/main.SimulationsResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/spam/epochs": {
+            "get": {
+                "description": "Get list of epochs that have spam tracking data. Queries epochs from aggregation windows (persistent) and active epoch peer sets (ephemeral, for recent epochs not yet aggregated). Epoch peer sets are deleted after window aggregation, so this endpoint primarily returns epochs from windows.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "spam"
+                ],
+                "summary": "List epochs with tracking data",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Maximum number of epochs to return (default: 100, max: 1000)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "List of epochs with tracking data, each containing epoch_id and peer_count",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/spam/flagged/peers": {
+            "get": {
+                "description": "Get list of all flagged peer IDs (from Redis cache, synced from on-chain)",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "spam"
+                ],
+                "summary": "Get flagged peers",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "List of flagged peers with metadata",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/spam/flagged/snapshotters": {
+            "get": {
+                "description": "Get list of all flagged snapshotter addresses (from Redis cache, synced from on-chain)",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "spam"
+                ],
+                "summary": "Get flagged snapshotters",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "List of flagged snapshotters with metadata",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/spam/peer/{peerID}": {
+            "get": {
+                "description": "Get validation failures, submission counts, and aggregation info for a specific peer",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "spam"
+                ],
+                "summary": "Get spam tracking info for a peer",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Peer ID (libp2p)",
+                        "name": "peerID",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Specific epoch ID (optional, defaults to current epoch)",
+                        "name": "epochID",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Spam tracking information for peer",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/spam/peer/{peerID}/epochs": {
+            "get": {
+                "description": "Get tracking data (submissions, validation failures) for a peer across multiple epochs",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "spam"
+                ],
+                "summary": "Get epoch-by-epoch tracking for a peer",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Peer ID (libp2p)",
+                        "name": "peerID",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Start epoch (default: current epoch - 10)",
+                        "name": "startEpoch",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "End epoch (default: current epoch)",
+                        "name": "endEpoch",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Epoch-by-epoch tracking data",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/spam/stats": {
+            "get": {
+                "description": "Get aggregated spam protection statistics including flagged counts, reports, and enforcement metrics",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "spam"
+                ],
+                "summary": "Get spam protection statistics",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Spam protection statistics",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/spam/windows": {
+            "get": {
+                "description": "Get list of all windows that have spam reports (for discovery/indexing). Windows are created at epoch boundaries (epochID % 10 == 0) and contain aggregated reports for a 10-epoch range. Windows persist for 2 hours (TTL).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "spam"
+                ],
+                "summary": "List all aggregation windows with reports",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "List of windows with window_id, epoch_range (e.g., '24189511-24189520'), first_epoch, last_epoch, and peer_count",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/spam/windows/{windowID}": {
+            "get": {
+                "description": "Get all peers and their aggregated reports for a specific window. Window ID is the end epoch of the 10-epoch range (e.g., window 24189520 contains epochs 24189511-24189520). Includes validator counts (consensus requires \u003e= 2 validators), all spam reports with epoch_id, violation_type, count, and evidence.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "spam"
+                ],
+                "summary": "Get details for a specific aggregation window",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Window ID (end epoch of 10-epoch range, e.g., 24189520 for epochs 24189511-24189520)",
+                        "name": "windowID",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address",
+                        "name": "market",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Window details including window_id, epoch_range, peers array with peer_id, validator_count, report_count, first_epoch, last_epoch, and reports array",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
                         }
                     }
                 }
@@ -324,7 +1100,7 @@
         },
         "/timeline/recent": {
             "get": {
-                "description": "Get recent events from timeline sorted sets",
+                "description": "Get recent events from timeline sorted sets with enriched metadata",
                 "produces": [
                     "application/json"
                 ],
@@ -341,8 +1117,14 @@
                     },
                     {
                         "type": "integer",
-                        "description": "Minutes to look back (default 5)",
+                        "description": "Minutes to look back (default 5, max 1440 for 24 hours)",
                         "name": "minutes",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Include detailed metadata from Redis (default true)",
+                        "name": "include_metadata",
                         "in": "query"
                     }
                 ],
@@ -350,8 +1132,184 @@
                     "200": {
                         "description": "OK",
                         "schema": {
+                            "$ref": "#/definitions/main.EnhancedTimelineResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/vpa/epoch/{epochID}": {
+            "get": {
+                "description": "Get priority assignment and submission status for a specific epoch. Returns combined priority and submission information including priority details and submission details if available.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "vpa"
+                ],
+                "summary": "Get VPA status for specific epoch",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Epoch ID",
+                        "name": "epochID",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier (defaults to configured protocol)",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address (defaults to configured market)",
+                        "name": "market",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "VPA epoch status with priority and submission information",
+                        "schema": {
+                            "$ref": "#/definitions/main.VPAEpochStatusResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Epoch not found",
+                        "schema": {
                             "type": "object",
                             "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/vpa/epoch/{epochID}/lifecycle": {
+            "get": {
+                "description": "Track complete lifecycle of an epoch from release to submission, showing all stages and timing",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "vpa"
+                ],
+                "summary": "Get epoch lifecycle tracking",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Epoch ID to track",
+                        "name": "epochID",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier (defaults to configured protocol)",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address (defaults to configured market)",
+                        "name": "market",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Epoch lifecycle with all stages and timing",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/vpa/stats": {
+            "get": {
+                "description": "Get aggregated VPA statistics including total priority assignments, submission counts (success/failed), success rates, and 24-hour activity counts.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "vpa"
+                ],
+                "summary": "Get VPA statistics",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier (defaults to configured protocol)",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address (defaults to configured market)",
+                        "name": "market",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Aggregated VPA statistics",
+                        "schema": {
+                            "$ref": "#/definitions/main.VPAStatsResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/vpa/timeline": {
+            "get": {
+                "description": "Get priority assignment and submission timeline. Returns recent priority assignments and/or submissions ordered by timestamp (most recent first).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "vpa"
+                ],
+                "summary": "Get VPA timeline",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Protocol state identifier (defaults to configured protocol)",
+                        "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Data market address (defaults to configured market)",
+                        "name": "market",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Timeline type: 'priority', 'submission', or 'both' (default: 'both')",
+                        "name": "type",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Number of entries to retrieve per timeline type (default: 50, max: 1000)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "VPA timeline with priority and/or submission entries",
+                        "schema": {
+                            "$ref": "#/definitions/main.VPATimelineResponse"
                         }
                     }
                 }
@@ -381,13 +1339,13 @@
         "main.DashboardSummary": {
             "type": "object",
             "properties": {
-                "current_stats": {
-                    "description": "From stats:current",
+                "current_status": {
+                    "description": "Real-time status (epoch, queues)",
                     "type": "object",
                     "additionalProperties": true
                 },
-                "metrics": {
-                    "description": "From dashboard:summary",
+                "participation_stats": {
+                    "description": "24h participation/inclusion metrics",
                     "type": "object",
                     "additionalProperties": true
                 },
@@ -396,10 +1354,60 @@
                     "type": "object",
                     "additionalProperties": true
                 },
+                "system_metrics": {
+                    "description": "Rates, totals, current counts (includes VPA metrics)",
+                    "type": "object",
+                    "additionalProperties": true
+                },
                 "timestamp": {
                     "type": "string"
                 },
                 "validator_id": {
+                    "type": "string"
+                },
+                "vpa_metrics": {
+                    "description": "VPA-specific metrics (priority assignments, submissions)",
+                    "type": "object",
+                    "additionalProperties": true
+                }
+            }
+        },
+        "main.EnhancedTimelineEvent": {
+            "type": "object",
+            "properties": {
+                "entity_id": {
+                    "type": "string"
+                },
+                "metadata": {
+                    "$ref": "#/definitions/main.TimelineEventMetadata"
+                },
+                "time": {
+                    "type": "string"
+                },
+                "timestamp": {
+                    "type": "integer"
+                }
+            }
+        },
+        "main.EnhancedTimelineResponse": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "events": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/main.EnhancedTimelineEvent"
+                    }
+                },
+                "minutes": {
+                    "type": "integer"
+                },
+                "timestamp": {
+                    "type": "string"
+                },
+                "type": {
                     "type": "string"
                 }
             }
@@ -441,6 +1449,10 @@
                 "epoch_id": {
                     "type": "string"
                 },
+                "has_gap": {
+                    "description": "Whether epoch has a gap",
+                    "type": "boolean"
+                },
                 "ipfs_cid": {
                     "type": "string"
                 },
@@ -449,6 +1461,14 @@
                     "type": "integer"
                 },
                 "merkle_root": {
+                    "type": "string"
+                },
+                "onchain_status": {
+                    "description": "On-chain submission status",
+                    "type": "string"
+                },
+                "phase": {
+                    "description": "Current phase of epoch",
                     "type": "string"
                 },
                 "project_count": {
@@ -478,6 +1498,48 @@
                 }
             }
         },
+        "main.HeartbeatInfo": {
+            "type": "object",
+            "properties": {
+                "entity_id": {
+                    "description": "Format: hb:{peerID}:{timestamp}",
+                    "type": "string"
+                },
+                "peer_id": {
+                    "description": "libp2p peer ID of the sender",
+                    "type": "string"
+                },
+                "time": {
+                    "description": "RFC3339 formatted time",
+                    "type": "string"
+                },
+                "timestamp": {
+                    "description": "Unix timestamp when received",
+                    "type": "integer"
+                }
+            }
+        },
+        "main.HeartbeatsResponse": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "heartbeats": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/main.HeartbeatInfo"
+                    }
+                },
+                "minutes": {
+                    "description": "For recent query",
+                    "type": "integer"
+                },
+                "timestamp": {
+                    "type": "string"
+                }
+            }
+        },
         "main.HourlyStats": {
             "type": "object",
             "properties": {
@@ -504,6 +1566,145 @@
                 },
                 "status": {
                     "description": "\"empty\", \"healthy\", \"moderate\", \"high\", \"critical\"",
+                    "type": "string"
+                }
+            }
+        },
+        "main.SimulationInfo": {
+            "type": "object",
+            "properties": {
+                "data_market": {
+                    "description": "Data market address",
+                    "type": "string"
+                },
+                "entity_id": {
+                    "description": "Format: sim:{slotID}:{projectID}:{timestamp}:{peerID}",
+                    "type": "string"
+                },
+                "peer_id": {
+                    "description": "libp2p peer ID of the sender",
+                    "type": "string"
+                },
+                "project_id": {
+                    "description": "Project ID from the submission",
+                    "type": "string"
+                },
+                "slot_id": {
+                    "description": "Slot ID from the submission",
+                    "type": "string"
+                },
+                "snapshot_cid": {
+                    "description": "Real CID of the computed snapshot",
+                    "type": "string"
+                },
+                "snapshotter_address": {
+                    "description": "EIP-712 recovered address from signature",
+                    "type": "string"
+                },
+                "time": {
+                    "description": "RFC3339 formatted time",
+                    "type": "string"
+                },
+                "timestamp": {
+                    "description": "Unix timestamp when received",
+                    "type": "integer"
+                }
+            }
+        },
+        "main.SimulationsResponse": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "minutes": {
+                    "description": "For recent query",
+                    "type": "integer"
+                },
+                "simulations": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/main.SimulationInfo"
+                    }
+                },
+                "timestamp": {
+                    "type": "string"
+                }
+            }
+        },
+        "main.TimelineEventMetadata": {
+            "type": "object",
+            "properties": {
+                "data_market": {
+                    "type": "string"
+                },
+                "epoch_id": {
+                    "type": "string"
+                },
+                "event_type": {
+                    "description": "\"submission\", \"validation\", \"batch\", \"epoch\"",
+                    "type": "string"
+                },
+                "is_enhanced": {
+                    "description": "Whether entity ID uses new enhanced format",
+                    "type": "boolean"
+                },
+                "peer_id": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "slot_id": {
+                    "type": "string"
+                },
+                "submission_type": {
+                    "description": "\"snapshot\", \"validation\"",
+                    "type": "string"
+                },
+                "validator_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "main.VPAEpochStatusResponse": {
+            "type": "object",
+            "properties": {
+                "epoch_id": {
+                    "type": "string"
+                },
+                "status": {
+                    "description": "Combined priority and submission status",
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "timestamp": {
+                    "type": "string"
+                }
+            }
+        },
+        "main.VPAStatsResponse": {
+            "type": "object",
+            "properties": {
+                "stats": {
+                    "description": "Contains priority assignments, submissions, success rates, etc.",
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "timestamp": {
+                    "type": "string"
+                }
+            }
+        },
+        "main.VPATimelineResponse": {
+            "type": "object",
+            "properties": {
+                "timeline": {
+                    "description": "Contains \"priority_timeline\" and/or \"submission_timeline\"",
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "timestamp": {
                     "type": "string"
                 }
             }

@@ -44,9 +44,10 @@ show_usage() {
     echo "Usage: $0 <command> [options]"
     echo ""
     echo "Main Commands:"
-    echo "  start [--with-ipfs] [--no-monitor]  - Start services (monitoring enabled by default)"
+    echo "  start [--with-ipfs] [--with-vpa] [--no-monitor] [--rebuild]  - Start services (monitoring enabled by default)"
     echo "  stop                  - Stop all services"
     echo "  restart               - Restart all services"
+    echo "  restart-monitor       - Restart only monitoring services (state-tracker, monitor-api)"
     echo "  status                - Show service status"
     echo "  clean                 - Stop and remove all containers/volumes"
     echo "  clean-queue          - Clean up stale aggregation queue items"
@@ -57,11 +58,13 @@ show_usage() {
     echo "  logs          - Show all logs"
     echo "  p2p-logs      - P2P Gateway logs"
     echo "  aggregator-logs - Aggregator logs"
+    echo "  spam-aggregator-logs - Spam Aggregator logs"
     echo "  finalizer-logs - Finalizer logs"
     echo "  dequeuer-logs - Dequeuer logs"
     echo "  event-logs    - Event monitor logs"
     echo "  redis-logs    - Redis logs"
     echo "  ipfs-logs     - IPFS node logs"
+    echo "  relayer-logs  - Relayer-PY VPA service logs"
     echo ""
     echo "Stream Debugging:"
     echo "  stream-info   - Show Redis streams status"
@@ -79,11 +82,62 @@ is_separated_running() {
     $DOCKER_COMPOSE_CMD -f docker-compose.separated.yml ps --services 2>/dev/null | grep -q p2p-gateway
 }
 
+# Check if code has changed since last build
+check_code_changes() {
+    local last_build_file=".dsv-last-build"
+    local current_head=""
+    local last_build_head=""
+    
+    # Check if we're in a git repository
+    if ! git rev-parse --git-dir > /dev/null 2>&1; then
+        return 0  # Not a git repo, skip check
+    fi
+    
+    # Check for uncommitted changes
+    if ! git diff-index --quiet HEAD -- 2>/dev/null; then
+        print_color "$YELLOW" "⚠️  WARNING: You have uncommitted changes in your working directory"
+        print_color "$YELLOW" "   These changes will NOT be included unless you rebuild"
+        return 1
+    fi
+    
+    # Get current HEAD
+    current_head=$(git rev-parse HEAD 2>/dev/null)
+    if [ -z "$current_head" ]; then
+        return 0  # Can't get HEAD, skip check
+    fi
+    
+    # Check if last build file exists
+    if [ -f "$last_build_file" ]; then
+        last_build_head=$(cat "$last_build_file" 2>/dev/null)
+        
+        if [ -n "$last_build_head" ] && [ "$current_head" != "$last_build_head" ]; then
+            print_color "$YELLOW" "⚠️  WARNING: Code has changed since last build"
+            print_color "$CYAN" "   Last build: $(git log -1 --format='%h %s' "$last_build_head" 2>/dev/null || echo "$last_build_head")"
+            print_color "$CYAN" "   Current:    $(git log -1 --format='%h %s' "$current_head" 2>/dev/null || echo "$current_head")"
+            print_color "$YELLOW" "   You may be running old code. Use --rebuild to rebuild with latest changes."
+            return 1
+        fi
+    fi
+    
+    return 0
+}
+
+# Record current HEAD as last build
+record_build() {
+    local last_build_file=".dsv-last-build"
+    
+    if git rev-parse --git-dir > /dev/null 2>&1; then
+        git rev-parse HEAD > "$last_build_file" 2>/dev/null
+    fi
+}
+
 # Start production (separated) mode
 start_services() {
     # Check for flags
     local enable_monitoring=true
     local enable_ipfs=false
+    local enable_vpa=false
+    local force_rebuild=false
     local compose_args="-f docker-compose.separated.yml"
 
     # Parse arguments
@@ -94,6 +148,12 @@ start_services() {
                 ;;
             --with-ipfs)
                 enable_ipfs=true
+                ;;
+            --with-vpa)
+                enable_vpa=true
+                ;;
+            --rebuild)
+                force_rebuild=true
                 ;;
         esac
     done
@@ -114,8 +174,8 @@ start_services() {
             exit 1
         fi
 
-        # Check permissions
-        if [ ! -r "$IPFS_DIR" ] || [ ! -w "$IPFS_DIR" ]; then
+    # Check permissions if IPFS was enabled
+        if [ "$enable_ipfs" = true ] && ([ ! -r "$IPFS_DIR" ] || [ ! -w "$IPFS_DIR" ]); then
             print_color "$RED" "❌ CRITICAL: IPFS data directory has incorrect permissions"
             print_color "$YELLOW" "Directory: $IPFS_DIR"
             print_color "$YELLOW" "Required: Read/write access for user 1000:1000"
@@ -123,7 +183,63 @@ start_services() {
             exit 1
         fi
 
-        print_color "$GREEN" "✅ IPFS directory verified: $IPFS_DIR"
+        if [ "$enable_ipfs" = true ]; then
+            print_color "$GREEN" "✅ IPFS directory verified: $IPFS_DIR"
+        fi
+    fi
+
+    # Check VPA configuration if --with-vpa flag is used
+    if [ "$enable_vpa" = true ]; then
+        if [ -z "$RELAYER_PY_ENDPOINT" ]; then
+            print_color "$YELLOW" "⚠️  WARNING: RELAYER_PY_ENDPOINT not set, using default"
+        fi
+        if [ -z "$VPA_SIGNER_ADDRESSES" ] || [ -z "$VPA_SIGNER_PRIVATE_KEYS" ]; then
+            print_color "$RED" "❌ CRITICAL: VPA multi-signer configuration incomplete"
+            print_color "$YELLOW" "Required environment variables:"
+            print_color "$YELLOW" "  VPA_SIGNER_ADDRESSES - Comma-separated list of signer addresses"
+            print_color "$YELLOW" "  VPA_SIGNER_PRIVATE_KEYS - Comma-separated list of private keys"
+            print_color "$YELLOW" ""
+            print_color "$YELLOW" "Add these to your .env file, then try again:"
+            print_color "$YELLOW" "  ./dsv.sh start --with-vpa"
+            exit 1
+        fi
+
+        # Clone relayer-py repository (relative to current directory)
+        RELAYER_REPO="https://github.com/powerloom/relayer-py.git"
+        RELAYER_DIR="./relayer-py"
+
+        # Remove existing relayer-py directory if it exists
+        if [ -d "$RELAYER_DIR" ]; then
+            print_color "$YELLOW" "🗑️  Removing existing relayer-py directory..."
+            rm -rf "$RELAYER_DIR"
+        fi
+
+        # Clone relayer-py repository
+        print_color "$CYAN" "📦 Cloning relayer-py repository to $RELAYER_DIR..."
+        if ! git clone "$RELAYER_REPO" "$RELAYER_DIR"; then
+            print_color "$RED" "❌ Failed to clone relayer-py repository"
+            print_color "$YELLOW" "Repository: $RELAYER_REPO"
+            print_color "$YELLOW" "Target directory: $RELAYER_DIR"
+            exit 1
+        fi
+        print_color "$GREEN" "✅ Successfully cloned relayer-py"
+
+        # Switch to specified branch (from .env) or default to develop
+        RELAYER_BRANCH="${RELAYER_PY_BRANCH:-develop}"
+        print_color "$CYAN" "🔄 Switching to branch: $RELAYER_BRANCH"
+        if [ -n "$RELAYER_PY_BRANCH" ]; then
+            print_color "$CYAN" "   (from RELAYER_PY_BRANCH in .env)"
+        fi
+        if ! (cd "$RELAYER_DIR" && git checkout "$RELAYER_BRANCH" 2>/dev/null); then
+            print_color "$RED" "❌ Failed to switch to $RELAYER_BRANCH branch"
+            print_color "$YELLOW" "Continuing with default branch"
+        else
+            print_color "$GREEN" "✅ Switched to $RELAYER_BRANCH branch"
+        fi
+
+        # relayer-py now reads settings directly from environment variables
+        print_color "$CYAN" "🔧 relayer-py will configure from environment variables"
+        print_color "$GREEN" "✅ VPA integration configured via env vars"
     fi
 
     print_color "$GREEN" "🚀 Starting Separated Architecture"
@@ -138,31 +254,80 @@ start_services() {
         print_color "$YELLOW" "Warning: .env file not found. Using defaults."
     fi
 
-    # Build profiles argument
-    local profiles=""
+    # Build profiles argument array
+    local profile_args=()
     if [ "$enable_monitoring" = true ]; then
-        profiles="$profiles --profile monitoring"
+        profile_args+=(--profile monitoring)
     fi
     if [ "$enable_ipfs" = true ]; then
-        profiles="$profiles --profile ipfs"
+        profile_args+=(--profile ipfs)
+    fi
+    if [ "$enable_vpa" = true ]; then
+        profile_args+=(--profile vpa)
+    fi
+    # Spam aggregator only when ENABLE_SPAM_PROTECTION=true (avoids crash loop when false)
+    if [ "${ENABLE_SPAM_PROTECTION:-true}" = "true" ]; then
+        profile_args+=(--profile spam-protection)
     fi
 
+    # Check for code changes if not forcing rebuild
+    if [ "$force_rebuild" = false ]; then
+        if ! check_code_changes; then
+            echo ""
+            read -p "Continue without rebuilding? (y/N) " -n 1 -r
+            echo
+            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                print_color "$YELLOW" "Cancelled. Use --rebuild flag to rebuild: ./dsv.sh start --rebuild"
+                exit 1
+            fi
+        fi
+    fi
+    
     # Start services with specified profiles
     print_color "$CYAN" "Starting services..."
-    if [ -n "$profiles" ]; then
-        print_color "$CYAN" "With profiles:$profiles"
-        $DOCKER_COMPOSE_CMD $compose_args $profiles up -d --build
+    
+    # Enable BuildKit for faster, parallel builds with better caching
+    export DOCKER_BUILDKIT=1
+    export COMPOSE_DOCKER_CLI_BUILD=1
+    
+    # Build flag - only add if force_rebuild is true
+    local build_flag=""
+    if [ "$force_rebuild" = true ]; then
+        build_flag="--build"
+        print_color "$YELLOW" "⚠️  Force rebuild enabled - images will be rebuilt"
+        print_color "$CYAN" "💡 BuildKit enabled for parallel builds and improved caching"
+    fi
+    
+    if [ ${#profile_args[@]} -gt 0 ]; then
+        print_color "$CYAN" "With profiles: ${profile_args[*]}"
+        if [ -n "$build_flag" ]; then
+            $DOCKER_COMPOSE_CMD $compose_args "${profile_args[@]}" up -d $build_flag
+        else
+            $DOCKER_COMPOSE_CMD $compose_args "${profile_args[@]}" up -d
+        fi
     else
         print_color "$CYAN" "Without additional profiles"
-        $DOCKER_COMPOSE_CMD $compose_args up -d --build
+        if [ -n "$build_flag" ]; then
+            $DOCKER_COMPOSE_CMD $compose_args up -d $build_flag
+        else
+            $DOCKER_COMPOSE_CMD $compose_args up -d
+        fi
     fi
 
     if [ $? -eq 0 ]; then
+        # Record build if we rebuilt
+        if [ "$force_rebuild" = true ]; then
+            record_build
+        fi
+        
         print_color "$GREEN" "✅ Services started successfully"
         echo ""
         print_color "$CYAN" "Components:"
         echo "  • P2P Gateway (port ${P2P_PORT:-9001})"
         echo "  • Aggregator (consensus)"
+        if [ "${ENABLE_SPAM_PROTECTION:-true}" = "true" ]; then
+            echo "  • Spam Aggregator (DDoS protection)"
+        fi
         echo "  • Finalizer (batch creation)"
         echo "  • Dequeuer (submission processing)"
         echo "  • Event Monitor (epoch tracking)"
@@ -174,10 +339,6 @@ start_services() {
             echo "  • Monitor API (dashboard)"
         fi
         echo ""
-        if [ "$enable_ipfs" = true ]; then
-            print_color "$YELLOW" "Note: Make sure IPFS_HOST=ipfs:5001 in .env for DSV services to use local IPFS"
-            echo ""
-        fi
         if [ "$enable_monitoring" = true ]; then
             echo "View dashboard: http://localhost:${MONITOR_API_PORT:-9091}/swagger/index.html"
         fi
@@ -192,13 +353,35 @@ start_services() {
 stop_services() {
     print_color "$YELLOW" "Stopping all services..."
     if is_separated_running; then
-        # Stop all services including monitoring and ipfs profiles
-        $DOCKER_COMPOSE_CMD -f docker-compose.separated.yml --profile monitoring --profile ipfs down
+        # Stop all services including monitoring, ipfs, vpa, and spam-protection profiles
+        $DOCKER_COMPOSE_CMD -f docker-compose.separated.yml --profile monitoring --profile ipfs --profile vpa --profile spam-protection down
     else
         # Try to stop any running containers
         $DOCKER_COMPOSE_CMD down 2>/dev/null || true
     fi
     print_color "$GREEN" "✓ All services stopped"
+}
+
+# Restart monitoring services only
+restart_monitoring() {
+    print_color "$CYAN" "🔄 Restarting monitoring services (state-tracker, monitor-api)..."
+    if is_separated_running; then
+        # Restart only monitoring profile services
+        $DOCKER_COMPOSE_CMD -f docker-compose.separated.yml --profile monitoring restart
+        if [ $? -eq 0 ]; then
+            print_color "$GREEN" "✅ Monitoring services restarted successfully"
+            echo ""
+            print_color "$CYAN" "Services restarted:"
+            echo "  • State Tracker (data aggregation)"
+            echo "  • Monitor API (dashboard)"
+        else
+            print_color "$RED" "❌ Failed to restart monitoring services"
+            exit 1
+        fi
+    else
+        print_color "$YELLOW" "No services running. Start services first with: ./dsv.sh start"
+        exit 1
+    fi
 }
 
 # Show status
@@ -322,7 +505,7 @@ clean_all() {
         stop_monitoring
         # Only remove volumes belonging to this project
         if is_separated_running || docker ps | grep -q snapshot-sequencer; then
-            $DOCKER_COMPOSE_CMD -f docker-compose.separated.yml down -v 2>/dev/null || true
+            $DOCKER_COMPOSE_CMD -f docker-compose.separated.yml --profile vpa down -v 2>/dev/null || true
         fi
         if [ -f docker-compose.monitoring.yml ]; then
             $DOCKER_COMPOSE_CMD -f docker-compose.monitoring.yml down -v 2>/dev/null || true
@@ -595,7 +778,8 @@ show_service_logs() {
 # Main command handler
 case "${1:-}" in
     start|up)
-        start_services "$2"
+        shift
+        start_services "$@"
         ;;
     stop|down)
         stop_services
@@ -603,7 +787,11 @@ case "${1:-}" in
     restart)
         stop_services
         sleep 2
-        start_services "$2"
+        shift
+        start_services "$@"
+        ;;
+    restart-monitor)
+        restart_monitoring
         ;;
     status|ps)
         show_status
@@ -627,6 +815,9 @@ case "${1:-}" in
     aggregator-logs)
         show_service_logs "aggregator" "$2"
         ;;
+    spam-aggregator-logs)
+        show_service_logs "spam-aggregator" "$2"
+        ;;
     finalizer-logs)
         show_service_logs "finalizer" "$2"
         ;;
@@ -641,6 +832,9 @@ case "${1:-}" in
         ;;
     ipfs-logs)
         show_service_logs "ipfs" "$2"
+        ;;
+    relayer-logs)
+        show_service_logs "relayer-py" "$2"
         ;;
     clean)
         clean_all

@@ -56,25 +56,30 @@ func NewP2PHost(ctx context.Context, cfg *config.Settings) (*P2PHost, error) {
 	}
 	log.Infof("Connection manager configured: LowWater=%d, HighWater=%d", cfg.ConnManagerLowWater, cfg.ConnManagerHighWater)
 
+	// Create RFC1918 connection gater to block reserved IP connections
+	// This is required by Hetzner to prevent scanning of internal networks
+	reservedIPGater := NewRFC1918ConnectionGater()
+
 	// Build libp2p options (EXACT copy from working implementation)
 	opts := []libp2p.Option{
 		libp2p.Identity(privKey),
 		libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/0.0.0.0/tcp/%s", p2pPort)),
 		libp2p.EnableNATService(),
 		libp2p.ConnectionManager(connMgr),
+		libp2p.ConnectionGater(reservedIPGater), // Block reserved IP connections at dial/accept level
 	}
 
 	// Add public IP address if configured
+	// CRITICAL: Filter out internal Docker IPs - never advertise these to DHT/gossipsub
 	if cfg.P2PPublicIP != "" {
 		publicAddr, err := multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%s", cfg.P2PPublicIP, p2pPort))
 		if err != nil {
 			log.Errorf("Failed to create public multiaddr: %v", err)
 		} else {
-			opts = append(opts, libp2p.AddrsFactory(func(addrs []multiaddr.Multiaddr) []multiaddr.Multiaddr {
-				// Add the public address to the list
-				return append(addrs, publicAddr)
+			opts = append(opts, libp2p.AddrsFactory(func(_ []multiaddr.Multiaddr) []multiaddr.Multiaddr {
+				return []multiaddr.Multiaddr{publicAddr}
 			}))
-			log.Infof("Advertising public IP: %s", cfg.P2PPublicIP)
+			log.Infof("DHT advertises only /ip4/%s/tcp/%s (P2P public; no merged local/observed addrs)", cfg.P2PPublicIP, p2pPort)
 		}
 	}
 
@@ -103,7 +108,16 @@ func NewP2PHost(ctx context.Context, cfg *config.Settings) (*P2PHost, error) {
 	if len(cfg.BootstrapPeers) > 0 {
 		log.Infof("Attempting to connect to %d bootstrap peers", len(cfg.BootstrapPeers))
 		connectedCount := 0
+		skippedCount := 0
 		for i, bootstrapAddr := range cfg.BootstrapPeers {
+			// Filter out bootstrap peers with reserved IP addresses
+			maddr, err := multiaddr.NewMultiaddr(bootstrapAddr)
+			if err == nil && HasReservedIPAddress(maddr) {
+				log.Warnf("Skipping bootstrap peer %d with reserved IP: %s", i+1, bootstrapAddr)
+				skippedCount++
+				continue
+			}
+
 			if err := connectToBootstrap(hostCtx, h, bootstrapAddr); err != nil {
 				log.WithError(err).Warnf("Failed to connect to bootstrap peer %d: %s", i+1, bootstrapAddr)
 			} else {
@@ -111,7 +125,7 @@ func NewP2PHost(ctx context.Context, cfg *config.Settings) (*P2PHost, error) {
 				log.Infof("Successfully connected to bootstrap peer %d: %s", i+1, bootstrapAddr)
 			}
 		}
-		log.Infof("Connected to %d/%d bootstrap peers", connectedCount, len(cfg.BootstrapPeers))
+		log.Infof("Connected to %d/%d bootstrap peers (skipped %d with reserved IPs)", connectedCount, len(cfg.BootstrapPeers), skippedCount)
 		if connectedCount == 0 {
 			log.Warn("Failed to connect to any bootstrap peers - will continue with discovery only")
 		}
@@ -198,6 +212,40 @@ func NewP2PHost(ctx context.Context, cfg *config.Settings) (*P2PHost, error) {
 		ctx:       hostCtx,
 		cancel:    cancel,
 	}
+
+	// Periodically tag only mesh peers to protect them from connection manager pruning
+	// This prevents DSV nodes from pruning legitimate publishers (local collectors) in the mesh
+	// Security: We only tag peers in the gossipsub mesh, not all connections (prevents DDoS)
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-hostCtx.Done():
+				return
+			case <-ticker.C:
+				if connMgr := h.ConnManager(); connMgr != nil {
+					meshPeers := make(map[peer.ID]bool)
+
+					// Collect mesh peers from both topics
+					for _, peerID := range ps.ListPeers(discoveryTopic) {
+						meshPeers[peerID] = true
+						connMgr.TagPeer(peerID, "mesh-peer", 50) // Medium priority
+					}
+					for _, peerID := range ps.ListPeers(submissionsTopic) {
+						if !meshPeers[peerID] {
+							meshPeers[peerID] = true
+							connMgr.TagPeer(peerID, "mesh-peer", 50) // Medium priority
+						}
+					}
+
+					if len(meshPeers) > 0 {
+						log.Debugf("Tagged %d mesh peers to protect from pruning", len(meshPeers))
+					}
+				}
+			}
+		}
+	}()
 
 	return p2pHost, nil
 }

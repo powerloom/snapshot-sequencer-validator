@@ -7,19 +7,47 @@
 bin/
 
 # Binary files (never commit these)
-# Main binaries
+# Main binaries - NEVER COMMIT BINARIES
 unified
 cmd/unified/unified
+cmd/aggregator/aggregator
+cmd/dequeuer/dequeuer
+cmd/finalizer/finalizer
+cmd/p2p-gateway/p2p-gateway
+cmd/state-tracker/state-tracker
+cmd/vpa-relayer/vpa-relayer
+cmd/epoch-manager/epoch_generator
+cmd/monitor-api/monitor-api
 
-# Any file without extension in cmd directories
-cmd/*/[!.]*
+# Ignore binaries in cmd directories
+# We explicitly list binary names above (lines 11-20), so we don't need a catch-all pattern
+# Source files (.go, .md, Dockerfile*) are automatically tracked since they're not in ignore list
+
+# Explicitly ensure cmd directories and .go files are not ignored
+!cmd/
 !cmd/*/
 !cmd/*/*.go
-!cmd/*/*.md
-!cmd/*/Dockerfile*
+
+# Specific binary names (catch-all) - only match files, not directories
+# Use /aggregator to ensure it only matches files named aggregator, not directories
+/aggregator
+/vpa-relayer
+/dequeuer
+/finalizer
+/p2p-gateway
+/state-tracker
+/epoch_generator
+/monitor-api
+/unified-sequencer
 
 # Test binaries
 *.test
+
+# Script binaries (should be built to bin/ directory)
+scripts/check_epoch_gaps
+scripts/epoch_lifecycle_tracker
+check_epoch_gaps
+epoch_lifecycle_tracker
 
 # Build artifacts
 *.exe

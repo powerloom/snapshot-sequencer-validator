@@ -8,12 +8,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
-	"github.com/redis/go-redis/v9"
 	redislib "github.com/powerloom/snapshot-sequencer-validator/pkgs/redis"
 	"github.com/powerloom/snapshot-sequencer-validator/pkgs/utils"
+	"github.com/redis/go-redis/v9"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
 )
@@ -25,12 +24,12 @@ type StateWorker struct {
 	keyBuilder *redislib.KeyBuilder
 
 	// In-memory counters for current metrics
-	mu              sync.RWMutex
-	submissions     int64
-	validations     int64
-	epochs          int64
-	batches         int64
-	lastReset       time.Time
+	mu          sync.RWMutex
+	submissions int64
+	validations int64
+	epochs      int64
+	batches     int64
+	lastReset   time.Time
 
 	// Control
 	shutdown chan struct{}
@@ -129,36 +128,6 @@ func (sw *StateWorker) processSimpleStateChange(eventType string, action string)
 	}
 }
 
-// processStateChange updates in-memory counters based on state change (legacy)
-func (sw *StateWorker) processStateChange(event *StateChangeEvent) {
-	sw.mu.Lock()
-	defer sw.mu.Unlock()
-
-	switch event.Type {
-	case "submission":
-		atomic.AddInt64(&sw.submissions, 1)
-		stateChangesProcessed.WithLabelValues("submission").Inc()
-
-	case "validation":
-		atomic.AddInt64(&sw.validations, 1)
-		stateChangesProcessed.WithLabelValues("validation").Inc()
-
-	case "epoch":
-		atomic.AddInt64(&sw.epochs, 1)
-		stateChangesProcessed.WithLabelValues("epoch").Inc()
-
-	case "batch":
-		atomic.AddInt64(&sw.batches, 1)
-		stateChangesProcessed.WithLabelValues("batch").Inc()
-	}
-
-
-	log.WithFields(logrus.Fields{
-		"type":      event.Type,
-		"entity_id": event.EntityID,
-	}).Debug("Processed state change")
-}
-
 // StartMetricsAggregator aggregates metrics every 30 seconds
 func (sw *StateWorker) StartMetricsAggregator(ctx context.Context) {
 	sw.wg.Add(1)
@@ -202,14 +171,21 @@ func (sw *StateWorker) aggregateCurrentMetrics(ctx context.Context) {
 	submissionQueueCount, _ := sw.redis.LLen(ctx, sw.keyBuilder.SubmissionQueue()).Result()
 
 	// Count processed submissions using ActiveEpochs set (deterministic aggregation with migration)
+	// Also update submission counts in epoch state hashes
 	recentProcessedSubmissions := int64(0)
 	activeEpochs, err := sw.redis.SMembers(ctx, sw.keyBuilder.ActiveEpochs()).Result()
 	if err == nil {
 		for _, epochID := range activeEpochs {
-			epochKey := sw.keyBuilder.EpochProcessed(epochID)
-			count, err := sw.redis.SCard(ctx, epochKey).Result()
+			// Use deterministic ZSET for submission counting
+			epochSubmissionsKey := sw.keyBuilder.EpochSubmissionsIds(epochID)
+			count, err := sw.redis.ZCard(ctx, epochSubmissionsKey).Result()
 			if err == nil {
 				recentProcessedSubmissions += count
+				// Update submission count in epoch state hash
+				epochStateKey := sw.keyBuilder.EpochState(epochID)
+				sw.redis.HSet(ctx, epochStateKey, "submissions_count", count)
+				// Refresh TTL on epoch state (7 days - same as initial creation)
+				sw.redis.Expire(ctx, epochStateKey, 7*24*time.Hour)
 			}
 		}
 	}
@@ -356,6 +332,18 @@ func (sw *StateWorker) aggregateCurrentMetrics(ctx context.Context) {
 	}
 	summary["submissions_5m"] = recentSubmissions5m
 
+	// Aggregate VPA metrics (priority assignments and submissions)
+	vpaMetrics := sw.aggregateVPAMetrics(ctx)
+	// Add VPA metrics to summary (safe to range over nil map)
+	for k, v := range vpaMetrics {
+		summary[k] = v
+	}
+
+	// Detect epoch gaps
+	gapCount := sw.detectEpochGaps(ctx)
+	summary["epoch_gaps_count"] = gapCount
+	summary["epoch_gaps_rate"] = float64(gapCount) / float64(recentEpochs5m+1) // Avoid division by zero
+
 	// Store summary with TTL
 	summaryJSON, _ := json.Marshal(summary)
 	sw.redis.Set(ctx, sw.keyBuilder.DashboardSummary(), summaryJSON, 60*time.Second)
@@ -369,11 +357,11 @@ func (sw *StateWorker) aggregateCurrentMetrics(ctx context.Context) {
 	log.WithFields(logrus.Fields{
 		"submissions_total": totalSubmissions,
 		"queue_submissions": submissionQueueCount,
-		"epochs":           sw.epochs,
-		"batches":          sw.batches,
-		"validators":       activeCount,
-		"epochs_1m":        recentEpochs,
-		"batches_1m":       recentBatchesCount,
+		"epochs":            sw.epochs,
+		"batches":           sw.batches,
+		"validators":        activeCount,
+		"epochs_1m":         recentEpochs,
+		"batches_1m":        recentBatchesCount,
 	}).Debug("Updated dashboard summary")
 
 	// Aggregate participation metrics
@@ -381,6 +369,93 @@ func (sw *StateWorker) aggregateCurrentMetrics(ctx context.Context) {
 
 	// Aggregate current epoch status
 	sw.aggregateCurrentEpochStatus(ctx)
+
+	// Aggregate VPA metrics separately (for dedicated VPA endpoints)
+	sw.aggregateVPAMetricsForAPI(ctx)
+}
+
+// aggregateVPAMetrics aggregates VPA metrics for dashboard summary
+func (sw *StateWorker) aggregateVPAMetrics(ctx context.Context) map[string]interface{} {
+	vpaMetrics := make(map[string]interface{})
+
+	// Get VPA stats from Redis
+	statsKey := sw.keyBuilder.VPAStats()
+	stats, err := sw.redis.HGetAll(ctx, statsKey).Result()
+	if err != nil {
+		log.WithError(err).Debug("Failed to get VPA stats")
+		return nil
+	}
+
+	// Parse stats and add to metrics
+	if len(stats) > 0 {
+		// Priority assignment counts
+		if totalAssignments, ok := stats["total_priority_assignments"]; ok {
+			if val, err := strconv.ParseInt(totalAssignments, 10, 64); err == nil {
+				vpaMetrics["vpa_priority_assignments_total"] = val
+			}
+		}
+		if noPriority, ok := stats["no_priority_count"]; ok {
+			if val, err := strconv.ParseInt(noPriority, 10, 64); err == nil {
+				vpaMetrics["vpa_no_priority_count"] = val
+			}
+		}
+
+		// Submission counts
+		if success, ok := stats["total_submissions_success"]; ok {
+			if val, err := strconv.ParseInt(success, 10, 64); err == nil {
+				vpaMetrics["vpa_submissions_success"] = val
+			}
+		}
+		if failed, ok := stats["total_submissions_failed"]; ok {
+			if val, err := strconv.ParseInt(failed, 10, 64); err == nil {
+				vpaMetrics["vpa_submissions_failed"] = val
+			}
+		}
+
+		// Calculate success rate
+		if success, ok := vpaMetrics["vpa_submissions_success"].(int64); ok {
+			if failed, ok := vpaMetrics["vpa_submissions_failed"].(int64); ok {
+				total := success + failed
+				if total > 0 {
+					vpaMetrics["vpa_submission_success_rate"] = float64(success) / float64(total) * 100
+				}
+			}
+		}
+	}
+
+	// Count recent priority assignments from timeline (last 24 hours)
+	nowTS := time.Now().Unix()
+	twentyFourHoursAgo := nowTS - (24 * 3600)
+	priorityTimelineKey := sw.keyBuilder.VPAPriorityTimeline()
+	recentPriorities, err := sw.redis.ZCount(ctx, priorityTimelineKey,
+		strconv.FormatInt(twentyFourHoursAgo, 10),
+		strconv.FormatInt(nowTS, 10)).Result()
+	if err == nil {
+		vpaMetrics["vpa_priority_assignments_24h"] = recentPriorities
+	}
+
+	// Count recent submissions from timeline (last 24 hours)
+	submissionTimelineKey := sw.keyBuilder.VPASubmissionTimeline()
+	recentSubmissions, err := sw.redis.ZCount(ctx, submissionTimelineKey,
+		strconv.FormatInt(twentyFourHoursAgo, 10),
+		strconv.FormatInt(nowTS, 10)).Result()
+	if err == nil {
+		vpaMetrics["vpa_submissions_24h"] = recentSubmissions
+	}
+
+	return vpaMetrics
+}
+
+// aggregateVPAMetricsForAPI aggregates VPA metrics for dedicated API endpoints
+func (sw *StateWorker) aggregateVPAMetricsForAPI(ctx context.Context) {
+	// This function prepares detailed VPA metrics for /vpa/stats endpoint
+	// The detailed stats are already stored in Redis by aggregator, so we just ensure TTL
+	statsKey := sw.keyBuilder.VPAStats()
+	exists, _ := sw.redis.Exists(ctx, statsKey).Result()
+	if exists > 0 {
+		// Refresh TTL to keep stats available
+		sw.redis.Expire(ctx, statsKey, 7*24*time.Hour)
+	}
 }
 
 // StartHourlyStatsWorker prepares hourly statistics every 5 minutes
@@ -451,8 +526,9 @@ func (sw *StateWorker) aggregateHourPeriod(ctx context.Context, hourStart, hourE
 	activeEpochs, err := sw.redis.SMembers(ctx, sw.keyBuilder.ActiveEpochs()).Result()
 	if err == nil {
 		for _, epochID := range activeEpochs {
-			epochKey := sw.keyBuilder.EpochProcessed(epochID)
-			count, err := sw.redis.SCard(ctx, epochKey).Result()
+			// Use deterministic ZSET for submission counting
+			epochSubmissionsKey := sw.keyBuilder.EpochSubmissionsIds(epochID)
+			count, err := sw.redis.ZCard(ctx, epochSubmissionsKey).Result()
 			if err == nil {
 				submissionCount += count
 			}
@@ -596,8 +672,9 @@ func (sw *StateWorker) aggregateDailyStats(ctx context.Context) {
 	activeEpochs, err := sw.redis.SMembers(ctx, sw.keyBuilder.ActiveEpochs()).Result()
 	if err == nil {
 		for _, epochID := range activeEpochs {
-			epochKey := sw.keyBuilder.EpochProcessed(epochID)
-			count, err := sw.redis.SCard(ctx, epochKey).Result()
+			// Use deterministic ZSET for submission counting
+			epochSubmissionsKey := sw.keyBuilder.EpochSubmissionsIds(epochID)
+			count, err := sw.redis.ZCard(ctx, epochSubmissionsKey).Result()
 			if err == nil {
 				submissionCount += count
 			}
@@ -621,13 +698,13 @@ func (sw *StateWorker) aggregateDailyStats(ctx context.Context) {
 	}
 
 	dailyStats := map[string]interface{}{
-		"period_start":     dayAgo.Format(time.RFC3339),
-		"period_end":       now.Format(time.RFC3339),
-		"epochs_total":     epochs,
-		"batches_total":    batches,
+		"period_start":      dayAgo.Format(time.RFC3339),
+		"period_end":        now.Format(time.RFC3339),
+		"epochs_total":      epochs,
+		"batches_total":     batches,
 		"submissions_total": submissionCount,
-		"hourly_breakdown": hourlyBreakdown,
-		"updated_at":       time.Now().Unix(),
+		"hourly_breakdown":  hourlyBreakdown,
+		"updated_at":        time.Now().Unix(),
 	}
 
 	// Store daily stats
@@ -667,10 +744,17 @@ func (sw *StateWorker) StartPruningWorker(ctx context.Context) {
 func (sw *StateWorker) pruneOldData(ctx context.Context) {
 	cutoff := time.Now().Add(-24 * time.Hour).Unix()
 
-	// Only prune main timeline sorted sets (no per-validator keys needed)
+	// Prune all timeline sorted sets (critical for preventing unbounded growth)
 	timelines := []string{
 		sw.keyBuilder.MetricsEpochsTimeline(),
 		sw.keyBuilder.MetricsBatchesTimeline(),
+		sw.keyBuilder.MetricsSubmissionsTimeline(),
+		sw.keyBuilder.MetricsValidationsTimeline(),
+		// Also prune non-namespaced timeline (legacy code may still write to it)
+		"metrics:submissions:timeline",
+		"metrics:validations:timeline",
+		"metrics:epochs:timeline",
+		"metrics:batches:timeline",
 	}
 
 	totalRemoved := int64(0)
@@ -682,12 +766,70 @@ func (sw *StateWorker) pruneOldData(ctx context.Context) {
 			log.WithError(err).WithField("timeline", timeline).Error("Failed to prune old data")
 			continue
 		}
+		if removed > 0 {
+			log.WithFields(logrus.Fields{
+				"timeline": timeline,
+				"removed":  removed,
+			}).Info("Pruned old timeline entries")
+		}
 		totalRemoved += removed
 	}
 
 	if totalRemoved > 0 {
 		log.WithField("removed_entries", totalRemoved).Info("Pruned old timeline data")
 	}
+
+	// Prune epochs:active SET to remove epochs older than 7 days
+	// This prevents unbounded growth when TTL keeps getting refreshed
+	activeEpochsKey := sw.keyBuilder.ActiveEpochs()
+	activeEpochs, err := sw.redis.SMembers(ctx, activeEpochsKey).Result()
+	if err == nil && len(activeEpochs) > 0 {
+		// Get current epoch from timeline to determine cutoff
+		currentEpochStr := ""
+		recentEpochs, err := sw.redis.ZRevRangeByScore(ctx, sw.keyBuilder.MetricsEpochsTimeline(),
+			&redis.ZRangeBy{
+				Min:    strconv.FormatInt(cutoff, 10),
+				Max:    "+inf",
+				Offset: 0,
+				Count:  1,
+			}).Result()
+		if err == nil && len(recentEpochs) > 0 {
+			// Extract epoch ID from timeline entry (format: "open:{epochId}" or "closed:{epochId}")
+			entry := recentEpochs[0]
+			parts := strings.Split(entry, ":")
+			if len(parts) >= 2 {
+				currentEpochStr = parts[1]
+			}
+		}
+
+		if currentEpochStr != "" {
+			currentEpoch, err := strconv.ParseInt(currentEpochStr, 10, 64)
+			if err == nil {
+				cutoffEpoch := currentEpoch - 10080 // Keep last 7 days (assuming ~1 epoch per minute)
+				epochsToRemove := []string{}
+				for _, epochStr := range activeEpochs {
+					epoch, err := strconv.ParseInt(epochStr, 10, 64)
+					if err == nil && epoch < cutoffEpoch {
+						epochsToRemove = append(epochsToRemove, epochStr)
+					}
+				}
+				if len(epochsToRemove) > 0 {
+					removed, err := sw.redis.SRem(ctx, activeEpochsKey, epochsToRemove).Result()
+					if err != nil {
+						log.WithError(err).Error("Failed to prune old epochs from ActiveEpochs set")
+					} else if removed > 0 {
+						log.WithFields(logrus.Fields{
+							"removed_epochs": removed,
+							"remaining":      len(activeEpochs) - int(removed),
+						}).Info("Pruned old epochs from ActiveEpochs set")
+					}
+				}
+			}
+		}
+	}
+
+	// Monitor Redis key sizes and alert if they exceed thresholds
+	sw.monitorRedisKeySizes(ctx)
 
 	// Also reset in-memory counters if they've been running for more than 24 hours
 	sw.mu.Lock()
@@ -701,6 +843,107 @@ func (sw *StateWorker) pruneOldData(ctx context.Context) {
 		log.Info("Reset in-memory counters after 24 hours")
 	}
 	sw.mu.Unlock()
+}
+
+// monitorRedisKeySizes monitors Redis key sizes and logs warnings if they exceed thresholds
+func (sw *StateWorker) monitorRedisKeySizes(ctx context.Context) {
+	thresholds := map[string]int64{
+		"zset": 1000000, // 1M members
+		"set":  100000,  // 100K members
+		"list": 10000,   // 10K items
+	}
+
+	// Check timeline zsets
+	timelineKeys := []string{
+		sw.keyBuilder.MetricsSubmissionsTimeline(),
+		sw.keyBuilder.MetricsValidationsTimeline(),
+		sw.keyBuilder.MetricsEpochsTimeline(),
+		sw.keyBuilder.MetricsBatchesTimeline(),
+	}
+
+	for _, key := range timelineKeys {
+		size, err := sw.redis.ZCard(ctx, key).Result()
+		if err == nil && size > thresholds["zset"] {
+			log.WithFields(logrus.Fields{
+				"key":   key,
+				"size":  size,
+				"limit": thresholds["zset"],
+			}).Warn("Timeline zset exceeds size threshold - pruning may not be working correctly")
+		}
+	}
+
+	// Check ActiveEpochs set
+	activeEpochsKey := sw.keyBuilder.ActiveEpochs()
+	size, err := sw.redis.SCard(ctx, activeEpochsKey).Result()
+	if err == nil && size > thresholds["set"] {
+		log.WithFields(logrus.Fields{
+			"key":   activeEpochsKey,
+			"size":  size,
+			"limit": thresholds["set"],
+		}).Warn("ActiveEpochs set exceeds size threshold - pruning may not be working correctly")
+	}
+
+	// Check aggregation queue (legacy) - auto-cleanup if exceeds threshold
+	aggregationQueueKey := sw.keyBuilder.AggregationQueue()
+	size, err = sw.redis.LLen(ctx, aggregationQueueKey).Result()
+	if err == nil && size > thresholds["list"] {
+		// Legacy queue is not used by active aggregation system (uses streams instead)
+		// Auto-cleanup if it exceeds threshold to prevent unbounded growth
+		log.WithFields(logrus.Fields{
+			"key":   aggregationQueueKey,
+			"size":  size,
+			"limit": thresholds["list"],
+		}).Warn("Legacy aggregation queue exceeds threshold - cleaning up")
+
+		// Delete the entire queue (it's legacy and not used)
+		deleted, err := sw.redis.Del(ctx, aggregationQueueKey).Result()
+		if err != nil {
+			log.WithError(err).WithField("key", aggregationQueueKey).Error("Failed to cleanup legacy aggregation queue")
+		} else if deleted > 0 {
+			log.WithFields(logrus.Fields{
+				"key":     aggregationQueueKey,
+				"deleted": deleted,
+			}).Info("Cleaned up legacy aggregation queue")
+		}
+	}
+
+	// Also scan for ALL legacy aggregation:queue keys (multi-market support)
+	// Pattern: *:*:aggregation:queue - handles multiple protocol:market combinations
+	cursor := uint64(0)
+	for {
+		var keys []string
+		keys, cursor, err = sw.redis.Scan(ctx, cursor, "*:*:aggregation:queue", 100).Result()
+		if err != nil {
+			log.WithError(err).Error("Failed to scan for legacy aggregation queues")
+			break
+		}
+		for _, key := range keys {
+			// Skip the one we already checked above
+			if key == aggregationQueueKey {
+				continue
+			}
+			size, err := sw.redis.LLen(ctx, key).Result()
+			if err == nil && size > thresholds["list"] {
+				log.WithFields(logrus.Fields{
+					"key":   key,
+					"size":  size,
+					"limit": thresholds["list"],
+				}).Warn("Legacy aggregation queue exceeds threshold - cleaning up")
+				deleted, err := sw.redis.Del(ctx, key).Result()
+				if err != nil {
+					log.WithError(err).WithField("key", key).Error("Failed to cleanup legacy aggregation queue")
+				} else if deleted > 0 {
+					log.WithFields(logrus.Fields{
+						"key":     key,
+						"deleted": deleted,
+					}).Info("Cleaned up legacy aggregation queue")
+				}
+			}
+		}
+		if cursor == 0 {
+			break
+		}
+	}
 }
 
 // aggregateParticipationMetrics calculates participation and inclusion rates
@@ -804,13 +1047,13 @@ func (sw *StateWorker) aggregateParticipationMetrics(ctx context.Context) {
 
 	// Store participation metrics
 	participationMetrics := map[string]interface{}{
-		"epochs_participated_24h":  level1Batches,
-		"epochs_total_24h":         epochsTotal,
-		"participation_rate":       participationRate,
-		"level1_batches_24h":       level1Batches,
-		"level2_inclusions_24h":    level2Inclusions,
-		"inclusion_rate":           inclusionRate,
-		"timestamp":                now,
+		"epochs_participated_24h": level1Batches,
+		"epochs_total_24h":        epochsTotal,
+		"participation_rate":      participationRate,
+		"level1_batches_24h":      level1Batches,
+		"level2_inclusions_24h":   level2Inclusions,
+		"inclusion_rate":          inclusionRate,
+		"timestamp":               now,
 	}
 
 	metricsJSON, _ := json.Marshal(participationMetrics)
@@ -860,12 +1103,15 @@ func (sw *StateWorker) aggregateCurrentEpochStatus(ctx context.Context) {
 		if status, ok := epochInfo["status"]; ok && status == "open" {
 			phase = "submission"
 
-			// Calculate time remaining
-			windowDuration := float64(20) // default 20 seconds
+			// Calculate time remaining - read from epoch info (set by EventMonitor from contract)
+			windowDuration := float64(60) // fallback default (60 seconds)
 			if durationStr, ok := epochInfo["duration"]; ok {
 				if d, err := strconv.ParseFloat(durationStr, 64); err == nil {
 					windowDuration = d
 				}
+			} else {
+				// If duration not found, log warning (should be set by EventMonitor)
+				log.WithField("epoch_id", currentEpochID).Debug("Window duration not found in epoch info, using fallback")
 			}
 
 			windowEndTime := currentEpochTimestamp + int64(windowDuration)
@@ -894,10 +1140,10 @@ func (sw *StateWorker) aggregateCurrentEpochStatus(ctx context.Context) {
 		}
 	}
 
-	// Count submissions in current epoch (from processed submissions for this epoch)
-	epochProcessedKey := sw.keyBuilder.EpochProcessed(currentEpochID)
-	if submissionIDs, err := sw.redis.SMembers(ctx, epochProcessedKey).Result(); err == nil {
-		submissionsReceived = int64(len(submissionIDs))
+	// Count submissions in current epoch (from deterministic ZSET)
+	epochSubmissionsKey := sw.keyBuilder.EpochSubmissionsIds(currentEpochID)
+	if count, err := sw.redis.ZCard(ctx, epochSubmissionsKey).Result(); err == nil {
+		submissionsReceived = count
 	}
 
 	currentEpochStatus := map[string]interface{}{
@@ -920,10 +1166,10 @@ func (sw *StateWorker) aggregateCurrentEpochStatus(ctx context.Context) {
 		}
 	}
 
-	// Add default window duration if not set
+	// Add default window duration if not set (fallback - should be set by EventMonitor from contract)
 	if _, exists := currentEpochStatus["window_duration"]; !exists {
-		// Default to 20 seconds for 12-second epochs with overhead
-		currentEpochStatus["window_duration"] = 20.0
+		// Default to 60 seconds (fallback - actual value should come from contract via EventMonitor)
+		currentEpochStatus["window_duration"] = 60.0
 	}
 
 	statusJSON, _ := json.Marshal(currentEpochStatus)
@@ -1015,12 +1261,15 @@ func (sw *StateWorker) aggregateCurrentEpochStatusFromTimeline(ctx context.Conte
 		if status, ok := epochInfo["status"]; ok && status == "open" {
 			phase = "submission"
 
-			// Calculate time remaining
-			windowDuration := float64(20) // default 20 seconds
+			// Calculate time remaining - read from epoch info (set by EventMonitor from contract)
+			windowDuration := float64(60) // fallback default (60 seconds)
 			if durationStr, ok := epochInfo["duration"]; ok {
 				if d, err := strconv.ParseFloat(durationStr, 64); err == nil {
 					windowDuration = d
 				}
+			} else {
+				// If duration not found, log warning (should be set by EventMonitor)
+				log.WithField("epoch_id", currentEpochID).Debug("Window duration not found in epoch info, using fallback")
 			}
 
 			windowEndTime := currentEpochTimestamp + int64(windowDuration)
@@ -1049,10 +1298,10 @@ func (sw *StateWorker) aggregateCurrentEpochStatusFromTimeline(ctx context.Conte
 		}
 	}
 
-	// Count submissions in current epoch (from processed submissions for this epoch)
-	epochProcessedKey := sw.keyBuilder.EpochProcessed(currentEpochID)
-	if submissionIDs, err := sw.redis.SMembers(ctx, epochProcessedKey).Result(); err == nil {
-		submissionsReceived = int64(len(submissionIDs))
+	// Count submissions in current epoch (from deterministic ZSET)
+	epochSubmissionsKey := sw.keyBuilder.EpochSubmissionsIds(currentEpochID)
+	if count, err := sw.redis.ZCard(ctx, epochSubmissionsKey).Result(); err == nil {
+		submissionsReceived = count
 	}
 
 	currentEpochStatus := map[string]interface{}{
@@ -1075,10 +1324,10 @@ func (sw *StateWorker) aggregateCurrentEpochStatusFromTimeline(ctx context.Conte
 		}
 	}
 
-	// Add default window duration if not set
+	// Add default window duration if not set (fallback - should be set by EventMonitor from contract)
 	if _, exists := currentEpochStatus["window_duration"]; !exists {
-		// Default to 20 seconds for 12-second epochs with overhead
-		currentEpochStatus["window_duration"] = 20.0
+		// Default to 60 seconds (fallback - actual value should come from contract via EventMonitor)
+		currentEpochStatus["window_duration"] = 60.0
 	}
 
 	statusJSON, _ := json.Marshal(currentEpochStatus)
@@ -1091,6 +1340,60 @@ func (sw *StateWorker) aggregateCurrentEpochStatusFromTimeline(ctx context.Conte
 		"submissions":    submissionsReceived,
 		"method":         "timeline_fallback",
 	}).Debug("Updated current epoch status using timeline fallback")
+}
+
+// detectEpochGaps scans active epochs and identifies gaps where finalizations are missing
+func (sw *StateWorker) detectEpochGaps(ctx context.Context) int64 {
+	// Get active epochs
+	activeEpochs, err := sw.redis.SMembers(ctx, sw.keyBuilder.ActiveEpochs()).Result()
+	if err != nil {
+		return 0
+	}
+
+	gapsKey := sw.keyBuilder.EpochsGaps()
+	now := time.Now().Unix()
+	var gapCount int64
+
+	// Clear old gaps (older than 1 hour)
+	oneHourAgo := now - 3600
+	sw.redis.ZRemRangeByScore(ctx, gapsKey, "0", strconv.FormatInt(oneHourAgo, 10))
+
+	for _, epochID := range activeEpochs {
+		epochStateKey := sw.keyBuilder.EpochState(epochID)
+		stateData, err := sw.redis.HGetAll(ctx, epochStateKey).Result()
+		if err != nil {
+			continue
+		}
+
+		windowStatus := stateData["window_status"]
+		level1Status := stateData["level1_status"]
+		level2Status := stateData["level2_status"]
+		onchainStatus := stateData["onchain_status"]
+
+		// Check for gaps
+		gapType := ""
+		if windowStatus == "closed" && level1Status != "completed" && level1Status != "in_progress" {
+			gapType = "missing_level1"
+		} else if level1Status == "completed" && level2Status != "completed" && level2Status != "aggregating" && level2Status != "collecting" {
+			gapType = "missing_level2"
+		} else if level2Status == "completed" && onchainStatus != "confirmed" && onchainStatus != "submitted" && onchainStatus != "queued" {
+			gapType = "missing_onchain"
+		}
+
+		if gapType != "" {
+			// Add to gaps set
+			sw.redis.ZAdd(ctx, gapsKey, redis.Z{
+				Score:  float64(now),
+				Member: fmt.Sprintf("%s:%s", epochID, gapType),
+			})
+			gapCount++
+		}
+	}
+
+	// Set TTL on gaps key
+	sw.redis.Expire(ctx, gapsKey, 24*time.Hour)
+
+	return gapCount
 }
 
 // Shutdown gracefully stops the worker

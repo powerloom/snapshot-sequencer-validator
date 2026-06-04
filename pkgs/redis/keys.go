@@ -1,6 +1,10 @@
 package redis
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/ethereum/go-ethereum/common"
+)
 
 // KeyBuilder provides methods to generate namespaced Redis keys
 type KeyBuilder struct {
@@ -8,11 +12,31 @@ type KeyBuilder struct {
 	DataMarket    string
 }
 
-// NewKeyBuilder creates a new KeyBuilder instance
+// checksumAddress converts an Ethereum address to checksummed format (EIP-55).
+// If the input is not a valid Ethereum address, it returns the input unchanged.
+// This ensures all Redis keys use consistent checksummed addresses.
+func checksumAddress(addr string) string {
+	// Handle empty addresses
+	if addr == "" {
+		return addr
+	}
+
+	// Try to parse as Ethereum address and convert to checksummed format
+	if common.IsHexAddress(addr) {
+		address := common.HexToAddress(addr)
+		return address.Hex() // .Hex() returns checksummed format (EIP-55)
+	}
+
+	// If not a valid address, return as-is (might be a non-address identifier)
+	return addr
+}
+
+// NewKeyBuilder creates a new KeyBuilder instance with checksummed addresses.
+// All Ethereum addresses are converted to EIP-55 checksummed format for consistent Redis keys.
 func NewKeyBuilder(protocolState, dataMarket string) *KeyBuilder {
 	return &KeyBuilder{
-		ProtocolState: protocolState,
-		DataMarket:    dataMarket,
+		ProtocolState: checksumAddress(protocolState),
+		DataMarket:    checksumAddress(dataMarket),
 	}
 }
 
@@ -38,6 +62,16 @@ func (kb *KeyBuilder) OutgoingBroadcastBatch() string {
 	return fmt.Sprintf("%s:%s:outgoing:broadcast:batch", kb.ProtocolState, kb.DataMarket)
 }
 
+// OutgoingSpamReports returns the key for spam reports to broadcast
+func (kb *KeyBuilder) OutgoingSpamReports() string {
+	return fmt.Sprintf("%s:%s:outgoing:spam-reports", kb.ProtocolState, kb.DataMarket)
+}
+
+// IncomingSpamReports returns the key for received spam reports queue
+func (kb *KeyBuilder) IncomingSpamReports() string {
+	return fmt.Sprintf("%s:%s:incoming:spam-reports", kb.ProtocolState, kb.DataMarket)
+}
+
 // Dequeuer Keys
 
 // ProcessingSubmission returns the key for submission being processed
@@ -55,11 +89,27 @@ func (kb *KeyBuilder) EpochProcessed(epochID string) string {
 	return fmt.Sprintf("%s:%s:epoch:%s:processed", kb.ProtocolState, kb.DataMarket, epochID)
 }
 
+// EpochSubmissionsIds returns the ZSET key for submission IDs in an epoch (deterministic, ordered by timestamp)
+func (kb *KeyBuilder) EpochSubmissionsIds(epochID string) string {
+	return fmt.Sprintf("%s:%s:epoch:%s:submissions:ids", kb.ProtocolState, kb.DataMarket, epochID)
+}
+
+// EpochSubmissionsData returns the HASH key for submission data in an epoch (deterministic lookup)
+func (kb *KeyBuilder) EpochSubmissionsData(epochID string) string {
+	return fmt.Sprintf("%s:%s:epoch:%s:submissions:data", kb.ProtocolState, kb.DataMarket, epochID)
+}
+
 // Event Monitor Keys
 
 // EpochWindow returns the key for submission window status
 func (kb *KeyBuilder) EpochWindow(epochID string) string {
 	return fmt.Sprintf("%s:%s:epoch:%s:window", kb.ProtocolState, kb.DataMarket, epochID)
+}
+
+// EpochState returns the key for comprehensive epoch state hash
+// Format: {protocol}:{market}:epoch:{epochId}:state
+func (kb *KeyBuilder) EpochState(epochID string) string {
+	return fmt.Sprintf("%s:%s:epoch:%s:state", kb.ProtocolState, kb.DataMarket, epochID)
 }
 
 // FinalizationQueue returns the key for epochs ready for finalization
@@ -99,6 +149,78 @@ func (kb *KeyBuilder) FinalizedBatch(epochID string) string {
 	return fmt.Sprintf("%s:%s:finalized:%s", kb.ProtocolState, kb.DataMarket, epochID)
 }
 
+// VPA Priority Caching Keys
+
+// VPAPriorities returns the key for cached validator priorities for an epoch
+func (kb *KeyBuilder) VPAPriorities(epochID string) string {
+	return fmt.Sprintf("%s:%s:vpa:priorities:%s", kb.ProtocolState, kb.DataMarket, epochID)
+}
+
+// VPAValidatorPriority returns the key for cached priority of a specific validator
+func (kb *KeyBuilder) VPAValidatorPriority(epochID, validatorID string) string {
+	return fmt.Sprintf("%s:%s:vpa:priority:%s:%s", kb.ProtocolState, kb.DataMarket, epochID, validatorID)
+}
+
+// VPATopValidator returns the key for cached top priority validator for an epoch
+func (kb *KeyBuilder) VPATopValidator(epochID string) string {
+	return fmt.Sprintf("%s:%s:vpa:top:%s", kb.ProtocolState, kb.DataMarket, epochID)
+}
+
+// VPAActiveValidators returns the key for cached list of active validators for an epoch
+func (kb *KeyBuilder) VPAActiveValidators(epochID string) string {
+	return fmt.Sprintf("%s:%s:vpa:validators:%s", kb.ProtocolState, kb.DataMarket, epochID)
+}
+
+// VPAPriorityMetadata returns the key for priority assignment metadata
+func (kb *KeyBuilder) VPAPriorityMetadata(epochID string) string {
+	return fmt.Sprintf("%s:%s:vpa:metadata:%s", kb.ProtocolState, kb.DataMarket, epochID)
+}
+
+// VPA Submission Queue Keys
+
+// VPASubmissionQueue returns the key for VPA submission requests queue
+func (kb *KeyBuilder) VPASubmissionQueue() string {
+	return fmt.Sprintf("%s:%s:vpa:submission:queue", kb.ProtocolState, kb.DataMarket)
+}
+
+// VPA Monitoring Keys
+
+// VPAPriorityAssignment returns the key for priority assignment per epoch
+// Format: {protocol}:{market}:vpa:priority:{epochID}
+func (kb *KeyBuilder) VPAPriorityAssignment(epochID string) string {
+	return fmt.Sprintf("%s:%s:vpa:priority:%s", kb.ProtocolState, kb.DataMarket, epochID)
+}
+
+// VPASubmissionResult returns the key for submission result per epoch
+// Format: {protocol}:{market}:vpa:submission:{epochID}
+func (kb *KeyBuilder) VPASubmissionResult(epochID string) string {
+	return fmt.Sprintf("%s:%s:vpa:submission:%s", kb.ProtocolState, kb.DataMarket, epochID)
+}
+
+// VPAPriorityTimeline returns the key for priority assignment timeline (namespaced by protocol:market)
+// Format: {protocol}:{market}:vpa:priority:timeline
+func (kb *KeyBuilder) VPAPriorityTimeline() string {
+	return fmt.Sprintf("%s:%s:vpa:priority:timeline", kb.ProtocolState, kb.DataMarket)
+}
+
+// VPASubmissionTimeline returns the key for submission timeline (namespaced by protocol:market)
+// Format: {protocol}:{market}:vpa:submission:timeline
+func (kb *KeyBuilder) VPASubmissionTimeline() string {
+	return fmt.Sprintf("%s:%s:vpa:submission:timeline", kb.ProtocolState, kb.DataMarket)
+}
+
+// VPAStats returns the key for VPA statistics per market
+// Format: {protocol}:{market}:vpa:stats
+func (kb *KeyBuilder) VPAStats() string {
+	return fmt.Sprintf("%s:%s:vpa:stats", kb.ProtocolState, kb.DataMarket)
+}
+
+// VPAEpochStatus returns the key for per-epoch VPA status (priority + submission combined)
+// Format: {protocol}:{market}:vpa:epoch:{epochID}:status
+func (kb *KeyBuilder) VPAEpochStatus(epochID string) string {
+	return fmt.Sprintf("%s:%s:vpa:epoch:%s:status", kb.ProtocolState, kb.DataMarket, epochID)
+}
+
 // Aggregator Keys
 
 // BatchAggregated returns the key for network-wide consensus batch
@@ -126,6 +248,11 @@ func (kb *KeyBuilder) EpochValidators(epochID string) string {
 // ActiveEpochs returns the key for active epochs tracking
 func (kb *KeyBuilder) ActiveEpochs() string {
 	return fmt.Sprintf("%s:%s:epochs:active", kb.ProtocolState, kb.DataMarket)
+}
+
+// EpochsGaps returns the key for epoch gaps tracking
+func (kb *KeyBuilder) EpochsGaps() string {
+	return fmt.Sprintf("%s:%s:epochs:gaps", kb.ProtocolState, kb.DataMarket)
 }
 
 // Metrics Keys (namespaced per protocol:market)
@@ -230,6 +357,62 @@ func (kb *KeyBuilder) MetricsParticipation() string {
 // MetricsCurrentEpoch returns the namespaced key for current epoch status
 func (kb *KeyBuilder) MetricsCurrentEpoch() string {
 	return fmt.Sprintf("%s:%s:metrics:current_epoch", kb.ProtocolState, kb.DataMarket)
+}
+
+// Simulation Message Keys (namespaced)
+// Used for caching epoch 0 simulation messages from snapshotters at startup
+// These messages contain real CIDs and EIP-712 signatures (unlike heartbeats which have empty CIDs)
+
+// SimulationsTimeline returns the ZSET key for simulation events ordered by timestamp
+// Format: {protocol}:{market}:simulations:timeline
+func (kb *KeyBuilder) SimulationsTimeline() string {
+	return fmt.Sprintf("%s:%s:simulations:timeline", kb.ProtocolState, kb.DataMarket)
+}
+
+// SimulationMetadata returns the HASH key for detailed simulation metadata
+// Format: {protocol}:{market}:simulations:metadata:{entityID}
+// Fields: peer_id, snapshotter_address, slot_id, project_id, snapshot_cid, data_market, timestamp
+func (kb *KeyBuilder) SimulationMetadata(entityID string) string {
+	return fmt.Sprintf("%s:%s:simulations:metadata:%s", kb.ProtocolState, kb.DataMarket, entityID)
+}
+
+// SimulationsByPeer returns the SET key for tracking simulations per peer ID
+// Format: {protocol}:{market}:simulations:peer:{peerID}
+// Members: simulation entity IDs
+func (kb *KeyBuilder) SimulationsByPeer(peerID string) string {
+	return fmt.Sprintf("%s:%s:simulations:peer:%s", kb.ProtocolState, kb.DataMarket, peerID)
+}
+
+// SimulationsBySnapshotter returns the SET key for tracking simulations per snapshotter address
+// Format: {protocol}:{market}:simulations:snapshotter:{address}
+// Members: simulation entity IDs
+func (kb *KeyBuilder) SimulationsBySnapshotter(address string) string {
+	return fmt.Sprintf("%s:%s:simulations:snapshotter:%s", kb.ProtocolState, kb.DataMarket, checksumAddress(address))
+}
+
+// SimulationsBySlot returns the SET key for tracking simulations per slot ID
+// Format: {protocol}:{market}:simulations:slot:{slotID}
+// Members: simulation entity IDs
+func (kb *KeyBuilder) SimulationsBySlot(slotID string) string {
+	return fmt.Sprintf("%s:%s:simulations:slot:%s", kb.ProtocolState, kb.DataMarket, slotID)
+}
+
+// Heartbeat Message Keys (namespaced)
+// Heartbeats are epoch 0 messages with empty CID from local-collector for P2P mesh maintenance
+// NOTE: Heartbeats are NOT EIP-712 signed, so only peer ID is available (no snapshotter address)
+// To correlate peer ID with snapshotter address, use simulation or submission data from other endpoints
+
+// HeartbeatsTimeline returns the ZSET key for heartbeat events ordered by timestamp
+// Format: {protocol}:{market}:heartbeats:timeline
+func (kb *KeyBuilder) HeartbeatsTimeline() string {
+	return fmt.Sprintf("%s:%s:heartbeats:timeline", kb.ProtocolState, kb.DataMarket)
+}
+
+// HeartbeatsByPeer returns the ZSET key for heartbeats from a specific peer
+// Format: {protocol}:{market}:heartbeats:peer:{peerID}
+// Members: heartbeat entity IDs with timestamp scores
+func (kb *KeyBuilder) HeartbeatsByPeer(peerID string) string {
+	return fmt.Sprintf("%s:%s:heartbeats:peer:%s", kb.ProtocolState, kb.DataMarket, peerID)
 }
 
 // Monitoring Keys (not namespaced)
